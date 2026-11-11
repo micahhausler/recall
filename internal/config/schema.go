@@ -37,6 +37,7 @@ var schema = []string{
 	"learn.ledger",
 	"learn.retire_days",
 	"learn.map_workers",
+	"lint.ignore",
 	"keep.targets",
 	"keep.bin",
 	"keep.public",
@@ -82,9 +83,17 @@ type Settings struct {
 	Harnesses map[string]HarnessSettings
 	Recur     RecurSettings
 	Learn     LearnSettings
+	Lint      LintSettings
 	// Extensions are the owner's instruction files per extension point (a
 	// skill name, or learn-reduce), home-expanded, in order.
 	Extensions map[string][]string
+}
+
+// LintSettings configure the staleness lint.
+type LintSettings struct {
+	// Ignore lists paths lint never reports, such as a side file that
+	// sparse checkout deliberately keeps off this machine.
+	Ignore []string
 }
 
 // LearnSettings configure the learning loop (docs/learning.md).
@@ -218,6 +227,21 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 	flt("archive-chats.price_per_gb", &s.Archive.PricePerGB)
 	str("recur.prefix", &s.Recur.Prefix)
 	str("recur.cron_tz", &s.Recur.CronTZ)
+	if v, ok := c.Get("lint.ignore"); ok && err == nil {
+		list, lok := v.([]any)
+		if !lok {
+			err = c.typeErr("lint.ignore", "an array of strings", v)
+		} else {
+			for _, e := range list {
+				ev, sok := e.(string)
+				if !sok {
+					err = c.typeErr("lint.ignore", "an array of strings", e)
+					break
+				}
+				s.Lint.Ignore = append(s.Lint.Ignore, ExpandHome(ev, home))
+			}
+		}
+	}
 	str("learn.runner", &s.Learn.Runner)
 	str("learn.map_model", &s.Learn.MapModel)
 	str("learn.reduce_model", &s.Learn.ReduceModel)

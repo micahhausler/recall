@@ -34,6 +34,9 @@ type Linter struct {
 	Names map[string]bool
 	// LookPath finds a command; exec.LookPath normally, a fake in tests.
 	LookPath func(string) (string, error)
+	// Ignore lists absolute paths never reported, such as a side file that
+	// sparse checkout deliberately keeps off this machine.
+	Ignore map[string]bool
 }
 
 var backtickRE = regexp.MustCompile("`([^`\n]+)`")
@@ -75,7 +78,9 @@ func (l *Linter) Run(files []string) ([]Finding, error) {
 					target = filepath.Join(filepath.Dir(abs), target)
 				}
 				if _, err := os.Stat(target); err != nil {
-					findings = append(findings, Finding{abs, n, fmt.Sprintf("import @%s: %s doesn't exist", m[1], target)})
+					if !l.Ignore[target] {
+						findings = append(findings, Finding{abs, n, fmt.Sprintf("import @%s: %s doesn't exist", m[1], target)})
+					}
 				} else {
 					imports = append(imports, target)
 				}
@@ -138,7 +143,7 @@ func (l *Linter) check(token string) string {
 		if !strings.HasPrefix(p, "/") {
 			return ""
 		}
-		if _, err := os.Stat(p); err != nil {
+		if _, err := os.Stat(p); err != nil && !l.Ignore[p] {
 			return fmt.Sprintf("path %s doesn't exist", first)
 		}
 		return ""

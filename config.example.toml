@@ -82,6 +82,11 @@ ledger = "~/.claude/recall-ledger.json"
 # A rule with no relevance for this many days is proposed for retirement.
 retire_days = 90
 
+[lint]
+# Paths recall lint never reports. A side drop-in ignores the other side's
+# context file, which sparse checkout deliberately keeps off this machine.
+ignore = ["~/.claude/home.md"]
+
 [keep]
 # For the keep skill: where end-of-session lessons may land, one entry per
 # file as "<path>: <what belongs there>". Unset: learn.targets.

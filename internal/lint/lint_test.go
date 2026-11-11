@@ -119,3 +119,22 @@ func TestLintNoSkillsMeansNoSkillChecks(t *testing.T) {
 		t.Errorf("findings = %v; with no skills discovered, skill checks are skipped", got)
 	}
 }
+
+func TestLintIgnoredPaths(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, ".claude")
+	main := write(t, filepath.Join(dir, "CLAUDE.md"), "@home.md\nRead `~/gone.md` daily.\n")
+	l := linter(t, home)
+	l.Ignore = map[string]bool{
+		filepath.Join(dir, "home.md"):  true,
+		filepath.Join(home, "gone.md"): true,
+	}
+	if got := run(t, l, main); len(got) != 0 {
+		t.Errorf("findings = %v; ignored paths must not be reported", got)
+	}
+	// A missing path not on the list still reports.
+	l.Ignore = map[string]bool{filepath.Join(dir, "home.md"): true}
+	if got := run(t, l, main); len(got) != 1 || !strings.Contains(got[0], "gone.md") {
+		t.Errorf("findings = %v, want only gone.md", got)
+	}
+}

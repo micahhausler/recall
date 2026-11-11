@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/micahhausler/recall/internal/config"
 	"github.com/micahhausler/recall/internal/lint"
 )
 
@@ -30,6 +31,19 @@ func cmdLint(args []string) int {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fail(err)
+	}
+	c, err := config.Load(config.DefaultBase(home))
+	if err != nil {
+		return fail(err)
+	}
+	hostname, _ := os.Hostname()
+	settings, err := c.Settings(home, shortHost(hostname))
+	if err != nil {
+		return fail(err)
+	}
+	ignore := map[string]bool{}
+	for _, p := range settings.Lint.Ignore {
+		ignore[p] = true
 	}
 	files := fs.Args()
 	if len(files) == 0 {
@@ -56,7 +70,7 @@ func cmdLint(args []string) int {
 	for _, name := range n.taken() {
 		known[name] = true
 	}
-	l := &lint.Linter{Home: home, Names: known}
+	l := &lint.Linter{Home: home, Names: known, Ignore: ignore}
 	findings, err := l.Run(files)
 	if err != nil {
 		return fail(err)
