@@ -47,6 +47,7 @@ type SessionObservations struct {
 	Session      string        `json:"session"`
 	Model        string        `json:"model"`
 	ObservedAt   string        `json:"observed_at"`
+	CostUSD      float64       `json:"cost_usd,omitempty"`
 	Observations []Observation `json:"observations"`
 	RuleHits     []RuleHit     `json:"rule_hits,omitempty"`
 }
@@ -77,6 +78,8 @@ type Mapper struct {
 	Rules []Rule
 	Clock clock.Clock
 	Out   io.Writer
+	// Usage accumulates across MapSession calls that ran the model.
+	Usage model.Usage
 }
 
 // MapSession observes one session's events, reusing the cache when the
@@ -115,14 +118,16 @@ func (m *Mapper) MapSession(ctx context.Context, harnessName, session string, ev
 		}
 		input += b.String()
 	}
-	out, err := m.Runner.Run(ctx, m.Model, input)
+	out, usage, err := m.Runner.Run(ctx, m.Model, input)
 	if err != nil {
 		return nil, false, fmt.Errorf("map %s/%s: %w", harnessName, session, err)
 	}
+	m.Usage = m.Usage.Add(usage)
 	obs, hits := ParseObservations(out)
 	so := &SessionObservations{
 		Fingerprint: fp, Harness: harnessName, Host: m.Host, Session: session,
 		Model: m.Model, ObservedAt: m.Clock.Now().UTC().Format(time.RFC3339),
+		CostUSD:      usage.CostUSD,
 		Observations: obs, RuleHits: hits,
 	}
 	return so, true, m.put(ctx, key, so)

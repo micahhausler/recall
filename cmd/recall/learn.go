@@ -104,6 +104,7 @@ func learnMap(ctx context.Context, env *archiveEnv, runner model.Runner, since s
 		return fail(err)
 	}
 	mapped, cached, skipped := 0, 0, 0
+	var totalUsage model.Usage
 	for _, h := range env.harnesses {
 		m := &learn.Mapper{
 			Store: st, Runner: runner, Model: env.settings.Learn.MapModel,
@@ -154,16 +155,20 @@ func learnMap(ctx context.Context, env *archiveEnv, runner model.Runner, since s
 			}
 			if ran {
 				mapped++
-				fmt.Printf("observed %s/%s: %d observation(s), %d rule hit(s)\n",
-					h.Name(), session, len(so.Observations), len(so.RuleHits))
+				fmt.Printf("observed %s/%s: %d observation(s), %d rule hit(s) ($%.4f)\n",
+					h.Name(), session, len(so.Observations), len(so.RuleHits), so.CostUSD)
 			} else {
 				cached++
 			}
 		}
+		totalUsage = totalUsage.Add(m.Usage)
 	}
 	fmt.Printf("map: %d observed, %d cached", mapped, cached)
 	if skipped > 0 {
 		fmt.Printf(", %d skipped", skipped)
+	}
+	if totalUsage.CostUSD > 0 || totalUsage.InputTokens > 0 {
+		fmt.Printf(" (%s)", totalUsage)
 	}
 	fmt.Println()
 	return 0
@@ -256,7 +261,7 @@ func learnReduce(ctx context.Context, env *archiveEnv, runner model.Runner, outD
 		outDir = filepath.Join(env.home, ".local", "state", "recall", "learn",
 			env.clk.Now().Format("2006-01-02"))
 	}
-	proposals, err := r.Run(ctx, window, outDir)
+	proposals, usage, err := r.Run(ctx, window, outDir)
 	if err != nil {
 		return fail(err)
 	}
@@ -264,7 +269,7 @@ func learnReduce(ctx context.Context, env *archiveEnv, runner model.Runner, outD
 	if err := ledger.Save(env.settings.Learn.Ledger); err != nil {
 		return fail(err)
 	}
-	fmt.Printf("proposals: %s (input beside it)\n", tilde(proposals, env.home))
+	fmt.Printf("proposals: %s (input beside it) (%s)\n", tilde(proposals, env.home), usage)
 	return 0
 }
 

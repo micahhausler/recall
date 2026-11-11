@@ -276,13 +276,17 @@ func TestReducerBuildsInputAndWritesProposals(t *testing.T) {
 		Session: "s1", ObservedAt: "2026-11-05T00:00:00Z",
 		Observations: []Observation{{Category: "correction", Text: "Quote PRs in full.", Quote: "quote it"}},
 	}}
-	fake := &model.Fake{Response: "## Proposals\n\n### retire: stale rule\n- evidence: s1\n"}
+	fake := &model.Fake{Response: "## Proposals\n\n### retire: stale rule\n- evidence: s1\n",
+		Usage: model.Usage{InputTokens: 1000, OutputTokens: 50, CostUSD: 0.05}}
 	r := &Reducer{Runner: fake, Model: "opus", Ledger: ledger, RetireDays: 90,
 		Clock: &clock.Fake{T: time.Date(2026, 11, 11, 0, 0, 0, 0, time.UTC)}}
 	out := t.TempDir()
-	path, err := r.Run(context.Background(), window, out)
+	path, usage, err := r.Run(context.Background(), window, out)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if usage.CostUSD != 0.05 {
+		t.Errorf("usage = %+v, want the fake's cost", usage)
 	}
 	input := fake.Calls[0].Input
 	for _, want := range []string{

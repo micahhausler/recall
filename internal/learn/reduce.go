@@ -78,22 +78,22 @@ func (r *Reducer) BuildInput(window []SessionObservations) string {
 }
 
 // Run writes proposals.md (the model's output) and input.md (what it saw)
-// into outDir, so a review has both.
-func (r *Reducer) Run(ctx context.Context, window []SessionObservations, outDir string) (string, error) {
+// into outDir, so a review has both, and reports what the call cost.
+func (r *Reducer) Run(ctx context.Context, window []SessionObservations, outDir string) (string, model.Usage, error) {
 	input := r.BuildInput(window)
-	out, err := r.Runner.Run(ctx, r.Model, input)
+	out, usage, err := r.Runner.Run(ctx, r.Model, input)
 	if err != nil {
-		return "", err
+		return "", usage, err
 	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return "", err
+		return "", usage, err
 	}
 	if err := os.WriteFile(filepath.Join(outDir, "input.md"), []byte(input), 0o644); err != nil {
-		return "", err
+		return "", usage, err
 	}
 	proposals := filepath.Join(outDir, "proposals.md")
 	if err := os.WriteFile(proposals, []byte(out), 0o644); err != nil {
-		return "", err
+		return "", usage, err
 	}
-	return proposals, nil
+	return proposals, usage, nil
 }
