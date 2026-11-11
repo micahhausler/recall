@@ -6,7 +6,7 @@ description: First-time recall setup on a machine, start to finish: the binary, 
 Walk these in order, ask before anything that writes, and skip steps that already check out.
 
 1. **Binary.** Run `recall version`.
-   If it's missing, offer: `go install github.com/micahhausler/recall/cmd/recall@latest` when Go is installed, otherwise download the release binary for this OS and architecture from the repo's releases page and put it on PATH.
+   If it's missing, offer, in order: Homebrew when `brew` is installed (`brew tap micahhausler/recall https://github.com/micahhausler/recall`, then `brew install --cask recall`); `go install github.com/micahhausler/recall/cmd/recall@latest` when Go is installed; otherwise the release archive for this OS and architecture from the repo's releases page, checked against `checksums.txt`, with `recall` put on PATH.
    Verify with `recall version` before going on.
 2. **Config.** `recall config show` prints the merged config and where each value came from; with nothing configured yet, defaults apply.
    Shared settings belong in a dotfiles-managed drop-in under `~/.config/recall/config.d/`; machine-only values go through `recall config set`.

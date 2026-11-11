@@ -55,11 +55,20 @@ Archive, events, skills, lint, and learn all work from those two interfaces, and
 
 ## Install
 
+With Homebrew, on macOS or Linux; the tap is this repo:
+
+```sh
+brew tap micahhausler/recall https://github.com/micahhausler/recall
+brew install --cask recall
+```
+
+With Go:
+
 ```sh
 go install github.com/micahhausler/recall/cmd/recall@latest
 ```
 
-Or download a release binary for darwin/linux on amd64/arm64.
+Or download a release archive for macOS or Linux on amd64 or arm64 from the releases page; `checksums.txt` beside them has each archive's SHA-256.
 
 To use the skills, install the repo as a Claude Code plugin:
 

@@ -1,0 +1,33 @@
+# On a pushed v* tag: test, then goreleaser builds linux and macOS binaries,
+# publishes the GitHub release, and commits the Homebrew cask to Casks/.
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Tag matches the plugin version
+        run: |
+          want="v$(jq -r .version .claude-plugin/plugin.json)"
+          if [ "$GITHUB_REF_NAME" != "$want" ]; then
+            echo "tag $GITHUB_REF_NAME doesn't match plugin.json version $want"; exit 1
+          fi
+      - run: go vet ./...
+      - run: go test ./...
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: v2.11.2  # matches the version the config was checked with
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

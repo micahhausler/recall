@@ -1,19 +1,61 @@
+# Release config: `goreleaser release` on a pushed v* tag (.github/workflows/release.yml).
+# Binaries for linux and macOS only, plus a Homebrew cask in this repo's Casks/.
 version: 2
 project_name: recall
+
 builds:
   - main: ./cmd/recall
     binary: recall
-    env:
-      - CGO_ENABLED=0
-    goos: [darwin, linux]
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
     goarch: [amd64, arm64]
     mod_timestamp: "{{ .CommitTimestamp }}"
     flags: [-trimpath]
     ldflags:
       - -s -w -X github.com/micahhausler/recall/internal/version.Version={{ .Version }}
+
 archives:
   - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    # Commit time and a fixed owner on every entry, so an archive's checksum
+    # depends only on the commit, not on who built it or when they checked out.
+    builds_info:
+      mtime: "{{ .CommitDate }}"
+      owner: root
+      group: root
+    files:
+      - src: LICENSE
+        info: &fixed
+          mtime: "{{ .CommitDate }}"
+          owner: root
+          group: root
+      - src: README.md
+        info: *fixed
+
 checksum:
   name_template: checksums.txt
-release:
-  draft: true
+
+changelog:
+  use: github
+  sort: asc
+
+homebrew_casks:
+  - name: recall
+    binary: recall
+    homepage: https://github.com/micahhausler/recall
+    description: Turn your coding agent's history into memory.
+    license: Apache-2.0
+    # The tap is this repo: Casks/recall.rb, committed to the default branch
+    # after each release with the workflow's own token.
+    directory: Casks
+    commit_msg_template: "Update the Homebrew cask for {{ .Tag }}"
+    repository:
+      owner: micahhausler
+      name: recall
+    hooks:
+      post:
+        # The binary isn't notarized; without this macOS refuses to run it.
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/recall"]
+          end
