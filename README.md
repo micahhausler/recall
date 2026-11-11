@@ -90,7 +90,7 @@ Every key is documented in [`config.example.toml`](config.example.toml).
 ```sh
 recall config show                 # the merged result, with the file and line each value came from
 recall config get store.kind       # one value
-recall config set store.kind s3    # writes only to config.d/90-recall-set.toml, never to a file you edited
+recall config set store.kind s3    # writes only to config.d/90-set.local.toml, never to a file you edited
 ```
 
 ## Extend

@@ -10,8 +10,10 @@ import (
 )
 
 // SetFile is the one drop-in `recall config set` writes. It sorts late in
-// config.d, so its values win, and `config show` makes that visible.
-const SetFile = "90-recall-set.toml"
+// config.d, so its values win, and `config show` makes that visible. The
+// -local suffix is the convention for machine-local drop-ins, so a dotfiles
+// repo can ignore config.d/*.local.toml by pattern and sync the rest.
+const SetFile = "90-set.local.toml"
 
 const setHeader = `# Managed by recall: written by 'recall config set'.
 # Values here win over earlier config files. Edit with 'recall config set',

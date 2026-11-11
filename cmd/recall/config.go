@@ -12,7 +12,7 @@ import (
 const configUsage = `Usage:
   recall config show               the merged config, with where each value came from
   recall config get <dotted.key>   print one value (exit 1 if unset)
-  recall config set <dotted.key> <value>   write one key to config.d/90-recall-set.toml
+  recall config set <dotted.key> <value>   write one key to config.d/90-set.local.toml
 `
 
 func cmdConfig(args []string) int {

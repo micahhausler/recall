@@ -4,8 +4,9 @@
 # in lexical order. A later file wins key by key: tables merge, a later scalar or
 # array replaces an earlier one whole. $RECALL_CONFIG overrides the base path.
 #
-# `recall config set` writes only to config.d/90-recall-set.toml, never to a file
-# you edited. `recall config show` prints the merged result with the file and line
+# `recall config set` writes only to config.d/90-set.local.toml, never to a file
+# you edited. Drop-ins named *.local.toml are machine-local by convention;
+# a dotfiles repo should sync config.d/*.toml except that pattern. `recall config show` prints the merged result with the file and line
 # each value came from.
 
 # This machine's name in archive keys and reports. Default: hostname -s.
