@@ -9,6 +9,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.10
 	github.com/aws/aws-sdk-go-v2/service/sts v1.52.0
 	github.com/aws/smithy-go v1.28.9
+	github.com/klauspost/compress v1.20.4
 	github.com/pelletier/go-toml/v2 v2.4.3
 )
 
