@@ -36,6 +36,9 @@ var schema = []string{
 	"learn.targets",
 	"learn.ledger",
 	"learn.retire_days",
+	"keep.targets",
+	"keep.bin",
+	"keep.public",
 }
 
 func matches(pattern, key string) bool {

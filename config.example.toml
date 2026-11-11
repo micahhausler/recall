@@ -76,3 +76,14 @@ targets = ["~/.claude/CLAUDE.md"]
 ledger = "~/.claude/recall-ledger.json"
 # A rule with no relevance for this many days is proposed for retirement.
 retire_days = 90
+
+[keep]
+# For the keep skill: where end-of-session lessons may land, one entry per
+# file as "<path>: <what belongs there>". Unset: learn.targets.
+targets = [
+  "~/.claude/CLAUDE.md: preferences that hold everywhere",
+]
+# Where a lesson a script could enforce becomes a script.
+bin = "~/bin"
+# Anything under these paths is shared publicly; nothing personal goes there.
+public = ["~/go/src/github.com/you"]
