@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -55,6 +56,7 @@ type cliResult struct {
 	Type         string  `json:"type"`
 	Subtype      string  `json:"subtype"`
 	IsError      bool    `json:"is_error"`
+	StopReason   string  `json:"stop_reason"`
 	Result       string  `json:"result"`
 	TotalCostUSD float64 `json:"total_cost_usd"`
 	Usage        struct {
@@ -70,23 +72,38 @@ func (c *CLI) Run(ctx context.Context, model, input string) (string, Usage, erro
 	if command == "" {
 		command = "claude"
 	}
-	args := []string{"-p", "--model", model, "--disallowedTools", "*", "--output-format", "json"}
+	// Unsaved: a saved run would land in the transcripts recall reads.
+	args := []string{"-p", "--model", model, "--disallowedTools", "*", "--output-format", "json",
+		"--no-session-persistence"}
 	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Stdin = strings.NewReader(input)
 	var out, errOut bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errOut
-	if err := cmd.Run(); err != nil {
-		detail := strings.TrimSpace(errOut.String())
-		if detail == "" {
-			detail = err.Error()
-		}
-		return "", Usage{}, fmt.Errorf("%s -p: %s", command, detail)
-	}
+	runErr := cmd.Run()
+	return parseResult(command, out.Bytes(), strings.TrimSpace(errOut.String()), runErr)
+}
+
+// ErrRefusal is a run the model or its safeguards declined; the input, not
+// the runner, is the problem, so a smaller input may still go through.
+var ErrRefusal = errors.New("refusal")
+
+// parseResult turns a run's output into the result text and usage. With
+// --output-format json the harness reports a failed run, such as a refusal,
+// in the JSON on stdout and exits non-zero with stderr empty, so stdout is
+// parsed before the exit status is.
+func parseResult(command string, stdout []byte, stderr string, runErr error) (string, Usage, error) {
 	var res cliResult
-	if err := json.Unmarshal(out.Bytes(), &res); err != nil {
+	if err := json.Unmarshal(stdout, &res); err != nil || res.Type == "" {
+		if runErr != nil {
+			detail := stderr
+			if detail == "" {
+				detail = runErr.Error()
+			}
+			return "", Usage{}, fmt.Errorf("%s -p: %s", command, detail)
+		}
 		// A harness that doesn't speak this JSON still works; cost stays 0.
-		return out.String(), Usage{}, nil
+		return string(stdout), Usage{}, nil
 	}
 	usage := Usage{
 		// The harness reports cached prompt tokens separately; they're all input.
@@ -94,8 +111,21 @@ func (c *CLI) Run(ctx context.Context, model, input string) (string, Usage, erro
 		OutputTokens: res.Usage.OutputTokens,
 		CostUSD:      res.TotalCostUSD,
 	}
-	if res.IsError {
-		return "", usage, fmt.Errorf("%s -p: %s: %s", command, res.Subtype, strings.TrimSpace(res.Result))
+	if res.StopReason == "refusal" {
+		return "", usage, fmt.Errorf("%s -p: %w: %s", command, ErrRefusal, strings.TrimSpace(res.Result))
+	}
+	if res.IsError || runErr != nil {
+		detail := strings.TrimSpace(res.Result)
+		if res.StopReason != "" {
+			detail = res.StopReason + ": " + detail
+		}
+		if detail == "" {
+			detail = res.Subtype
+		}
+		if detail == "" && runErr != nil {
+			detail = runErr.Error()
+		}
+		return "", usage, fmt.Errorf("%s -p: %s", command, detail)
 	}
 	return res.Result, usage, nil
 }

@@ -2,6 +2,7 @@ package learn
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -305,5 +306,119 @@ func TestReducerBuildsInputAndWritesProposals(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(out, "input.md")); err != nil {
 		t.Error("input.md not written beside proposals")
+	}
+}
+
+func TestNameCollisions(t *testing.T) {
+	out := "## Proposals\n\n" +
+		"### skill: Resume a stalled run\n- target: new skill\n- name: resume\n- rule: x\n\n" +
+		"### add: A rule\n- target: CLAUDE.md\n- name: keep\n\n" + // not a skill proposal
+		"### skill: Advisory drafting\n- target: new skill\n- name: `/advisory-draft`\n\n" +
+		"### skill: Keep, changed\n- target: skills/keep/SKILL.md\n"
+	got := NameCollisions(out, []string{"keep", "Resume", "plugin"})
+	if strings.Join(got, ",") != "resume" {
+		t.Errorf("collisions = %v, want [resume]", got)
+	}
+}
+
+// refuser refuses any input containing a flagged word, like a safeguard.
+type refuser struct{ calls int }
+
+func (r *refuser) Run(ctx context.Context, model_, input string) (string, model.Usage, error) {
+	r.calls++
+	if strings.Contains(input, "FLAGGED") {
+		return "", model.Usage{CostUSD: 0.01}, fmt.Errorf("claude -p: %w: flagged", model.ErrRefusal)
+	}
+	return "Observation[context]: saw " + fmt.Sprint(strings.Count(input, "[owner] ")) + " prompts\n", model.Usage{CostUSD: 0.01}, nil
+}
+
+func promptsSession(flagged int, refusalAfter int) []events.Event {
+	var evs []events.Event
+	for i := 0; i < 6; i++ {
+		text := fmt.Sprintf("prompt %d", i)
+		if i == flagged {
+			text += " FLAGGED"
+		}
+		evs = append(evs, ev(events.UserPrompt, text), ev(events.AssistantText, "ok"))
+		if i == refusalAfter {
+			evs = append(evs, events.Event{Kind: events.Refusal, Text: "cyber"})
+		}
+	}
+	return evs
+}
+
+func TestMapSalvagesRefusedSession(t *testing.T) {
+	cases := []struct {
+		name                   string
+		flagged, refusalAfter  int
+		wantPrompts, wantCalls int
+	}{
+		// The session's own refusal points at the flagged prompt: one retry.
+		{"refusal in session", 3, 3, 3, 2},
+		// No refusal recorded: binary search finds the prefix before it.
+		{"binary search", 2, -1, 2, 4},
+		// Flagged from the first prompt: nothing to salvage, still cached.
+		{"nothing salvageable", 0, -1, 0, 4},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &refuser{}
+			m := mapper(store.NewMem(), r, nil)
+			evs := promptsSession(tc.flagged, tc.refusalAfter)
+			so, ran, err := m.MapSession(context.Background(), "claude", "s1", evs)
+			if err != nil || !ran {
+				t.Fatalf("ran=%v err=%v", ran, err)
+			}
+			if so.Partial == nil || so.Partial.Prompts != tc.wantPrompts || so.Partial.Of != 6 {
+				t.Errorf("partial = %+v, want %d of 6", so.Partial, tc.wantPrompts)
+			}
+			if r.calls != tc.wantCalls {
+				t.Errorf("calls = %d, want %d", r.calls, tc.wantCalls)
+			}
+			if tc.wantPrompts > 0 && (len(so.Observations) != 1 || !strings.Contains(so.Observations[0].Text, fmt.Sprintf("saw %d prompts", tc.wantPrompts))) {
+				t.Errorf("observations = %+v", so.Observations)
+			}
+			if so.CostUSD != 0.01*float64(tc.wantCalls) {
+				t.Errorf("cost = %v, want every attempt counted", so.CostUSD)
+			}
+			if _, ran, _ := m.MapSession(context.Background(), "claude", "s1", evs); ran {
+				t.Error("a salvaged session should be cached")
+			}
+		})
+	}
+}
+
+func TestWouldCall(t *testing.T) {
+	ctx := context.Background()
+	m := mapper(store.NewMem(), &model.Fake{Response: "NONE\n"}, nil)
+	evs := []events.Event{ev(events.UserPrompt, "do the thing")}
+	if call, err := m.WouldCall(ctx, "claude", "s1", evs); err != nil || !call {
+		t.Fatalf("new session: call=%v err=%v", call, err)
+	}
+	if _, _, err := m.MapSession(ctx, "claude", "s1", evs); err != nil {
+		t.Fatal(err)
+	}
+	if call, _ := m.WouldCall(ctx, "claude", "s1", evs); call {
+		t.Error("a cached session would call the model again")
+	}
+	if call, _ := m.WouldCall(ctx, "claude", "s2", []events.Event{ev(events.AssistantText, "hi")}); call {
+		t.Error("a session with no owner prompts would call the model")
+	}
+}
+
+func TestOffTargets(t *testing.T) {
+	out := "## Proposals\n\n" +
+		"### add: In target, tilde form\n- target: ~/ctx/CLAUDE.md\n\n" +
+		"### reword: In target, absolute\n- target: `/home/you/ctx/CLAUDE.md`\n\n" +
+		"### add: Elsewhere\n- target: /home/you/.claude/base.md\n\n" +
+		"### retire: Named loosely\n- target: agent-kit CLAUDE.md\n\n" +
+		"### skill: A skill\n- target: skills/keep/SKILL.md\n\n" +
+		"### graduate: A script\n- target: bin/md-lint\n"
+	got := OffTargets(out, []string{"/home/you/ctx/CLAUDE.md"}, "/home/you")
+	if len(got) != 2 || got[0].Title != "Elsewhere" || got[1].Target != "agent-kit CLAUDE.md" {
+		t.Errorf("off targets = %+v", got)
+	}
+	if OffTargets(out, nil, "/home/you") != nil {
+		t.Error("no configured targets should flag nothing")
 	}
 }

@@ -60,7 +60,7 @@ func Render(evs []events.Event) string {
 			}
 		case events.SkillInvoked:
 			fmt.Fprintf(&b, "[skill: %s]\n", e.Skill)
-		case events.SlashCommand:
+		case events.SlashCommand, events.BuiltinCommand:
 			fmt.Fprintf(&b, "[command: /%s %s]\n", e.Skill, strings.TrimSpace(e.Text))
 		case events.Refusal:
 			fmt.Fprintf(&b, "[refusal: %s]\n", e.Text)

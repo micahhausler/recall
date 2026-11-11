@@ -48,6 +48,11 @@ func Discover(dirs []string) ([]Skill, error) {
 	return out, nil
 }
 
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 func frontmatterName(path string) string {
 	f, err := os.Open(path)
 	if err != nil {
@@ -81,12 +86,6 @@ type Row struct {
 	Flag     string `json:"flag,omitempty"`
 }
 
-// Builtin names harness slash commands use that are never skills.
-var Builtin = map[string]bool{
-	"help": true, "clear": true, "config": true, "model": true, "compact": true,
-	"init": true, "fast": true, "loop": true, "resume": true, "status": true,
-}
-
 // Flags a report sets.
 const (
 	FlagRetire    = "never invoked in the window; retirement candidate"
@@ -95,9 +94,13 @@ const (
 )
 
 // Report aggregates skill invocations from an event stream over the skills
-// found on disk. Skills invoked but not found are reported too.
-func Report(found []Skill, evs []events.Event) []Row {
+// found on this machine. commands are the other slash commands the harness
+// accepts (its built-ins); a slash command naming one is not a skill. Skills
+// invoked but not found are reported too, unless the transcript recorded the
+// directory the skill loaded from and it still exists.
+func Report(found []Skill, commands map[string]bool, evs []events.Event) []Row {
 	rows := map[string]*Row{}
+	onDisk := map[string]bool{}
 	order := []string{}
 	add := func(name string) *Row {
 		r, ok := rows[name]
@@ -110,23 +113,27 @@ func Report(found []Skill, evs []events.Event) []Row {
 	}
 	for _, s := range found {
 		r := add(s.Name)
-		r.Path = s.Path
+		if r.Path == "" {
+			r.Path = s.Path
+		}
+		onDisk[s.Name] = true
 	}
 	sessions := map[string]map[string]bool{}
 	for _, e := range evs {
-		var name string
-		switch e.Kind {
-		case events.SkillInvoked:
-			name = e.Skill
-		case events.SlashCommand:
-			name = e.Skill
-		default:
-			continue
+		if e.Kind != events.SkillInvoked && e.Kind != events.SlashCommand {
+			continue // built-in commands and everything else
 		}
-		if name == "" || (e.Kind == events.SlashCommand && Builtin[name]) {
+		name := e.Skill
+		if name == "" || (e.Kind == events.SlashCommand && commands[name] && !onDisk[name]) {
 			continue
 		}
 		r := add(name)
+		if !onDisk[name] && e.SkillDir != "" {
+			if p := filepath.Join(e.SkillDir, "SKILL.md"); fileExists(p) {
+				r.Path = p
+				onDisk[name] = true
+			}
+		}
 		if e.Kind == events.SkillInvoked {
 			r.ByModel++
 		} else {
@@ -145,7 +152,7 @@ func Report(found []Skill, evs []events.Event) []Row {
 		r := rows[name]
 		r.Sessions = len(sessions[name])
 		switch {
-		case r.Path == "":
+		case !onDisk[name]:
 			r.Flag = FlagNotOnDisk
 		case r.ByModel == 0 && r.BySlash == 0:
 			r.Flag = FlagRetire
@@ -164,8 +171,14 @@ func Report(found []Skill, evs []events.Event) []Row {
 }
 
 // Print writes a readable table.
+// The skill column is as wide as the longest name, so long plugin skill names
+// don't push the other columns out of line.
 func Print(w io.Writer, rows []Row, since time.Time) {
-	fmt.Fprintf(w, "%-24s %8s %8s %8s  %-20s %s\n", "SKILL", "MODEL", "SLASH", "SESSIONS", "LAST USED", "FLAG")
+	width := len("SKILL")
+	for _, r := range rows {
+		width = max(width, len(r.Name))
+	}
+	fmt.Fprintf(w, "%-*s %8s %8s %8s  %-10s %s\n", width, "SKILL", "MODEL", "SLASH", "SESSIONS", "LAST USED", "FLAG")
 	for _, r := range rows {
 		last := r.LastUsed
 		if t, err := time.Parse(time.RFC3339, r.LastUsed); err == nil {
@@ -174,6 +187,6 @@ func Print(w io.Writer, rows []Row, since time.Time) {
 		if last == "" {
 			last = "-"
 		}
-		fmt.Fprintf(w, "%-24s %8d %8d %8d  %-20s %s\n", r.Name, r.ByModel, r.BySlash, r.Sessions, last, r.Flag)
+		fmt.Fprintf(w, "%-*s %8d %8d %8d  %-10s %s\n", width, r.Name, r.ByModel, r.BySlash, r.Sessions, last, r.Flag)
 	}
 }

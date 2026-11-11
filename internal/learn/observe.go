@@ -11,6 +11,7 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/micahhausler/recall/internal/clock"
@@ -50,6 +51,17 @@ type SessionObservations struct {
 	CostUSD      float64       `json:"cost_usd,omitempty"`
 	Observations []Observation `json:"observations"`
 	RuleHits     []RuleHit     `json:"rule_hits,omitempty"`
+	// Partial is set when the model refused the whole session and only a
+	// prefix of it was observed.
+	Partial *Partial `json:"partial,omitempty"`
+}
+
+// Partial records how much of a refused session the map step could read.
+type Partial struct {
+	// Prompts of Of owner prompts were observed; 0 means none were.
+	Prompts int    `json:"prompts"`
+	Of      int    `json:"of"`
+	Reason  string `json:"reason"`
 }
 
 // Fingerprint keys the cache: the rendered session, the prompt, the model,
@@ -76,6 +88,8 @@ type Mapper struct {
 	Host   string
 	// Rules are the current rules shown to the model for rule hits.
 	Rules []Rule
+	// mu guards Usage; one Mapper may map several sessions at once.
+	mu    sync.Mutex
 	Clock clock.Clock
 	Out   io.Writer
 	// Usage accumulates across MapSession calls that ran the model.
@@ -85,13 +99,7 @@ type Mapper struct {
 // MapSession observes one session's events, reusing the cache when the
 // fingerprint matches. The bool reports whether the model ran.
 func (m *Mapper) MapSession(ctx context.Context, harnessName, session string, evs []events.Event) (*SessionObservations, bool, error) {
-	rendered := Render(evs)
-	ids := make([]string, len(m.Rules))
-	for i, r := range m.Rules {
-		ids[i] = r.ID
-	}
-	fp := Fingerprint(rendered, m.Model, ids)
-	key := Key(harnessName, session, fp)
+	rendered, fp, key := m.key(harnessName, session, evs)
 	if r, err := m.Store.Get(ctx, key); err == nil {
 		defer r.Close()
 		var cached SessionObservations
@@ -109,6 +117,52 @@ func (m *Mapper) MapSession(ctx context.Context, harnessName, session string, ev
 		return so, false, m.put(ctx, key, so)
 	}
 
+	var cost float64
+	out, err := m.call(ctx, rendered, &cost)
+	var partial *Partial
+	if errors.Is(err, model.ErrRefusal) {
+		out, partial, err = m.salvage(ctx, evs, &cost)
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("map %s/%s: %w", harnessName, session, err)
+	}
+	obs, hits := ParseObservations(out)
+	so := &SessionObservations{
+		Fingerprint: fp, Harness: harnessName, Host: m.Host, Session: session,
+		Model: m.Model, ObservedAt: m.Clock.Now().UTC().Format(time.RFC3339),
+		CostUSD:      cost,
+		Observations: obs, RuleHits: hits, Partial: partial,
+	}
+	return so, true, m.put(ctx, key, so)
+}
+
+func (m *Mapper) key(harnessName, session string, evs []events.Event) (rendered, fp, key string) {
+	rendered = Render(evs)
+	ids := make([]string, len(m.Rules))
+	for i, r := range m.Rules {
+		ids[i] = r.ID
+	}
+	fp = Fingerprint(rendered, m.Model, ids)
+	return rendered, fp, Key(harnessName, session, fp)
+}
+
+// WouldCall reports whether mapping the session would call the model: it
+// has owner prompts and no cached observations for its current content.
+func (m *Mapper) WouldCall(ctx context.Context, harnessName, session string, evs []events.Event) (bool, error) {
+	rendered, _, key := m.key(harnessName, session, evs)
+	if !strings.Contains(rendered, "[owner] ") {
+		return false, nil
+	}
+	_, err := m.Store.Head(ctx, key)
+	if errors.Is(err, store.ErrNotExist) {
+		return true, nil
+	}
+	return false, err
+}
+
+// call runs the map model over one rendered session, adding to the usage
+// and to the session's cost.
+func (m *Mapper) call(ctx context.Context, rendered string, cost *float64) (string, error) {
 	input := mapPrompt + "\n\n# SESSION\n\n" + rendered
 	if len(m.Rules) > 0 {
 		var b strings.Builder
@@ -119,18 +173,85 @@ func (m *Mapper) MapSession(ctx context.Context, harnessName, session string, ev
 		input += b.String()
 	}
 	out, usage, err := m.Runner.Run(ctx, m.Model, input)
-	if err != nil {
-		return nil, false, fmt.Errorf("map %s/%s: %w", harnessName, session, err)
-	}
+	m.mu.Lock()
 	m.Usage = m.Usage.Add(usage)
-	obs, hits := ParseObservations(out)
-	so := &SessionObservations{
-		Fingerprint: fp, Harness: harnessName, Host: m.Host, Session: session,
-		Model: m.Model, ObservedAt: m.Clock.Now().UTC().Format(time.RFC3339),
-		CostUSD:      usage.CostUSD,
-		Observations: obs, RuleHits: hits,
+	m.mu.Unlock()
+	*cost += usage.CostUSD
+	return out, err
+}
+
+// salvage maps the longest prefix of a refused session the model accepts,
+// counted in owner prompts. It starts below the session's own first
+// refusal, if it has one, since what drew that refusal likely drew this
+// one, then binary-searches down. A session with nothing salvageable is
+// still cached, so later runs don't pay to be refused again; a new map
+// model changes the fingerprint and retries it.
+func (m *Mapper) salvage(ctx context.Context, evs []events.Event, cost *float64) (string, *Partial, error) {
+	var prompts []int // index in evs of each owner prompt
+	firstRefusal := len(evs)
+	for i, e := range evs {
+		switch {
+		case e.Kind == events.UserPrompt && !e.Sidechain:
+			prompts = append(prompts, i)
+		case e.Kind == events.Refusal && firstRefusal == len(evs):
+			firstRefusal = i
+		}
 	}
-	return so, true, m.put(ctx, key, so)
+	total := len(prompts)
+	// prefix(k) is everything before owner prompt k: k prompts and their turns.
+	prefix := func(k int) []events.Event {
+		if k >= total {
+			return evs
+		}
+		return evs[:prompts[k]]
+	}
+	// Prompts before the session's refusal, less the one that drew it.
+	hi := total - 1
+	if firstRefusal < len(evs) {
+		before := 0
+		for _, p := range prompts {
+			if p < firstRefusal {
+				before++
+			}
+		}
+		hi = min(hi, before-1)
+	}
+	best, bestOut := 0, ""
+	try := func(k int) (bool, error) {
+		out, err := m.call(ctx, Render(prefix(k)), cost)
+		if errors.Is(err, model.ErrRefusal) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		best, bestOut = k, out
+		return true, nil
+	}
+	if hi >= 1 {
+		ok, err := try(hi)
+		if err != nil {
+			return "", nil, err
+		}
+		// Largest accepted k lies in [best, fail).
+		lo, fail := 0, hi
+		if ok {
+			lo = hi
+		}
+		for fail-lo > 1 {
+			mid := (lo + fail) / 2
+			ok, err := try(mid)
+			if err != nil {
+				return "", nil, err
+			}
+			if ok {
+				lo = mid
+			} else {
+				fail = mid
+			}
+		}
+	}
+	return bestOut, &Partial{Prompts: best, Of: total, Reason: "refusal"}, nil
 }
 
 func (m *Mapper) put(ctx context.Context, key string, so *SessionObservations) error {

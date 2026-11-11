@@ -104,3 +104,16 @@ func TestBoundsAreLocalMidnightsAcrossDST(t *testing.T) {
 		t.Errorf("end = %s", got)
 	}
 }
+
+func TestParseKey(t *testing.T) {
+	w := Week{2026, 45}
+	h, host, got, ok := ParseKey(Key("claude", "laptop-a", w))
+	if !ok || h != "claude" || host != "laptop-a" || got != w {
+		t.Errorf("ParseKey(Key) = %s %s %v %v", h, host, got, ok)
+	}
+	for _, bad := range []string{"analysis/claude/s1-abc.json", "claude/laptop-a/.write-check", "claude/laptop-a/2026/W54.tar.zst"} {
+		if _, _, _, ok := ParseKey(bad); ok {
+			t.Errorf("ParseKey(%q) ok, want not a week key", bad)
+		}
+	}
+}

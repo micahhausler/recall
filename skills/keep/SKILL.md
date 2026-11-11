@@ -8,10 +8,12 @@ You also saw what went wrong and what fixed it, so catch the lesson now while I 
 
 1. **Look back.** Scan this session for corrections I made, mistakes you made and then fixed, and context I had to repeat. Ignore one-off task content.
 2. **Pick at most 3.** Keep only lessons that would change what you do on a different task next week. Zero is a fine answer; say "nothing worth keeping" and stop.
+   If more than 3 qualify, list the ones you dropped in chat, one line each, so I can swap one in.
 3. **Find my context files.** Run `recall config get keep.targets`. Each line is `<path>: <what belongs there>`. Skip paths that don't exist on this machine. If nothing is configured, use `recall config get learn.targets`, then fall back to `~/.claude/CLAUDE.md` and the files it `@`-imports, and read each file's opening lines for its scope.
 4. **Choose the home for each.**
    - The narrowest context file whose scope fits.
    - A skill's `SKILL.md`: only for a procedure I spelled out step by step.
+     A new skill's name must not be one `recall skills --taken` prints, so it never shadows an existing skill or a built-in command like `/resume`.
    - A script in my bin directory (`recall config get keep.bin`, default `~/bin`): when a command could check or compute it (formatting, time math, which branch I'm on). Propose the script and a one-line pointer to it, not a rule asking you to be careful.
    - Specific to one repo: mention it, don't write it anywhere.
 5. **Propose as a diff.** Read the target file first. Prefer rewording an existing bullet to adding one, and never duplicate. Use my wording, one short imperative line, one sentence per line. Show all proposals together, each with a one-line reason, and ask **yes / no / tweak** for each.

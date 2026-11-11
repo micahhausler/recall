@@ -221,3 +221,30 @@ func TestSessionsAndArchiveReading(t *testing.T) {
 		}
 	}
 }
+
+// Built-in commands and skills are told apart by what the harness writes
+// after the command, not by a list of names.
+func TestSlashCommandsClassified(t *testing.T) {
+	type got struct {
+		kind events.Kind
+		dir  string
+	}
+	byName := map[string]got{}
+	for _, e := range readFixture(t, "commands") {
+		if e.Kind == events.SlashCommand || e.Kind == events.BuiltinCommand || e.Kind == events.SkillInvoked {
+			byName[e.Skill] = got{e.Kind, e.SkillDir}
+		}
+	}
+	want := map[string]got{
+		"clear":     {events.BuiltinCommand, ""},
+		"plugin":    {events.BuiltinCommand, ""},
+		"new-issue": {events.SlashCommand, "/home/you/proj/.claude/skills/new-issue"},
+		"mystery":   {events.SlashCommand, ""}, // unsettled: stays a slash command
+		"advisory":  {events.SkillInvoked, "/home/you/proj/.claude/skills/advisory"},
+	}
+	for name, w := range want {
+		if byName[name] != w {
+			t.Errorf("%s = %+v, want %+v", name, byName[name], w)
+		}
+	}
+}

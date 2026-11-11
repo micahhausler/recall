@@ -6,6 +6,7 @@ package harness
 
 import (
 	"archive/tar"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -39,6 +40,9 @@ type Harness interface {
 	ReadSessionFile(path, host string) ([]events.Event, error)
 	// ReadSession parses one transcript stream, named session, into events.
 	ReadSession(r io.Reader, session, host string) ([]events.Event, error)
+	// Inventory lists the skills and slash commands the harness offers to a
+	// session started in dir, as the harness itself reports them.
+	Inventory(ctx context.Context, dir string) (Inventory, error)
 }
 
 // Factory opens a harness from its merged settings.
@@ -140,7 +144,17 @@ func ReadTarZst(h Harness, path, host string) ([]events.Event, error) {
 		return nil, err
 	}
 	defer f.Close()
-	dec, err := zstd.NewReader(f)
+	evs, err := ReadTarZstFrom(h, f, host)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return evs, nil
+}
+
+// ReadTarZstFrom reads a week's archive from a stream, such as a store
+// object, into events.
+func ReadTarZstFrom(h Harness, r io.Reader, host string) ([]events.Event, error) {
+	dec, err := zstd.NewReader(r)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +167,7 @@ func ReadTarZst(h Harness, path, host string) ([]events.Event, error) {
 			break
 		}
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", path, err)
+			return nil, err
 		}
 		if !strings.HasSuffix(hdr.Name, ".jsonl") {
 			continue
@@ -161,7 +175,7 @@ func ReadTarZst(h Harness, path, host string) ([]events.Event, error) {
 		session := strings.TrimSuffix(filepath.Base(hdr.Name), ".jsonl")
 		evs, err := h.ReadSession(tr, session, host)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %s: %w", path, hdr.Name, err)
+			return nil, fmt.Errorf("%s: %w", hdr.Name, err)
 		}
 		out = append(out, evs...)
 	}

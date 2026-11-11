@@ -27,6 +27,9 @@ const (
 	// SlashCommand is a user turn wrapped in <command-name>; Skill carries
 	// the command name.
 	SlashCommand Kind = "slash_command"
+	// BuiltinCommand is a slash command the harness ran itself, like /clear;
+	// it is never a skill. Skill carries the command name.
+	BuiltinCommand Kind = "builtin_command"
 	// Refusal is the model or API declining to continue.
 	Refusal Kind = "refusal"
 	// Compact is a compaction summary standing in for earlier turns.
@@ -46,6 +49,9 @@ type Event struct {
 	Tool      string `json:"tool,omitempty"`
 	OK        *bool  `json:"ok,omitempty"`
 	Skill     string `json:"skill,omitempty"`
+	// SkillDir is the directory the harness loaded a slash-invoked skill
+	// from, when the transcript records it.
+	SkillDir  string `json:"skill_dir,omitempty"`
 	Model     string `json:"model,omitempty"`
 	Sidechain bool   `json:"sidechain,omitempty"`
 }

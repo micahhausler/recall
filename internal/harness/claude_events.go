@@ -15,10 +15,12 @@ import (
 // line is one Claude Code transcript line; only metadata the mapping needs.
 type line struct {
 	Type               string          `json:"type"`
+	Subtype            string          `json:"subtype"`
 	Timestamp          string          `json:"timestamp"`
 	CWD                string          `json:"cwd"`
 	Entrypoint         string          `json:"entrypoint"`
 	IsMeta             bool            `json:"isMeta"`
+	SourceToolUseID    string          `json:"sourceToolUseID"`
 	IsSidechain        bool            `json:"isSidechain"`
 	IsCompactSummary   bool            `json:"isCompactSummary"`
 	RequestedModel     string          `json:"requestedModel"`
@@ -86,6 +88,8 @@ func (c *Claude) ReadSession(r io.Reader, session, host string) ([]events.Event,
 	sc.Buffer(make([]byte, 0, 1024*1024), 32*1024*1024)
 	var out []events.Event
 	toolNames := map[string]string{} // tool_use id -> tool name
+	pending := -1                    // the slash command whose kind the next lines settle
+	skillCalls := map[string]int{}   // Skill tool_use id -> its event's index
 	base := func(l *line) events.Event {
 		return events.Event{
 			Harness:   c.Name(),
@@ -107,11 +111,39 @@ func (c *Claude) ReadSession(r io.Reader, session, host string) ([]events.Event,
 				continue
 			}
 		}
+		if pending >= 0 {
+			pending = classifyCommand(&l, &msg, &out[pending], pending)
+		}
+		// A model-invoked skill's expansion points back at its Skill call.
+		if idx, ok := skillCalls[l.SourceToolUseID]; ok && l.IsMeta {
+			if dir, ok := skillBaseDir(contentText(msg.Content)); ok {
+				out[idx].SkillDir = dir
+			}
+		}
 		switch l.Type {
 		case "user":
+			n := len(out)
 			out = append(out, c.userEvents(&l, &msg, base, toolNames)...)
+			if len(out) > n && out[len(out)-1].Kind == events.SlashCommand {
+				pending = len(out) - 1
+			}
 		case "assistant":
+			n := len(out)
 			out = append(out, c.assistantEvents(&l, &msg, base, toolNames)...)
+			// Skill events come out in the order of their tool_use blocks.
+			next := n
+			for _, b := range blocksOf(msg.Content) {
+				if b.Type != "tool_use" || b.Name != "Skill" {
+					continue
+				}
+				for next < len(out) && out[next].Kind != events.SkillInvoked {
+					next++
+				}
+				if next < len(out) {
+					skillCalls[b.ID] = next
+					next++
+				}
+			}
 		case "system":
 			if l.APIRefusalCategory != "" {
 				e := base(&l)
@@ -122,6 +154,49 @@ func (c *Claude) ReadSession(r io.Reader, session, host string) ([]events.Event,
 		}
 	}
 	return out, sc.Err()
+}
+
+const skillBaseDirPrefix = "Base directory for this skill:"
+
+// skillBaseDir reads the directory from a skill expansion's first line.
+func skillBaseDir(text string) (string, bool) {
+	rest, ok := strings.CutPrefix(strings.TrimSpace(text), skillBaseDirPrefix)
+	if !ok {
+		return "", false
+	}
+	dir, _, _ := strings.Cut(rest, "\n")
+	return strings.TrimSpace(dir), true
+}
+
+// classifyCommand settles a slash command from the line after it. The
+// harness answers a built-in command with local command output, and expands
+// a skill into a meta turn naming the skill's directory; neither needs a list
+// of names. It returns the command's index while the command is still
+// unsettled, or -1 once it's settled or the conversation has moved on.
+func classifyCommand(l *line, msg *message, cmd *events.Event, idx int) int {
+	switch l.Type {
+	case "system":
+		if l.Subtype == "local_command" {
+			cmd.Kind = events.BuiltinCommand
+			return -1
+		}
+	case "user":
+		text := strings.TrimSpace(contentText(msg.Content))
+		switch {
+		case strings.HasPrefix(text, "<local-command-stdout>"):
+			cmd.Kind = events.BuiltinCommand
+			return -1
+		case l.IsMeta && strings.HasPrefix(text, skillBaseDirPrefix):
+			cmd.SkillDir, _ = skillBaseDir(text)
+			return -1
+		case l.IsMeta || text == "" || strings.HasPrefix(text, "<"):
+			return idx // caveats, reminders, and other wrappers in between
+		}
+		return -1
+	case "assistant":
+		return -1
+	}
+	return idx
 }
 
 func (c *Claude) userEvents(l *line, msg *message, base func(*line) events.Event, toolNames map[string]string) []events.Event {

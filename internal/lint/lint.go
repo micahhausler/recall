@@ -12,8 +12,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-
-	"github.com/micahhausler/recall/internal/skills"
 )
 
 // Finding is one stale mention.
@@ -30,9 +28,10 @@ func (f Finding) String() string {
 // Linter checks context files.
 type Linter struct {
 	Home string
-	// Skills are the skill names that exist on this machine; a backticked
-	// /name is checked against them. Empty means skip skill checks.
-	Skills map[string]bool
+	// Names are the skills and slash commands that exist on this machine;
+	// a backticked /name is checked against them. Empty means skip the
+	// check.
+	Names map[string]bool
 	// LookPath finds a command; exec.LookPath normally, a fake in tests.
 	LookPath func(string) (string, error)
 }
@@ -120,13 +119,17 @@ func (l *Linter) check(token string) string {
 	if strings.ContainsAny(token, "*?<>[]()|$") && !strings.Contains(token, "$HOME") {
 		return ""
 	}
-	// `/name`: a skill or slash command.
+	// `/name`: a skill or slash command, unless it's a path that exists,
+	// like `/tmp`.
 	if slashRE.MatchString(token) {
-		name := token[1:]
-		if len(l.Skills) == 0 || skills.Builtin[name] || l.Skills[name] {
+		if _, err := os.Stat(token); err == nil {
 			return ""
 		}
-		return fmt.Sprintf("skill %s: no skill named %q on this machine", token, name)
+		name := token[1:]
+		if len(l.Names) == 0 || l.Names[name] {
+			return ""
+		}
+		return fmt.Sprintf("skill %s: no skill or command named %q on this machine", token, name)
 	}
 	first, _, hasArgs := strings.Cut(token, " ")
 	// `~/path` or `/path`, alone or as a command's first word.

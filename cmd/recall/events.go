@@ -122,9 +122,10 @@ func readPath(hs []harness.Harness, path, host string) ([]events.Event, error) {
 
 var windowRE = regexp.MustCompile(`^(\d+)([dhm])$`)
 
-// parseSince reads RFC 3339, a date, or a window like 90d, 24h, or 30m.
+// parseSince reads RFC 3339, a date, a window like 90d, 24h, or 30m, or
+// "all" for no cutoff.
 func parseSince(s string, now time.Time) (time.Time, error) {
-	if s == "" {
+	if s == "" || s == "all" {
 		return time.Time{}, nil
 	}
 	if m := windowRE.FindStringSubmatch(s); m != nil {

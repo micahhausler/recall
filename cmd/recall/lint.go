@@ -1,13 +1,14 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/micahhausler/recall/internal/lint"
-	"github.com/micahhausler/recall/internal/skills"
 )
 
 const lintUsage = `Usage:
@@ -39,15 +40,23 @@ func cmdLint(args []string) int {
 		}
 		files = []string{def}
 	}
-	found, err := skills.Discover(append([]string{filepath.Join(home, ".claude", "skills")}, dirs...))
+	env, err := loadArchiveEnv()
+	if err != nil {
+		return fail(err)
+	}
+	evs, err := readEvents(env, time.Time{})
+	if err != nil {
+		return fail(err)
+	}
+	n, err := takenNames(context.Background(), env, dirs, evs)
 	if err != nil {
 		return fail(err)
 	}
 	known := map[string]bool{}
-	for _, s := range found {
-		known[s.Name] = true
+	for _, name := range n.taken() {
+		known[name] = true
 	}
-	l := &lint.Linter{Home: home, Skills: known}
+	l := &lint.Linter{Home: home, Names: known}
 	findings, err := l.Run(files)
 	if err != nil {
 		return fail(err)

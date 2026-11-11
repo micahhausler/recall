@@ -293,3 +293,35 @@ func TestJobMissingCommand(t *testing.T) {
 		t.Fatalf("err = %v, want has no command", err)
 	}
 }
+
+func TestMapWorkersBounds(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		ok    bool
+		want  int
+	}{
+		{"", true, 4}, {"1", true, 1}, {"32", true, 32},
+		{"0", false, 0}, {"-2", false, 0}, {"33", false, 0},
+	} {
+		b := base(t)
+		text := "host = \"laptop-a\"\n"
+		if tc.value != "" {
+			text += "[learn]\nmap_workers = " + tc.value + "\n"
+		}
+		write(t, b, text)
+		c, err := Load(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := c.Settings("/home/you", "laptop-a")
+		if !tc.ok {
+			if err == nil || !strings.Contains(err.Error(), "learn.map_workers must be 1 to 32") || !strings.Contains(err.Error(), "config.toml:3") {
+				t.Errorf("map_workers = %s: err = %v, want the bounds with file and line", tc.value, err)
+			}
+			continue
+		}
+		if err != nil || s.Learn.MapWorkers != tc.want {
+			t.Errorf("map_workers = %q: got %v, %v; want %d", tc.value, s, err, tc.want)
+		}
+	}
+}

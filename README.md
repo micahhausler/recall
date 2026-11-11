@@ -22,6 +22,16 @@ It does memory management and nothing else.
   recall captures sessions, archives them, and learns from them.
   A feature that isn't about what your agent should remember belongs elsewhere.
 
+## Supported harnesses
+
+recall is built for Claude Code today; it's the only harness implemented.
+Everything harness-specific sits behind interfaces, so adding Kiro, Codex, or another agent means adding an implementation of each, not changing the loop:
+
+- `harness.Harness` (`internal/harness`) finds a harness's transcripts, parses them into the normalized [events](docs/events.md), and lists the skills and commands it offers.
+- `model.Runner` (`internal/model`) runs the map and reduce prompts through the harness's own headless CLI, so its existing auth works unchanged.
+
+Archive, events, skills, lint, and learn all work from those two interfaces, and each harness registers under its own `[harness.<name>]` config table.
+
 ## Requirements
 
 - Plain and auditable: no daemon, no self-update, no telemetry, and no network beyond the store you configure and what you schedule.
@@ -35,8 +45,10 @@ It does memory management and nothing else.
 - `recall archive-chats` uploads each week's transcripts as one zstd tarball per machine per ISO week, at `<harness>/<host>/<year>/W<week>.tar.zst`.
 - `recall events` reads harness transcripts (on disk or inside an archive tarball) and prints them as normalized JSONL events.
 - `recall skills` reports which skills your sessions actually invoke, so unused ones can retire.
+  The skill list is the harness's own, and `--taken` prints every skill and command name already in use.
 - `recall lint` finds paths, commands, and skill names your context files mention that don't exist on this machine.
-- `recall learn` is the learning loop: a cached map pass observes each session, a rule ledger tracks when each rule was last relevant or violated, and a reduce pass proposes edits for your review ([design](docs/learning.md)).
+- `recall learn` is the learning loop: a cached map pass observes each session (`learn.map_workers` at once, default 4), a rule ledger tracks when each rule was last relevant or violated, and a reduce pass proposes edits for your review ([design](docs/learning.md)).
+  The first run can map every session on disk (`--since all`); each machine maps its own sessions, and the reduce reads every machine's observations from the store.
 - The `keep` skill is the loop's manual form: at the end of a session, propose up to three lessons and apply the ones you approve, without waiting for a scheduled run.
 - `recall config` reads and writes the layered TOML config without you parsing TOML.
 

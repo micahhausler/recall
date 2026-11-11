@@ -19,7 +19,8 @@ One JSON object per event:
 | `text` | The prose: a prompt, the model's text, a tool result, a refusal category. |
 | `tool` | The tool a `tool_call` invoked; on a `tool_result`, the tool that produced it. |
 | `ok` | On `tool_result`: false when the harness marked it an error. |
-| `skill` | The skill a `skill_invoked` or `slash_command` names, without the slash. |
+| `skill` | The skill a `skill_invoked` or `slash_command` names, or the command a `builtin_command` names, without the slash. |
+| `skill_dir` | On `slash_command` and `skill_invoked`: the directory the harness loaded the skill from, when the transcript records it. |
 | `model` | The model behind an assistant event. |
 | `sidechain` | True on subagent turns: the orchestrating agent wrote the prompt, not a person. |
 
@@ -35,12 +36,16 @@ Empty fields are omitted.
 - `tool_result`: the tool's answer; `ok = false` when the result carried `is_error`.
 - `skill_invoked`: a `Skill` tool call; `skill` carries the skill name.
 - `slash_command`: a user turn wrapped in `<command-name>`; `skill` carries the command name and `text` its arguments.
+- `builtin_command`: a `<command-name>` turn the harness ran itself, like `/clear`; never a skill.
+  The harness answers a built-in with local command output (`<local-command-stdout>` or a `local_command` system line), and expands a skill into a meta turn starting `Base directory for this skill:`, which sets `skill_dir`.
+  A command followed by neither stays a `slash_command`.
 - `refusal`: the model or API declined; `text` carries the category when known.
 - `compact`: a compaction summary standing in for earlier turns.
 
 ## Decisions
 
 - Metadata only: kind decisions never read message prose, matching the old extractor.
+  They read harness-written wrappers and markers, such as `<command-name>`, `<local-command-stdout>`, and the skill expansion's `Base directory` line, never what a person or model wrote.
 - The stream is faithful: gated or refused sessions still emit their events, and filtering is the consumer's job (distill's drop-gated-chats rule was policy, not schema).
 - Meta turns (`isMeta`) and `<...>`-wrapped wrappers other than `<command-name>` emit nothing; they're harness bookkeeping.
 - A torn last line (an active session mid-write) is skipped, not an error.

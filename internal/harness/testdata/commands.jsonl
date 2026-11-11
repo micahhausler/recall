@@ -1,0 +1,12 @@
+{"type":"user","timestamp":"2026-11-10T10:00:00Z","cwd":"/home/you/proj","message":{"role":"user","content":"<command-name>/clear</command-name>\n<command-message>clear</command-message>\n<command-args></command-args>"}}
+{"type":"system","subtype":"local_command","timestamp":"2026-11-10T10:00:01Z","content":"<local-command-stdout></local-command-stdout>"}
+{"type":"user","timestamp":"2026-11-10T10:01:00Z","cwd":"/home/you/proj","message":{"role":"user","content":"<command-name>/plugin</command-name>\n<command-message>plugin</command-message>\n<command-args></command-args>"}}
+{"type":"user","timestamp":"2026-11-10T10:01:01Z","message":{"role":"user","content":"<local-command-stdout>(no content)</local-command-stdout>"}}
+{"type":"user","timestamp":"2026-11-10T10:02:00Z","cwd":"/home/you/proj","message":{"role":"user","content":"<command-name>/new-issue</command-name>\n<command-message>new-issue</command-message>\n<command-args>CVE draft</command-args>"}}
+{"type":"user","isMeta":true,"timestamp":"2026-11-10T10:02:01Z","message":{"role":"user","content":[{"type":"text","text":"Base directory for this skill: /home/you/proj/.claude/skills/new-issue\n\n# New issue\nsteps"}]}}
+{"type":"assistant","timestamp":"2026-11-10T10:02:05Z","message":{"role":"assistant","model":"m","content":[{"type":"text","text":"ok"}]}}
+{"type":"user","timestamp":"2026-11-10T10:03:00Z","cwd":"/home/you/proj","message":{"role":"user","content":"<command-name>/mystery</command-name>\n<command-message>mystery</command-message>\n<command-args></command-args>"}}
+{"type":"assistant","timestamp":"2026-11-10T10:03:05Z","message":{"role":"assistant","model":"m","content":[{"type":"text","text":"ok"}]}}
+{"type":"assistant","timestamp":"2026-11-10T10:04:00Z","message":{"role":"assistant","model":"m","content":[{"type":"tool_use","id":"tu1","name":"Bash","input":{}},{"type":"tool_use","id":"tu2","name":"Skill","input":{"skill":"advisory"}}]}}
+{"type":"user","timestamp":"2026-11-10T10:04:01Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu2","content":"Launching skill: advisory"}]}}
+{"type":"user","isMeta":true,"sourceToolUseID":"tu2","timestamp":"2026-11-10T10:04:01Z","message":{"role":"user","content":[{"type":"text","text":"Base directory for this skill: /home/you/proj/.claude/skills/advisory\n\n# Advisory"}]}}

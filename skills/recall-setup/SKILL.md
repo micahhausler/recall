@@ -13,10 +13,15 @@ Walk these in order, ask before anything that writes, and skip steps that alread
 3. **Store.** Ask which store:
    - `fs` (recommended without AWS): `recall config set store.kind fs` and `store.path` to a folder; a cloud-synced folder gives offsite backup with no AWS, at the cost of transcripts living in that account.
    - `s3`: follow the archive-chats skill's setup, which handles the bucket, policies, and verification.
-4. **Archive.** `recall archive-chats run --dry-run` to preview, then schedule the weekly upload through the recur skill (`recur.jobs.archive-chats`, Monday noon).
-   `recall archive-chats info` should list this host's uploads after the first run.
+4. **Archive.** Back up everything on disk now, since Claude Code deletes old transcripts (`cleanupPeriodDays`, 30 days by default).
+   Count the weeks back to the oldest transcript under `~/.claude/projects`, then `recall archive-chats run --lookback <weeks> --dry-run` to preview and, once I say yes, the same without `--dry-run`.
+   Then schedule the weekly upload through the recur skill (`recur.jobs.archive-chats`, Monday noon).
+   `recall archive-chats info` should list this host's uploads.
 5. **Learning.** Confirm `learn.targets` points at my context files (`recall config get learn.targets`), then `recall learn rules sync` to put their bullets on the ledger.
-   Offer a first `recall learn map --since 7d --limit 5` (it calls a model; say the cost it prints), then `recall learn reduce --dry-run` to show what a weekly reduce would see.
+   Offer a first map over every session on disk, which needs no download: `recall learn map --since all --dry-run` counts the sessions that would call the model; at about $0.03 each with the default sonnet map model, say the estimate and ask.
+   After it runs, show the cost it printed, then offer `recall learn reduce` for a first set of proposals, and say where they landed.
+   Each machine maps its own sessions; the reduce reads every machine's observations from the store, and warns about a machine whose archives have none.
+   `recall learn map --archives` maps other machines' archived weeks from here instead, at the cost of downloading them; offer it only when a machine can't run the map itself.
    Offer to schedule `recall learn map` weekly through the recur skill; the reduce is better run by hand until its proposals have earned trust.
 6. **Check.** Finish with `recall recur check`, `recall skills --since 90d`, and `recall lint`; show me anything they flag.
 

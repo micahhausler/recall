@@ -38,8 +38,8 @@ func linter(t *testing.T, home string, bins ...string) *Linter {
 		onPath[b] = true
 	}
 	return &Linter{
-		Home:   home,
-		Skills: map[string]bool{"recur": true, "archive-chats": true},
+		Home:  home,
+		Names: map[string]bool{"recur": true, "archive-chats": true, "help": true},
 		LookPath: func(name string) (string, error) {
 			if onPath[name] {
 				return "/bin/" + name, nil
@@ -64,12 +64,13 @@ func TestLintFindsStaleMentions(t *testing.T) {
 		"Keep `one sentence per line` in Markdown.", // prose: never checked
 		"Globs like `~/notes/*.md` are skipped.",
 		"Run `go test ./...` before pushing.", // plain word command: skipped
+		"Write scratch files under `/tmp`.",   // a path that exists, not a skill
 	}, "\n")+"\n")
 	got := run(t, linter(t, home, "chat-archive"), main)
 	want := []string{
 		"CLAUDE.md:2: path ~/missing.md doesn't exist",
 		"CLAUDE.md:3: command jobs-sync not on PATH",
-		`CLAUDE.md:6: skill /distill-prompts: no skill named "distill-prompts" on this machine`,
+		`CLAUDE.md:6: skill /distill-prompts: no skill or command named "distill-prompts" on this machine`,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("findings = %v, want %v", got, want)
@@ -113,7 +114,7 @@ func TestLintNoSkillsMeansNoSkillChecks(t *testing.T) {
 	home := t.TempDir()
 	main := write(t, filepath.Join(home, "CLAUDE.md"), "Use `/whatever`.\n")
 	l := linter(t, home)
-	l.Skills = nil
+	l.Names = nil
 	if got := run(t, l, main); len(got) != 0 {
 		t.Errorf("findings = %v; with no skills discovered, skill checks are skipped", got)
 	}

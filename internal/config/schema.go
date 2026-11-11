@@ -36,6 +36,7 @@ var schema = []string{
 	"learn.targets",
 	"learn.ledger",
 	"learn.retire_days",
+	"learn.map_workers",
 	"keep.targets",
 	"keep.bin",
 	"keep.public",
@@ -96,6 +97,9 @@ type LearnSettings struct {
 	// RetireDays: a rule with no relevance for this long is proposed for
 	// retirement.
 	RetireDays int
+	// MapWorkers is how many sessions the map step observes at once,
+	// MinMapWorkers to MaxMapWorkers.
+	MapWorkers int
 }
 
 type StoreSettings struct {
@@ -157,6 +161,7 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 			Targets:     []string{filepath.Join(home, ".claude", "CLAUDE.md")},
 			Ledger:      filepath.Join(home, ".claude", "recall-ledger.json"),
 			RetireDays:  90,
+			MapWorkers:  4,
 		},
 	}
 	var err error
@@ -214,6 +219,11 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 	str("learn.reduce_model", &s.Learn.ReduceModel)
 	path("learn.ledger", &s.Learn.Ledger)
 	num("learn.retire_days", &s.Learn.RetireDays)
+	num("learn.map_workers", &s.Learn.MapWorkers)
+	if err == nil && (s.Learn.MapWorkers < MinMapWorkers || s.Learn.MapWorkers > MaxMapWorkers) {
+		o, _ := c.Origin("learn.map_workers")
+		err = fmt.Errorf("%s: learn.map_workers must be %d to %d, got %d", o, MinMapWorkers, MaxMapWorkers, s.Learn.MapWorkers)
+	}
 	if v, ok := c.Get("learn.targets"); ok && err == nil {
 		list, lok := v.([]any)
 		if !lok {
@@ -285,6 +295,13 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 	}
 	return s, nil
 }
+
+// The bounds on learn.map_workers: at least one, and few enough that the
+// harness's rate limits aren't the thing being tested.
+const (
+	MinMapWorkers = 1
+	MaxMapWorkers = 32
+)
 
 func (c *Config) boolKey(key string, dst *bool, err *error) {
 	if v, ok := c.Get(key); ok && *err == nil {

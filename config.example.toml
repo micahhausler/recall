@@ -9,6 +9,7 @@
 # each value came from.
 
 # This machine's name in archive keys and reports. Default: hostname -s.
+# Set an alias such as "laptop" to keep the real hostname out of archive keys.
 host = "laptop-a"
 
 [store]
@@ -70,6 +71,9 @@ runner = "claude"
 # (a long session costs a few cents).
 map_model = "sonnet"
 reduce_model = "opus"
+# How many sessions the map observes at once, each its own headless harness
+# run, 1 to 32. More finishes sooner until the harness's rate limits push back.
+map_workers = 4
 # The context files rules live in; bullets in them become ledger entries.
 targets = ["~/.claude/CLAUDE.md"]
 # The sidecar rule ledger (docs/learning.md), never comments in the files.

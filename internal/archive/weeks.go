@@ -75,3 +75,18 @@ func ParseWeek(text string) (Week, error) {
 	}
 	return w, nil
 }
+
+var keyRE = regexp.MustCompile(`^([^/]+)/([^/]+)/(\d{4})/W(\d{2})\.tar\.zst$`)
+
+// ParseKey reads a week's archive key, the inverse of Key.
+func ParseKey(key string) (harness, host string, w Week, ok bool) {
+	m := keyRE.FindStringSubmatch(key)
+	if m == nil {
+		return "", "", Week{}, false
+	}
+	w, err := ParseWeek(m[3] + "-W" + m[4])
+	if err != nil {
+		return "", "", Week{}, false
+	}
+	return m[1], m[2], w, true
+}

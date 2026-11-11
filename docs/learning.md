@@ -41,15 +41,21 @@ A small model reads one session's events and writes structured observations:
 Observations are JSON in the store under `analysis/<harness>/<session id>-<content hash>.json`.
 The content hash makes reruns incremental: a session already mapped at that hash is skipped, and a session that grew (append-only transcripts) is mapped again under the new hash.
 The map prompt gets the current rule list (ids and text) so rule hits are grounded, but it proposes nothing; it only observes.
+Sessions map `learn.map_workers` at once, each an unsaved headless run, so recall never reads its own calls back as sessions.
+A session with no owner prompts is cached without a model call.
+A refused session is mapped as far as the model accepts (see Refusal handling below).
+Superseded observations stay in the store; the reduce reads only the newest per session.
 
 ## Reduce: one weekly pass
 
-The reduce gathers the window's observations, the current targets, and the ledger, and runs one model call that proposes:
+The reduce gathers the window's observations, the targets, the ledger, and the names already taken, and runs one model call that proposes:
 
 - new or reworded rules, each citing the observations (and so the sessions) that earned it;
 - skill changes, when a procedure repeats or a skill's description doesn't match how it's asked for;
 - retirements, from the aging policy below;
 - graduations, below.
+
+The binary checks the output: an add, reword, or retire whose target isn't in `learn.targets` lands under "Off-target proposals", and a new skill whose name is taken lands under "Name collisions".
 
 Edits are staged file copies, reviewed and applied by the binary, never written live by the model.
 The owner's chosen review level decides what happens next: open a PR, write a pending note, or apply directly; never delete without the owner's chosen level of review.
@@ -92,6 +98,7 @@ A rule the agent can't break beats one it has to remember.
 Each recall config names its own store and its own model runner.
 Data from one environment never reaches another's store or model: the map for a session runs in the environment that holds that session's transcripts, and observations land only in that environment's store.
 Shared learning across environments, if ever, is a deliberate export, not a default.
+`learn map --archives` reads other hosts' archives only from this config's store, so it stays inside one environment.
 
 ## Other harnesses
 
@@ -108,7 +115,13 @@ A rule that holds everywhere can be proposed against every harness's targets at 
 
 - ~~Map model and cost.~~ Measured on real sessions: haiku returned NONE on a session full of corrections; sonnet caught them all at about $0.05 to $0.08 per long session, so sonnet is the map default.
 - **Observation schema.** Fixed fields (above) or free-form with a validator; fixed is easier to reduce, free-form loses less.
-- **Cross-host reduce.** The archive holds every machine's weeks; should the reduce read other hosts' archived sessions, and does that break the separation rule when hosts share a store?
+- ~~Cross-host reduce.~~ Each machine maps its own sessions and caches the observations in the store; the reduce reads every host's observations, so a rule repeated across machines adds up without moving transcripts.
+  `learn map --archives` maps other hosts' archived weeks from one machine, opt-in because it downloads them.
+  Map and reduce warn when a host has archives in the last 14 days but no observations.
+  Hosts that must stay separate use separate stores.
 - **Candidate rules.** distill's "said once, promote when said again" lifecycle; does the ledger subsume it (a rule with one source session is a candidate) or is a separate candidate state still useful?
-- **Refusal handling.** distill dropped gated chats and salvaged around refusals; the map sees refusal events, and the policy for what it may read from such sessions needs an owner decision.
+- ~~Refusal handling.~~ When the map model refuses a session, the map reads the longest prefix it accepts, counted in owner prompts.
+  The search starts below the session's own first refusal, less the prompt that drew it, then binary-searches down.
+  The result records how much was read (`partial`) and is cached, so later runs don't pay to be refused again.
+  The same content is never retried on another model.
 - **Ledger merge.** Two machines proposing ledger updates to one repo will conflict; one reducer per repo (like one distiller per side) is the simple answer.

@@ -1,10 +1,12 @@
 package skills
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/micahhausler/recall/internal/events"
 )
@@ -68,7 +70,7 @@ func TestReportCountsAndFlags(t *testing.T) {
 		ev(events.SkillInvoked, "ghost", "s1", "2026-11-01T10:00:00Z"),
 		ev(events.ToolCall, "", "s1", "2026-11-01T10:00:00Z"), // not a skill event
 	}
-	rows := Report(found, evs)
+	rows := Report(found, nil, evs)
 	byName := map[string]Row{}
 	for _, r := range rows {
 		byName[r.Name] = r
@@ -89,5 +91,52 @@ func TestReportCountsAndFlags(t *testing.T) {
 	// Most-used first.
 	if rows[0].Name != "used-both" {
 		t.Errorf("order = %v", rows)
+	}
+}
+
+func TestReportBuiltinsAndSkillDirs(t *testing.T) {
+	dir := t.TempDir()
+	writeSkill(t, dir, "project-skill", "project-skill")
+	found := []Skill{{Name: "listed"}} // from the harness inventory: no path
+	commands := map[string]bool{"compact": true, "listed": true}
+	evs := []events.Event{
+		{Kind: events.BuiltinCommand, Skill: "clear", Session: "s1"},
+		{Kind: events.SlashCommand, Skill: "compact", Session: "s1"},
+		{Kind: events.SlashCommand, Skill: "listed", Session: "s1"},
+		{Kind: events.SlashCommand, Skill: "project-skill", SkillDir: filepath.Join(dir, "project-skill"), Session: "s1"},
+		{Kind: events.SlashCommand, Skill: "gone", SkillDir: filepath.Join(dir, "gone"), Session: "s1"},
+	}
+	byName := map[string]Row{}
+	for _, r := range Report(found, commands, evs) {
+		byName[r.Name] = r
+	}
+	for _, name := range []string{"clear", "compact"} {
+		if _, ok := byName[name]; ok {
+			t.Errorf("%s is a built-in, not a skill", name)
+		}
+	}
+	if r := byName["listed"]; r.Flag != FlagSlashOnly || r.BySlash != 1 {
+		t.Errorf("listed = %+v", r)
+	}
+	if r := byName["project-skill"]; r.Flag == FlagNotOnDisk || r.Path == "" {
+		t.Errorf("project-skill = %+v, want found via its recorded dir", r)
+	}
+	if r := byName["gone"]; r.Flag != FlagNotOnDisk {
+		t.Errorf("gone = %+v, want not on disk", r)
+	}
+}
+
+func TestPrintAlignsLongNames(t *testing.T) {
+	var buf bytes.Buffer
+	Print(&buf, []Row{
+		{Name: "short", ByModel: 1},
+		{Name: "a-plugin-with-a-long-name:some-skill", BySlash: 2},
+	}, time.Time{})
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	col := strings.Index(lines[0], "MODEL") + len("MODEL")
+	for _, l := range lines[1:] {
+		if len(l) < col || l[col-1] == ' ' {
+			t.Errorf("MODEL column misaligned in %q (header %q)", l, lines[0])
+		}
 	}
 }
