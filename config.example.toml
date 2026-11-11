@@ -1,0 +1,61 @@
+# recall config, layered TOML.
+#
+# Files: ~/.config/recall/config.toml, then every ~/.config/recall/config.d/*.toml
+# in lexical order. A later file wins key by key: tables merge, a later scalar or
+# array replaces an earlier one whole. $RECALL_CONFIG overrides the base path.
+#
+# `recall config set` writes only to config.d/90-recall-set.toml, never to a file
+# you edited. `recall config show` prints the merged result with the file and line
+# each value came from.
+
+# This machine's name in archive keys and reports. Default: hostname -s.
+host = "laptop-a"
+
+[store]
+# Where archives and analysis live: "s3" or "fs".
+kind = "s3"
+# fs only: the root directory. ~ and $HOME expand.
+path = "~/recall-store"
+
+[store.s3]
+# AWS profile; empty means the default credential chain.
+profile = "archive"
+# AWS region; empty means the profile's region.
+region = "us-west-2"
+# An existing bucket's name. Empty: the bucket is named in your account
+# regional namespace, <bucket_prefix>-<account id>-<region>-an, derived at
+# run time so no account ID lives in config.
+bucket = ""
+# Prefix for the namespaced bucket name. Changing it after the first upload
+# strands the old bucket's data under the old name.
+bucket_prefix = "chat-archive"
+# Optional endpoint override, for S3-compatible stores.
+endpoint = ""
+# Objects expire this many days after upload.
+retention_days = 3650
+
+[archive-chats]
+# Complete weeks each run checks, so a missed run is caught up.
+lookback = 4
+# S3 Standard USD per GB-month, for `recall archive-chats estimate`.
+price_per_gb = 0.023
+
+# One table per harness. `enabled = false` in a later file turns one off.
+[harness.claude]
+# Where this harness keeps transcripts.
+source = "~/.claude/projects"
+
+[recur]
+# Crontab marker and launchd label prefix.
+prefix = "recall.recur"
+# NAME=value for every job; $HOME and ~ expand at run time.
+env = ["PATH=$HOME/go/bin:/usr/local/bin:/usr/bin:/bin"]
+# The timezone cron schedules use on Linux, written as CRON_TZ at the top of
+# the generated block. launchd always uses the Mac's timezone.
+cron_tz = "America/Los_Angeles"
+
+# One table per job: five cron fields and a shell command.
+# `enabled = false` in a later file turns off a job an earlier one declared.
+[recur.jobs.archive-chats]
+schedule = "0 12 * * 1"
+command = "recall archive-chats run"

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "recall",
+  "version": "0.1.0",
+  "description": "Keeps an agent's memory honest: archives coding-agent transcripts, reports skill use, lints context files, and schedules the jobs that do so.",
+  "author": {
+    "name": "Micah Hausler"
+  },
+  "skills": [
+    "./skills/"
+  ],
+  "license": "Apache-2.0"
+}

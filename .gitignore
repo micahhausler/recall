@@ -1,0 +1,6 @@
+.DS_Store
+.worktree/
+*.swp
+*.swo
+/recall
+/dist/

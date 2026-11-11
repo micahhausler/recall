@@ -1,0 +1,14 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "recall",
+  "owner": {
+    "name": "Micah Hausler"
+  },
+  "plugins": [
+    {
+      "name": "recall",
+      "source": "./",
+      "description": "Keeps an agent's memory honest: archives coding-agent transcripts, reports skill use, lints context files, and schedules the jobs that do so."
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+version: 2
+project_name: recall
+builds:
+  - main: ./cmd/recall
+    binary: recall
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    flags: [-trimpath]
+archives:
+  - formats: [tar.gz]
+checksum:
+  name_template: checksums.txt
+release:
+  draft: true

@@ -1,0 +1,53 @@
+# recall
+
+One Go binary, `recall`, that archives coding-agent transcripts and learns from them.
+The README covers what each subcommand does; `docs/` holds the designs.
+
+## Nothing personal, ever
+
+This repo is public.
+Never add anything about a specific person: names, handles, emails, hostnames, account IDs, ARNs, internal URLs, or employers.
+Personal values belong in `~/.config/recall/`, never here.
+Examples and tests use placeholders like `you`, `example.com`, and `laptop-a`.
+
+## Layout
+
+- `cmd/recall/main.go`: flag parsing and subcommand dispatch only; logic lives in `internal/`.
+- `internal/config`: the layered TOML loader and the `config get|set|show` writer.
+- `internal/store`: the archive store interface, with `fs` and `s3` backends and an in-memory fake.
+- `internal/recur`: recurring jobs reconciled into cron (Linux) or LaunchAgents (macOS).
+- `internal/archive`: the weekly transcript archive.
+- `internal/harness`: one package per coding agent's transcript format; `claude` is the only one today.
+- `internal/events`: the normalized event schema (`docs/events.md`).
+- `internal/clock`: the injected clock; nothing calls `time.Now` directly where a week boundary matters.
+- `skills/<name>/SKILL.md`: one skill per subcommand, named like it.
+- `config.example.toml`: every config key, with a comment.
+
+## Rules
+
+- Standard library first.
+  Allowed dependencies: `pelletier/go-toml/v2`, AWS SDK for Go v2 (config, sts, s3), `klauspost/compress/zstd`.
+  Anything else needs a written reason.
+- Every pluggable part is a Go interface with a small registry keyed by the config name, and an in-memory fake in its package.
+  Don't add an interface with only one plausible implementation.
+- Skills read and write config through `recall config get|set`, never by parsing TOML.
+- No test calls a model or AWS or touches the real crontab, LaunchAgents, or `$HOME`; tests use fakes and temp dirs.
+- A new or changed config key goes in three places: the code, `config.example.toml`, and the README or skill that uses it.
+
+## Writing
+
+- In Markdown, put one sentence per line.
+- Use American spelling: judgment, behavior, color.
+- State claims plainly, without hedges.
+
+## Checks
+
+Run these before saying a change is done; CI runs the same set:
+
+```sh
+go vet ./...
+go test ./...
+gofmt -l .        # must print nothing
+gitleaks dir . --redact
+claude plugin validate .
+```
