@@ -149,7 +149,7 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 		Recur:     RecurSettings{Prefix: "recall.recur", Jobs: map[string]Job{}},
 		Learn: LearnSettings{
 			Runner:      "claude",
-			MapModel:    "haiku",
+			MapModel:    "sonnet",
 			ReduceModel: "opus",
 			Targets:     []string{filepath.Join(home, ".claude", "CLAUDE.md")},
 			Ledger:      filepath.Join(home, ".claude", "recall-ledger.json"),

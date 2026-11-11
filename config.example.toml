@@ -64,9 +64,11 @@ command = "recall archive-chats run"
 # The harness CLI model calls go through, in headless mode. Never an API
 # client, so existing auth works unchanged.
 runner = "claude"
-# The cheap model that reads one session (map), and the model that folds a
-# window of observations into proposals (reduce).
-map_model = "haiku"
+# The model that reads one session (map), and the model that folds a window
+# of observations into proposals (reduce). Measured on real sessions, haiku
+# missed plain corrections that sonnet caught, so the map defaults to sonnet
+# (a long session costs a few cents).
+map_model = "sonnet"
 reduce_model = "opus"
 # The context files rules live in; bullets in them become ledger entries.
 targets = ["~/.claude/CLAUDE.md"]

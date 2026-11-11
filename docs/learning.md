@@ -106,7 +106,7 @@ A rule that holds everywhere can be proposed against every harness's targets at 
 
 ## Open questions
 
-- **Map model and cost.** Which small model is good enough for observations, and what a week of sessions costs to map; measure before building.
+- ~~Map model and cost.~~ Measured on real sessions: haiku returned NONE on a session full of corrections; sonnet caught them all at about $0.05 to $0.08 per long session, so sonnet is the map default.
 - **Observation schema.** Fixed fields (above) or free-form with a validator; fixed is easier to reduce, free-form loses less.
 - **Cross-host reduce.** The archive holds every machine's weeks; should the reduce read other hosts' archived sessions, and does that break the separation rule when hosts share a store?
 - **Candidate rules.** distill's "said once, promote when said again" lifecycle; does the ledger subsume it (a rule with one source session is a candidate) or is a separate candidate state still useful?
