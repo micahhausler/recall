@@ -45,6 +45,12 @@ Examples and tests use placeholders like `you`, `example.com`, and `laptop-a`.
 - Use American spelling: judgment, behavior, color.
 - State claims plainly, without hedges.
 
+## Releasing
+
+A release is a tag `vX.Y.Z` on main; the release workflow runs GoReleaser and updates the Homebrew cask.
+The workflow refuses a tag that doesn't match `version` in `.claude-plugin/plugin.json`, so bump the plugin version in the same change and tag the commit that carries it.
+Order: bump plugin.json, push main, wait for test and gitleaks to pass, then tag that commit and push the tag.
+
 ## Checks
 
 Run these before saying a change is done; CI runs the same set:
