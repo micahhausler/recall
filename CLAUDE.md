@@ -35,6 +35,8 @@ Examples and tests use placeholders like `you`, `example.com`, and `laptop-a`.
 - Skills read and write config through `recall config get|set`, never by parsing TOML.
 - No test calls a model or AWS or touches the real crontab, LaunchAgents, or `$HOME`; tests use fakes and temp dirs.
 - A new or changed config key goes in three places: the code, `config.example.toml`, and the README or skill that uses it.
+- Memory management and nothing else: a feature that isn't about capturing, archiving, or learning from sessions belongs elsewhere.
+  Enforcing the owner's style preferences, for example, is out of scope even when a script could.
 
 ## Writing
 

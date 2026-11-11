@@ -18,6 +18,9 @@ It does memory management and nothing else.
 * **Rules graduate to code.**
   If a script can check or enforce a rule, it should, and the prose rule retires.
   A rule the agent can't break beats one it has to remember.
+* **Memory, and nothing else.**
+  recall captures sessions, archives them, and learns from them.
+  A feature that isn't about what your agent should remember belongs elsewhere.
 
 ## Requirements
 
