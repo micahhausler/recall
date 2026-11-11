@@ -6,5 +6,4 @@ import "errors"
 
 var errNotImplemented = errors.New("not implemented yet")
 
-func cmdSkills(args []string) int { return fail(errNotImplemented) }
-func cmdLint(args []string) int   { return fail(errNotImplemented) }
+func cmdLint(args []string) int { return fail(errNotImplemented) }
