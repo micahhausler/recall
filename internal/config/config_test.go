@@ -325,3 +325,31 @@ func TestMapWorkersBounds(t *testing.T) {
 		}
 	}
 }
+
+func TestExtensions(t *testing.T) {
+	b := base(t)
+	write(t, b, "host = \"laptop-a\"\n[extensions]\nkeep = [\"~/.config/recall/keep.md\", \"/etc/recall/team.md\"]\nlearn-reduce = []\n")
+	c, err := Load(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.Settings("/home/you", "laptop-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(s.Extensions["keep"], ","); got != "/home/you/.config/recall/keep.md,/etc/recall/team.md" {
+		t.Errorf("keep = %s", got)
+	}
+	if len(s.Extensions["learn-reduce"]) != 0 || len(s.Extensions["recur"]) != 0 {
+		t.Errorf("extensions = %v", s.Extensions)
+	}
+
+	write(t, b, "host = \"laptop-a\"\n[extensions]\nkeep = \"~/one.md\"\n")
+	c, err = Load(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Settings("/home/you", "laptop-a"); err == nil || !strings.Contains(err.Error(), "extensions.keep wants an array of file paths") {
+		t.Errorf("err = %v, want a type error", err)
+	}
+}

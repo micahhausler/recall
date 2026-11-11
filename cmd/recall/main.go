@@ -20,6 +20,7 @@ Usage:
   recall skills                    report which skills sessions actually invoke
   recall lint [FILES...]           find stale paths and commands in context files
   recall learn map|observations|rules|age|reduce   the learning loop (docs/learning.md)
+  recall extension NAME            print the owner's extension files for a skill
 
 Run 'recall <command> -h' for a command's flags.
 `
@@ -55,6 +56,8 @@ func run(args []string) int {
 		return cmdLint(rest)
 	case "learn":
 		return cmdLearn(rest)
+	case "extension":
+		return cmdExtension(rest)
 	default:
 		fmt.Fprintf(os.Stderr, "recall: unknown command %q\n\n%s", cmd, usage)
 		return 2

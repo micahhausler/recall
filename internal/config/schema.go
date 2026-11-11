@@ -40,6 +40,7 @@ var schema = []string{
 	"keep.targets",
 	"keep.bin",
 	"keep.public",
+	"extensions.*",
 }
 
 func matches(pattern, key string) bool {
@@ -81,6 +82,9 @@ type Settings struct {
 	Harnesses map[string]HarnessSettings
 	Recur     RecurSettings
 	Learn     LearnSettings
+	// Extensions are the owner's instruction files per extension point (a
+	// skill name, or learn-reduce), home-expanded, in order.
+	Extensions map[string][]string
 }
 
 // LearnSettings configure the learning loop (docs/learning.md).
@@ -252,6 +256,29 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 				break
 			}
 			s.Recur.Env = append(s.Recur.Env, ev)
+		}
+	}
+	for _, name := range c.tableNames("extensions") {
+		if err != nil {
+			break
+		}
+		key := "extensions." + name
+		v, _ := c.Get(key)
+		list, lok := v.([]any)
+		if !lok {
+			err = c.typeErr(key, "an array of file paths", v)
+			break
+		}
+		if s.Extensions == nil {
+			s.Extensions = map[string][]string{}
+		}
+		for _, e := range list {
+			ev, sok := e.(string)
+			if !sok {
+				err = c.typeErr(key, "an array of file paths", e)
+				break
+			}
+			s.Extensions[name] = append(s.Extensions[name], ExpandHome(ev, home))
 		}
 	}
 	for _, name := range c.tableNames("harness") {

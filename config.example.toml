@@ -91,3 +91,12 @@ targets = [
 bin = "~/bin"
 # Anything under these paths is shared publicly; nothing personal goes there.
 public = ["~/go/src/github.com/you"]
+
+[extensions]
+# The owner's own instructions, appended where an extension point loads:
+# a recall skill by name (keep, recur, archive-chats), or learn-reduce for
+# the reduce prompt. Files are read in order; a missing one is skipped with a
+# warning. Keep personal steps here, in your own files, not in a fork.
+# Like any array, a later config file replaces the list.
+keep = ["~/.config/recall/keep.md"]
+learn-reduce = ["~/.config/recall/reduce.md"]

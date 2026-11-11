@@ -1,6 +1,7 @@
 ---
 name: keep
 description: At the end of a session, propose 0 to 3 lessons worth keeping as edits to my context files, and apply the ones I approve. Use when I say "wrap up", "keep this", or "what should we keep". The manual, immediate form of the recall learning loop, for when I don't want to wait for a scheduled run.
+allowed-tools: Bash(recall extension keep)
 ---
 
 A later review of my transcripts only sees what I typed.
@@ -22,3 +23,11 @@ You also saw what went wrong and what fixed it, so catch the lesson now while I 
 Never copy secrets, hostnames, account IDs, ARNs, internal URLs, ticket numbers, or colleague or customer names into these files.
 
 Resolve symlinks before editing a skill or script. If it lives under a path from `recall config get keep.public`, it is shared publicly: keep anything about the owner out of it, and put the personal part in a context file instead.
+
+## Owner additions
+
+The owner's own steps for this skill, from `extensions.keep` in recall config; follow them where they don't conflict with the steps above.
+
+!`recall extension keep`
+
+If the line above still shows the command rather than its output, run `recall extension keep` and follow what it prints.

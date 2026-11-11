@@ -51,6 +51,7 @@ Archive, events, skills, lint, and learn all work from those two interfaces, and
   The first run can map every session on disk (`--since all`); each machine maps its own sessions, and the reduce reads every machine's observations from the store.
 - The `keep` skill is the loop's manual form: at the end of a session, propose up to three lessons and apply the ones you approve, without waiting for a scheduled run.
 - `recall config` reads and writes the layered TOML config without you parsing TOML.
+- `recall extension NAME` prints your extension files for a skill or the reduce prompt; see [Extend](#extend).
 
 ## Install
 
@@ -82,6 +83,20 @@ recall config show                 # the merged result, with the file and line e
 recall config get store.kind       # one value
 recall config set store.kind s3    # writes only to config.d/90-recall-set.toml, never to a file you edited
 ```
+
+## Extend
+
+Add your own steps to a recall skill or the reduce prompt without forking it.
+List files under `[extensions]`, keyed by skill name (`keep`, `recur`, `archive-chats`) or `learn-reduce`:
+
+```toml
+[extensions]
+keep = ["~/.config/recall/keep.md"]
+```
+
+Each skill ends with an "Owner additions" section that loads `recall extension <name>` when the skill starts, and the reduce appends `learn-reduce` to its input as owner instructions.
+The files are instructions with the skill's permissions, so keep them in your own dotfiles.
+For tools of your own, keep a separate private repo or plugin and point these files at it.
 
 ## Layout
 

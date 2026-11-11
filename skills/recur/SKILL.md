@@ -1,6 +1,7 @@
 ---
 name: recur
 description: Declare, change, remove, sync, or debug recurring jobs, which recall recur installs into cron on Linux or launchd on macOS from [recur.jobs] tables in the recall config. Use when I say "add a cron job", "schedule this", "run this every week", or ask whether a scheduled job is installed or why it didn't run. With "setup" ("set up recurring jobs"), walk through first-time setup.
+allowed-tools: Bash(recall extension recur)
 ---
 
 `recall recur` makes this machine's crontab block or LaunchAgents match the `[recur.jobs.<name>]` tables in the recall config, every `config.d/*.toml` drop-in included.
@@ -21,3 +22,11 @@ description: Declare, change, remove, sync, or debug recurring jobs, which recal
 
 Never edit the generated crontab block or the `<prefix>.*.plist` files by hand; change the config and sync.
 Ask before removing a job from a file other machines share.
+
+## Owner additions
+
+The owner's own steps for this skill, from `extensions.recur` in recall config; follow them where they don't conflict with the steps above.
+
+!`recall extension recur`
+
+If the line above still shows the command rather than its output, run `recall extension recur` and follow what it prints.

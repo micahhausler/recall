@@ -29,6 +29,9 @@ type Reducer struct {
 	// Home expands a ~ in a proposal's target to compare against them.
 	Targets []string
 	Home    string
+	// OwnerInstructions are the owner's extension text for the reduce
+	// (extensions.learn-reduce), appended to its input when set.
+	OwnerInstructions string
 }
 
 // BuildInput renders the reduce model's input from the window's observations.
@@ -88,6 +91,11 @@ func (r *Reducer) BuildInput(window []SessionObservations) string {
 	}
 	for _, rule := range aging.Retire {
 		fmt.Fprintf(&b, "retire Rule[%s] (no relevance in %d days): %s\n", rule.ID, retireDays, rule.Text)
+	}
+
+	if strings.TrimSpace(r.OwnerInstructions) != "" {
+		b.WriteString("\n# OWNER INSTRUCTIONS\n\n")
+		b.WriteString(strings.TrimRight(r.OwnerInstructions, "\n") + "\n")
 	}
 
 	b.WriteString("\n# TAKEN NAMES\n\n")

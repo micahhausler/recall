@@ -22,7 +22,8 @@ Examples and tests use placeholders like `you`, `example.com`, and `laptop-a`.
 - `internal/clock`: the injected clock; nothing calls `time.Now` directly where a week boundary matters.
 - `internal/model`: the headless harness-CLI runner model calls go through; never an API client.
 - `internal/learn`: the learning loop (`docs/learning.md`): render, map with cache, ledger, aging, reduce.
-- `skills/<name>/SKILL.md`: one skill per subcommand, named like it.
+- `internal/extension`: the owner's extension files that skills and the reduce append at load time.
+- `skills/<name>/SKILL.md`: one skill per subcommand, named like it, ending in the "Owner additions" block that loads `recall extension <name>` (except recall-setup, which runs before the binary exists).
 - `config.example.toml`: every config key, with a comment.
 
 ## Rules

@@ -1,6 +1,7 @@
 ---
 name: archive-chats
 description: Set up, check, or run recall archive-chats, which uploads coding-agent transcripts to S3 once a week, one zstd tarball per machine per week, for later analysis. Use when I say "set up chat archive", "archive my transcripts", "back up my chats", or ask whether this machine's uploads are working or what they cost. With "setup", walk through first-time setup.
+allowed-tools: Bash(recall extension archive-chats)
 ---
 
 `recall archive-chats` does the work; `recall archive-chats -h` and `config.example.toml` document every command and key.
@@ -24,3 +25,11 @@ On another machine with the same shared config, skip 1 to 4 and 7.
 **Status.** `recall archive-chats info` lists this host's uploads; `~/.local/state/recall/recur/archive-chats.log` has the run history. A missed week is caught up by the next run, within `archive-chats.lookback` weeks.
 
 Never create or change IAM users, roles, or policies; never turn off the bucket's public access block, TLS-only policy, or encryption; never delete objects.
+
+## Owner additions
+
+The owner's own steps for this skill, from `extensions.archive-chats` in recall config; follow them where they don't conflict with the steps above.
+
+!`recall extension archive-chats`
+
+If the line above still shows the command rather than its output, run `recall extension archive-chats` and follow what it prints.

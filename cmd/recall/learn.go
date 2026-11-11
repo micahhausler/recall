@@ -13,6 +13,7 @@ import (
 
 	"github.com/micahhausler/recall/internal/archive"
 	"github.com/micahhausler/recall/internal/events"
+	"github.com/micahhausler/recall/internal/extension"
 	"github.com/micahhausler/recall/internal/harness"
 	"github.com/micahhausler/recall/internal/learn"
 	"github.com/micahhausler/recall/internal/model"
@@ -502,6 +503,7 @@ func learnReduce(ctx context.Context, env *archiveEnv, runner model.Runner, outD
 		Runner: runner, Model: env.settings.Learn.ReduceModel, Ledger: ledger,
 		RetireDays: env.settings.Learn.RetireDays, Clock: env.clk, Out: os.Stdout,
 		Taken: n.taken(), Targets: env.settings.Learn.Targets, Home: env.home,
+		OwnerInstructions: extension.Read(env.settings.Extensions["learn-reduce"], os.Stderr),
 	}
 	warnUnobservedHosts(ctx, env, st)
 	if dryRun {

@@ -422,3 +422,15 @@ func TestOffTargets(t *testing.T) {
 		t.Error("no configured targets should flag nothing")
 	}
 }
+
+func TestReduceOwnerInstructions(t *testing.T) {
+	r := &Reducer{Ledger: &Ledger{}, Clock: &clock.Fake{T: time.Date(2026, 11, 11, 0, 0, 0, 0, time.UTC)}}
+	if strings.Contains(r.BuildInput(nil), "# OWNER INSTRUCTIONS") {
+		t.Error("no instructions should add no section")
+	}
+	r.OwnerInstructions = "- Prefer rewording to adding.\n"
+	in := r.BuildInput(nil)
+	if !strings.Contains(in, "# OWNER INSTRUCTIONS\n\n- Prefer rewording to adding.\n") {
+		t.Errorf("input misses the owner's instructions:\n%s", in)
+	}
+}

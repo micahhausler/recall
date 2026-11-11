@@ -55,6 +55,7 @@ The reduce gathers the window's observations, the targets, the ledger, and the n
 - retirements, from the aging policy below;
 - graduations, below.
 
+`extensions.learn-reduce` files, when set, join the input as OWNER INSTRUCTIONS, so the owner can steer the reduce without editing its prompt.
 The binary checks the output: an add, reword, or retire whose target isn't in `learn.targets` lands under "Off-target proposals", and a new skill whose name is taken lands under "Name collisions".
 
 Edits are staged file copies, reviewed and applied by the binary, never written live by the model.
