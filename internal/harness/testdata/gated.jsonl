@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2026-11-01T00:00:01Z","cwd":"/w","entrypoint":"cli","message":{"role":"user","content":"gated-prompt"}}
+{"type":"assistant","timestamp":"2026-11-01T00:00:02Z","requestedModel":"claude-opus-4-8-gated","message":{"model":"m","stop_reason":"end_turn","stop_details":null,"content":[]}}

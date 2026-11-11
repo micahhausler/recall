@@ -1,0 +1,14 @@
+{"type":"user","timestamp":"2026-11-01T00:00:10Z","cwd":"/w","entrypoint":"cli","message":{"role":"user","content":"p1"}}
+{"type":"assistant","timestamp":"2026-11-01T00:00:11Z","requestedModel":"claude-opus-5-5","message":{"model":"m","stop_reason":"end_turn","stop_details":null,"content":[]}}
+{"type":"user","timestamp":"2026-11-01T00:00:20Z","cwd":"/w","entrypoint":"cli","message":{"role":"user","content":"p2"}}
+{"type":"assistant","timestamp":"2026-11-01T00:00:21Z","requestedModel":"claude-opus-5-5","message":{"model":"m","stop_reason":"end_turn","stop_details":null,"content":[]}}
+{"type":"user","timestamp":"2026-11-01T00:00:30Z","cwd":"/w","entrypoint":"cli","message":{"role":"user","content":"p3"}}
+{"type":"assistant","timestamp":"2026-11-01T00:00:31Z","requestedModel":"claude-opus-5-5","message":{"model":"m","stop_reason":"end_turn","stop_details":null,"content":[]}}
+{"type":"user","timestamp":"2026-11-01T00:00:40Z","cwd":"/w","entrypoint":"cli","message":{"role":"user","content":"p4"}}
+{"type":"assistant","timestamp":"2026-11-01T00:00:41Z","requestedModel":"claude-opus-5-5","message":{"model":"m","stop_reason":"end_turn","stop_details":null,"content":[]}}
+{"type":"user","timestamp":"2026-11-01T00:00:50Z","cwd":"/w","entrypoint":"cli","message":{"role":"user","content":"p5"}}
+{"type":"assistant","timestamp":"2026-11-01T00:00:51Z","requestedModel":"claude-opus-5-5","message":{"model":"m","stop_reason":"end_turn","stop_details":null,"content":[]}}
+{"type":"assistant","timestamp":"2026-11-01T00:00:52Z","requestedModel":"claude-opus-5-5","message":{"model":"m","stop_reason":"refusal","stop_details":{"type":"refusal","category":"cyber"},"content":[]}}
+{"type":"system","timestamp":"2026-11-01T00:00:53Z","apiRefusalCategory":"cyber"}
+{"type":"user","timestamp":"2026-11-01T00:01:00Z","cwd":"/w","entrypoint":"cli","message":{"role":"user","content":"p6-after"}}
+{"type":"assistant","timestamp":"2026-11-01T00:01:01Z","requestedModel":"claude-opus-5-5","message":{"model":"m","stop_reason":"end_turn","stop_details":null,"content":[]}}

@@ -1,0 +1,7 @@
+{"type":"user","timestamp":"2026-11-01T00:00:01Z","cwd":"/w","entrypoint":"cli","message":{"role":"user","content":"one"}}
+{"type":"assistant","timestamp":"2026-11-01T00:00:02Z","requestedModel":"claude-opus-5-5","message":{"model":"m","stop_reason":"end_turn","stop_details":null,"content":[]}}
+{"type":"user","timestamp":"2026-11-01T00:00:03Z","message":{"content":[{"type":"tool_result","content":"x"}]}}
+{"type":"user","isMeta":true,"timestamp":"2026-11-01T00:00:04Z","message":{"content":"meta"}}
+{"type":"user","isSidechain":true,"timestamp":"2026-11-01T00:00:05Z","message":{"content":"subagent"}}
+{"type":"user","timestamp":"2026-11-01T00:00:06Z","cwd":"/w","entrypoint":"cli","message":{"role":"user","content":"<command-name>/clear</command-name>"}}
+{"type":"user","timestamp":"2026-11-01T00:00:07Z","cwd":"/w","message":{"content":[{"type":"text","text":"two"}]}}

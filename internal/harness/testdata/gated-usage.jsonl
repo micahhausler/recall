@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2026-11-01T00:00:01Z","cwd":"/w","entrypoint":"cli","message":{"role":"user","content":"gated-usage"}}
+{"type":"result","modelUsage":{"claude-opus-5-5-gated":{}}}

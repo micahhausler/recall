@@ -5,14 +5,21 @@
 package harness
 
 import (
+	"archive/tar"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
+
 	"github.com/micahhausler/recall/internal/config"
+	"github.com/micahhausler/recall/internal/events"
 )
 
 // Harness is one coding agent's chat history.
@@ -26,6 +33,12 @@ type Harness interface {
 	// SourceDir modified in [start, end), relative to SourceDir's parent, so
 	// a tarball unpacks to recognizable paths like projects/....
 	WeekFiles(start, end time.Time) ([]string, error)
+	// Sessions lists this harness's transcript files on disk.
+	Sessions() ([]string, error)
+	// ReadSessionFile reads one transcript from disk into normalized events.
+	ReadSessionFile(path, host string) ([]events.Event, error)
+	// ReadSession parses one transcript stream, named session, into events.
+	ReadSession(r io.Reader, session, host string) ([]events.Event, error)
 }
 
 // Factory opens a harness from its merged settings.
@@ -115,6 +128,42 @@ func weekFiles(root string, start, end time.Time) ([]string, error) {
 		if !f.ModTime.Before(start) && f.ModTime.Before(end) {
 			out = append(out, f.Rel)
 		}
+	}
+	return out, nil
+}
+
+// ReadTarZst reads every .jsonl inside a week's .tar.zst archive into events,
+// so analysis can run over archived weeks the same way it runs over disk.
+func ReadTarZst(h Harness, path, host string) ([]events.Event, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	dec, err := zstd.NewReader(f)
+	if err != nil {
+		return nil, err
+	}
+	defer dec.Close()
+	tr := tar.NewReader(dec)
+	var out []events.Event
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+		if !strings.HasSuffix(hdr.Name, ".jsonl") {
+			continue
+		}
+		session := strings.TrimSuffix(filepath.Base(hdr.Name), ".jsonl")
+		evs, err := h.ReadSession(tr, session, host)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %s: %w", path, hdr.Name, err)
+		}
+		out = append(out, evs...)
 	}
 	return out, nil
 }
