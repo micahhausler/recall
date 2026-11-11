@@ -55,6 +55,8 @@ claude plugin marketplace add micahhausler/recall
 claude plugin install recall@recall
 ```
 
+The skills run in Claude Code (not the Claude desktop app) and drive the `recall` binary; the `recall-setup` skill walks a new machine from binary to scheduled archive.
+
 ## Configure
 
 Config is TOML, layered: `~/.config/recall/config.toml`, then every `~/.config/recall/config.d/*.toml` in lexical order.
