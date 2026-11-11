@@ -9,6 +9,8 @@ builds:
     goarch: [amd64, arm64]
     mod_timestamp: "{{ .CommitTimestamp }}"
     flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/micahhausler/recall/internal/version.Version={{ .Version }}
 archives:
   - formats: [tar.gz]
 checksum:

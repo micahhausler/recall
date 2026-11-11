@@ -6,6 +6,8 @@ package main
 import (
 	"fmt"
 	"os"
+
+	"github.com/micahhausler/recall/internal/version"
 )
 
 const usage = `recall keeps an agent's memory honest.
@@ -35,6 +37,9 @@ func run(args []string) int {
 	switch cmd {
 	case "help", "-h", "--help":
 		fmt.Print(usage)
+		return 0
+	case "version":
+		fmt.Println("recall", version.Version)
 		return 0
 	case "config":
 		return cmdConfig(rest)

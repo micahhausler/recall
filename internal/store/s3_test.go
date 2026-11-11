@@ -152,3 +152,26 @@ func TestResolveBucket(t *testing.T) {
 		t.Error("no credentials: want an error")
 	}
 }
+
+func TestS3RequestsCarryTheAppID(t *testing.T) {
+	var ua string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ua = r.Header.Get("User-Agent")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	cfg, err := AWSConfig(context.Background(), config.S3Settings{Region: "us-west-2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Credentials = credentials.NewStaticCredentialsProvider("test", "test", "")
+	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
+		o.BaseEndpoint = aws.String(server.URL)
+		o.UsePathStyle = true
+		o.RetryMaxAttempts = 1
+	})
+	NewS3(client, "bkt").Head(context.Background(), "k")
+	if !strings.Contains(ua, "app/recall-dev") {
+		t.Errorf("User-Agent %q misses app/recall-dev", ua)
+	}
+}

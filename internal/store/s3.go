@@ -15,6 +15,7 @@ import (
 	"github.com/aws/smithy-go"
 
 	"github.com/micahhausler/recall/internal/config"
+	"github.com/micahhausler/recall/internal/version"
 )
 
 func init() {
@@ -56,9 +57,12 @@ func ResolveBucket(ctx context.Context, c config.S3Settings, api STSAPI) (string
 }
 
 // AWSConfig loads the default credential chain with the configured profile
-// and region.
+// and region. Every call identifies itself: the SDK appends app/<id> to the
+// User-Agent, so access logs and CloudTrail say recall made the request.
 func AWSConfig(ctx context.Context, c config.S3Settings) (aws.Config, error) {
-	var opts []func(*awsconfig.LoadOptions) error
+	opts := []func(*awsconfig.LoadOptions) error{
+		awsconfig.WithAppID(version.UserAgentAppID()),
+	}
 	if c.Profile != "" {
 		opts = append(opts, awsconfig.WithSharedConfigProfile(c.Profile))
 	}
