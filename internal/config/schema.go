@@ -30,6 +30,12 @@ var schema = []string{
 	"recur.jobs.*.schedule",
 	"recur.jobs.*.command",
 	"recur.jobs.*.enabled",
+	"learn.runner",
+	"learn.map_model",
+	"learn.reduce_model",
+	"learn.targets",
+	"learn.ledger",
+	"learn.retire_days",
 }
 
 func matches(pattern, key string) bool {
@@ -70,6 +76,23 @@ type Settings struct {
 	Archive   ArchiveSettings
 	Harnesses map[string]HarnessSettings
 	Recur     RecurSettings
+	Learn     LearnSettings
+}
+
+// LearnSettings configure the learning loop (docs/learning.md).
+type LearnSettings struct {
+	// Runner is the harness CLI model calls go through.
+	Runner string
+	// MapModel reads one session; ReduceModel folds a window into proposals.
+	MapModel    string
+	ReduceModel string
+	// Targets are the context files rules live in.
+	Targets []string
+	// Ledger is the sidecar file tracking each rule.
+	Ledger string
+	// RetireDays: a rule with no relevance for this long is proposed for
+	// retirement.
+	RetireDays int
 }
 
 type StoreSettings struct {
@@ -124,6 +147,14 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 		Archive:   ArchiveSettings{Lookback: 4, PricePerGB: 0.023},
 		Harnesses: map[string]HarnessSettings{},
 		Recur:     RecurSettings{Prefix: "recall.recur", Jobs: map[string]Job{}},
+		Learn: LearnSettings{
+			Runner:      "claude",
+			MapModel:    "haiku",
+			ReduceModel: "opus",
+			Targets:     []string{filepath.Join(home, ".claude", "CLAUDE.md")},
+			Ledger:      filepath.Join(home, ".claude", "recall-ledger.json"),
+			RetireDays:  90,
+		},
 	}
 	var err error
 	str := func(key string, dst *string) {
@@ -175,6 +206,27 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 	flt("archive-chats.price_per_gb", &s.Archive.PricePerGB)
 	str("recur.prefix", &s.Recur.Prefix)
 	str("recur.cron_tz", &s.Recur.CronTZ)
+	str("learn.runner", &s.Learn.Runner)
+	str("learn.map_model", &s.Learn.MapModel)
+	str("learn.reduce_model", &s.Learn.ReduceModel)
+	path("learn.ledger", &s.Learn.Ledger)
+	num("learn.retire_days", &s.Learn.RetireDays)
+	if v, ok := c.Get("learn.targets"); ok && err == nil {
+		list, lok := v.([]any)
+		if !lok {
+			err = c.typeErr("learn.targets", "an array of strings", v)
+		} else {
+			s.Learn.Targets = nil
+			for _, e := range list {
+				ev, sok := e.(string)
+				if !sok {
+					err = c.typeErr("learn.targets", "an array of strings", e)
+					break
+				}
+				s.Learn.Targets = append(s.Learn.Targets, ExpandHome(ev, home))
+			}
+		}
+	}
 	if v, ok := c.Get("recur.env"); ok && err == nil {
 		list, lok := v.([]any)
 		if !lok {

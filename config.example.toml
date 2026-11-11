@@ -59,3 +59,18 @@ cron_tz = "America/Los_Angeles"
 [recur.jobs.archive-chats]
 schedule = "0 12 * * 1"
 command = "recall archive-chats run"
+
+[learn]
+# The harness CLI model calls go through, in headless mode. Never an API
+# client, so existing auth works unchanged.
+runner = "claude"
+# The cheap model that reads one session (map), and the model that folds a
+# window of observations into proposals (reduce).
+map_model = "haiku"
+reduce_model = "opus"
+# The context files rules live in; bullets in them become ledger entries.
+targets = ["~/.claude/CLAUDE.md"]
+# The sidecar rule ledger (docs/learning.md), never comments in the files.
+ledger = "~/.claude/recall-ledger.json"
+# A rule with no relevance for this many days is proposed for retirement.
+retire_days = 90

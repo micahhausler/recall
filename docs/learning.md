@@ -1,4 +1,6 @@
-# Learning: the loop that replaces distill (design, not built)
+# Learning: the loop that replaces distill
+
+The map step, rule ledger, aging, and the reduce plumbing are built (`recall learn`); applying proposals to live files and the PR flow are not yet.
 
 distill read only the prompts a person typed, once a week, and asked one model call to turn them into context-file edits.
 That caught corrections but missed most of the evidence: tool failures the agent repeated, skills it never used, rules it broke mid-session.
@@ -11,12 +13,19 @@ events (disk + archive) -> map (per session, cached) -> observations
 observations + rules + ledger -> reduce (weekly) -> proposed edits + ledger update
 ```
 
-Two new interfaces, designed here and built later:
+Two interfaces carry it:
 
-- **`context.Target`**: one file the loop proposes edits to, such as `CLAUDE.md`, `AGENTS.md`, or a skill.
-  A target knows its path, its owner-set line budget, and how to stage a copy for the model to edit.
-- **`model.Runner`**: runs a harness CLI headless (for example `claude -p` with read-only tools and edits confined to a staging directory, exactly like distill).
+- **`model.Runner`** (built, `internal/model`): runs a harness CLI headless (`claude -p --disallowedTools '*'`, stdin in, stdout out).
   No API client lives in the binary, so existing auth, billing, and model selection work unchanged.
+- **`context.Target`** (still just paths in `learn.targets`): one file the loop proposes edits to.
+  A real Target type (path, line budget, staged copies the model may edit) comes with the apply step.
+
+Borrowed from muse (github.com/ellistarn/muse), which runs the same observe-then-fold shape over conversation history:
+
+- Structured prefixes over "return nothing": models can't reliably emit empty output, so `Observation[...]:` lines are the contract and everything else is discarded at parse time, with `NONE` as the explicit empty.
+- The cache fingerprint covers the rendered session, the prompt, the model, and the rule ids shown, so changing any of them re-observes and nothing needs a manual flush.
+- Mechanical compression before the model call: owner messages whole, code blocks collapsed, assistant prose truncated, except ahead of a short correction, where the text that provoked it is the signal.
+- Conservative folding: the current rules are the prior, new observations must justify changes, and volume is not importance.
 
 ## Map: one cheap pass per session
 

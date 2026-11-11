@@ -20,6 +20,8 @@ Examples and tests use placeholders like `you`, `example.com`, and `laptop-a`.
 - `internal/harness`: one package per coding agent's transcript format; `claude` is the only one today.
 - `internal/events`: the normalized event schema (`docs/events.md`).
 - `internal/clock`: the injected clock; nothing calls `time.Now` directly where a week boundary matters.
+- `internal/model`: the headless harness-CLI runner model calls go through; never an API client.
+- `internal/learn`: the learning loop (`docs/learning.md`): render, map with cache, ledger, aging, reduce.
 - `skills/<name>/SKILL.md`: one skill per subcommand, named like it.
 - `config.example.toml`: every config key, with a comment.
 

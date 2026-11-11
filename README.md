@@ -33,6 +33,7 @@ It does memory management and nothing else.
 - `recall events` reads harness transcripts (on disk or inside an archive tarball) and prints them as normalized JSONL events.
 - `recall skills` reports which skills your sessions actually invoke, so unused ones can retire.
 - `recall lint` finds paths, commands, and skill names your context files mention that don't exist on this machine.
+- `recall learn` is the learning loop: a cheap cached map pass observes each session, a rule ledger tracks when each rule was last relevant or violated, and a reduce pass proposes edits for your review ([design](docs/learning.md)).
 - `recall config` reads and writes the layered TOML config without you parsing TOML.
 
 ## Install
