@@ -57,3 +57,20 @@ func fail(err error) int {
 	fmt.Fprintf(os.Stderr, "recall: %v\n", err)
 	return 2
 }
+
+// shortHost is `hostname -s`: the name before the first dot.
+func shortHost(h string) string {
+	if i := indexByte(h, '.'); i >= 0 {
+		return h[:i]
+	}
+	return h
+}
+
+func indexByte(s string, b byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == b {
+			return i
+		}
+	}
+	return -1
+}

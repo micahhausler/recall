@@ -6,7 +6,6 @@ import "errors"
 
 var errNotImplemented = errors.New("not implemented yet")
 
-func cmdRecur(args []string) int        { return fail(errNotImplemented) }
 func cmdArchiveChats(args []string) int { return fail(errNotImplemented) }
 func cmdEvents(args []string) int       { return fail(errNotImplemented) }
 func cmdSkills(args []string) int       { return fail(errNotImplemented) }
