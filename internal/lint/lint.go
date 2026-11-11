@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/micahhausler/recall/internal/skills"
 )
 
 // Finding is one stale mention.
@@ -39,12 +41,6 @@ var backtickRE = regexp.MustCompile("`([^`\n]+)`")
 var importRE = regexp.MustCompile(`^@(\S+)$`)
 var slashRE = regexp.MustCompile(`^/[a-z0-9][a-z0-9-]*$`)
 var commandishRE = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
-
-// builtinSlash are harness builtins, not skills.
-var builtinSlash = map[string]bool{
-	"help": true, "clear": true, "config": true, "model": true, "compact": true,
-	"init": true, "fast": true, "loop": true,
-}
 
 // Run lints the files and every @import they pull in, depth first.
 func (l *Linter) Run(files []string) ([]Finding, error) {
@@ -127,7 +123,7 @@ func (l *Linter) check(token string) string {
 	// `/name`: a skill or slash command.
 	if slashRE.MatchString(token) {
 		name := token[1:]
-		if len(l.Skills) == 0 || builtinSlash[name] || l.Skills[name] {
+		if len(l.Skills) == 0 || skills.Builtin[name] || l.Skills[name] {
 			return ""
 		}
 		return fmt.Sprintf("skill %s: no skill named %q on this machine", token, name)

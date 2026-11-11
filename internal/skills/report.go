@@ -81,6 +81,12 @@ type Row struct {
 	Flag     string `json:"flag,omitempty"`
 }
 
+// Builtin names harness slash commands use that are never skills.
+var Builtin = map[string]bool{
+	"help": true, "clear": true, "config": true, "model": true, "compact": true,
+	"init": true, "fast": true, "loop": true, "resume": true, "status": true,
+}
+
 // Flags a report sets.
 const (
 	FlagRetire    = "never invoked in the window; retirement candidate"
@@ -117,7 +123,7 @@ func Report(found []Skill, evs []events.Event) []Row {
 		default:
 			continue
 		}
-		if name == "" {
+		if name == "" || (e.Kind == events.SlashCommand && Builtin[name]) {
 			continue
 		}
 		r := add(name)
