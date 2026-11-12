@@ -280,7 +280,13 @@ func TestReducerBuildsInputAndWritesProposals(t *testing.T) {
 	fake := &model.Fake{Response: "## Proposals\n\n### retire: stale rule\n- evidence: s1\n",
 		Usage: model.Usage{InputTokens: 1000, OutputTokens: 50, CostUSD: 0.05}}
 	r := &Reducer{Runner: fake, Model: "opus", Ledger: ledger, RetireDays: 90,
-		Clock: &clock.Fake{T: time.Date(2026, 11, 11, 0, 0, 0, 0, time.UTC)}}
+		Clock: &clock.Fake{T: time.Date(2026, 11, 11, 0, 0, 0, 0, time.UTC)},
+		Reviews: []Review{
+			{Kind: "add", Title: "Waiting", Rule: "Wait\n  for it.", Proposed: "2026-11-04", Verdict: "pending"},
+			{Kind: "skill", Title: "Said no", Rule: "x", Verdict: "closed", Decided: "2026-11-06"},
+			{Kind: "add", Title: "Long ago", Rule: "y", Verdict: "closed", Decided: "2026-01-01"},
+			{Kind: "add", Title: "Landed", Rule: "z", Verdict: "merged", Decided: "2026-11-06"},
+		}}
 	out := t.TempDir()
 	path, usage, err := r.Run(context.Background(), window, out)
 	if err != nil {
@@ -292,12 +298,19 @@ func TestReducerBuildsInputAndWritesProposals(t *testing.T) {
 	input := fake.Calls[0].Input
 	for _, want := range []string{
 		"Rule[r-0001]", "Never push without asking.",
-		"Observation[correction] (session s1): Quote PRs in full.",
+		"Observation[correction] (session s1, observed 2026-11-05): Quote PRs in full.",
 		`Quote: "quote it"`,
 		"retire Rule[r-0002]",
+		"# REVIEWS", "- pending since 2026-11-04: add: Waiting: Wait for it.",
+		"- rejected 2026-11-06: skill: Said no: x",
 	} {
 		if !strings.Contains(input, want) {
 			t.Errorf("reduce input misses %q", want)
+		}
+	}
+	for _, gone := range []string{"Long ago", "Landed"} {
+		if strings.Contains(input, gone) {
+			t.Errorf("reduce input shows %q, an old rejection or a merged review", gone)
 		}
 	}
 	data, err := os.ReadFile(path)

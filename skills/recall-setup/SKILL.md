@@ -23,6 +23,8 @@ Walk these in order, ask before anything that writes, and skip steps that alread
    Each machine maps its own sessions; the reduce reads every machine's observations from the store, and warns about a machine whose archives have none.
    `recall learn map --archives` maps other machines' archived weeks from here instead, at the cost of downloading them; offer it only when a machine can't run the map itself.
    Offer to schedule `recall learn map` weekly through the recur skill; the reduce is better run by hand until its proposals have earned trust.
+   To apply a reduce's proposals, confirm `learn.targets`, `learn.skills`, and `learn.bin` each sit in a git checkout, then offer `recall learn apply --dry-run`, and say it opens one pull request per changed repo (`learn.review = "branch"` keeps them local).
+   Once the proposals have earned trust, one machine can schedule `recall learn run` (rules sync, reduce, apply) after the others' weekly map.
 6. **Check.** Finish with `recall recur check`, `recall skills --since 90d`, and `recall lint`; show me anything they flag.
 
 On a machine that shares config through dotfiles, steps 2 and 3 are usually already done; start at 4.

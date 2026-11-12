@@ -1,6 +1,6 @@
 # Learning: the loop that replaces distill
 
-The map step, rule ledger, aging, and the reduce plumbing are built (`recall learn`); applying proposals to live files and the PR flow are not yet.
+The map step, rule ledger, aging, reduce, apply, and review feedback are built (`recall learn`).
 
 distill read only the prompts a person typed, once a week, and asked one model call to turn them into context-file edits.
 That caught corrections but missed most of the evidence: tool failures the agent repeated, skills it never used, rules it broke mid-session.
@@ -11,14 +11,17 @@ This design reads the full normalized event stream (`docs/events.md`), splits th
 ```
 events (disk + archive) -> map (per session, cached) -> observations
 observations + rules + ledger -> reduce (weekly) -> proposed edits + ledger update
+proposed edits -> apply (worktree per repo) -> a pull request or branch per repo -> owner review
 ```
 
-Two interfaces carry it:
+Three interfaces carry it:
 
-- **`model.Runner`** (built, `internal/model`): runs a harness CLI headless (`claude -p --disallowedTools '*'`, stdin in, stdout out).
+- **`model.Runner`** (`internal/model`): runs a harness CLI headless (`claude -p --disallowedTools '*'`, stdin in, stdout out).
   No API client lives in the binary, so existing auth, billing, and model selection work unchanged.
-- **`context.Target`** (still just paths in `learn.targets`): one file the loop proposes edits to.
-  A real Target type (path, line budget, staged copies the model may edit) comes with the apply step.
+- **`model.Editor`** (`internal/model`): the same CLI with file tools only (`Read Edit Write Glob Grep`), confined to the apply step's worktrees.
+- **`review.Publisher`** (`internal/review`): hands a committed change to the owner, keyed by `learn.review`: `pr` pushes and opens a pull request with `gh`, `branch` leaves the branch in place.
+
+Targets are still plain paths in `learn.targets`; a Target type with a line budget waits until a budget is needed.
 
 Borrowed from muse (github.com/ellistarn/muse), which runs the same observe-then-fold shape over conversation history:
 
@@ -58,8 +61,35 @@ The reduce gathers the window's observations, the targets, the ledger, and the n
 `extensions.learn-reduce` files, when set, join the input as OWNER INSTRUCTIONS, so the owner can steer the reduce without editing its prompt.
 The binary checks the output: an add, reword, or retire whose target isn't in `learn.targets` lands under "Off-target proposals", and a new skill whose name is taken lands under "Name collisions".
 
-Edits are staged file copies, reviewed and applied by the binary, never written live by the model.
-The owner's chosen review level decides what happens next: open a PR, write a pending note, or apply directly; never delete without the owner's chosen level of review.
+## Apply
+
+`recall learn apply` reads one reduce run's `proposals.md` (the newest by default) and stages it for review; nothing it does writes a live file.
+
+- The binary routes each proposal before a model sees it: an add, reword, or retire to its target; a new skill to `learn.skills/<name>/SKILL.md`; a changed skill to the file it names; a graduate's script to `learn.bin/<name>`, with the targets for the pointer that replaces the prose.
+  It holds back a proposal that is off target, reuses a taken name, or lands outside any git checkout, and says why.
+- The repos are whatever checkouts hold those paths, so the rules and the skills can share one repo or use several.
+  Each gets a fresh worktree on a `learn-<date>` branch from its origin's default branch; an existing branch of that name is an earlier apply waiting for review, and stops the run.
+- One `model.Editor` run (`learn.apply_model`) gets every worktree and the exact path each proposal may change, and reports one `Applied[...]` or `Skipped[...]` line per proposal.
+  `extensions.learn-apply` files join its input as OWNER INSTRUCTIONS.
+- Each changed worktree runs `learn.check`, when set, on its staged diff, then commits and goes to the publisher; an unchanged one is removed with its branch.
+  A repo under `keep.public` is marked public: its edits generalize anything personal, and its pull request carries no proposal text.
+- The run directory keeps `apply-input.md`, the model's `apply.md`, and `apply.json`, which records each change and every outcome and marks the run as applied, so a scheduled rerun doesn't open a second pull request.
+
+`recall learn run` is rules sync, reduce, and apply in one command, for the one machine that runs the reduce.
+
+## Review feedback
+
+A proposal the owner closes is a judgment, and the loop keeps it.
+
+- Each proposal an apply publishes goes on the ledger as a pending review, with where it landed: a pull request URL, or a branch and its commit.
+- Before each reduce and apply, the publisher reports what became of each pending review: `gh pr view` for a pull request, where a squash or rebase merge counts as merged; for a branch, its commit reachable from the base is merged, and the branch deleted without that is closed.
+  A publisher that can't answer leaves its reviews pending, with a warning.
+- The reduce input lists pending reviews and rejections within `learn.retire_days` under REVIEWS, and dates each observation, so a rejected proposal returns only with evidence observed after the rejection, reworded.
+- Apply holds back a proposal that matches a pending review, by title or rule text, so a slow review never gets a duplicate; and one whose rule text matches a rejection exactly.
+- A merged review needs nothing more: `rules sync` puts its bullets on the ledger, and its skill's name becomes taken.
+
+`recall learn reviews` runs the same check and lists every review with its verdict.
+Deletions get the same review as additions: a retire is an edit on a branch like any other.
 
 ## Why apply is a separate stage
 
@@ -68,7 +98,7 @@ The reduce proposes and the apply edits, and they stay two stages behind one com
 - `proposals.md` is the contract: the artifact the owner can read, the thing `--dry-run` stops at, and the checkpoint a failed apply retries from without re-running the reduce.
 - The model that decides what to change never holds the pen.
   The reduce runs with no tools, the apply edits only staged worktrees, and the binary, not a model, checks targets and names.
-- The owner's review level (PR, pending note, direct) plugs in at the seam, between deciding and landing.
+- The owner's review level (`learn.review`) plugs in at the seam, between deciding and landing.
 
 ## Rule ledger
 

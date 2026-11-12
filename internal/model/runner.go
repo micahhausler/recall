@@ -68,14 +68,46 @@ type cliResult struct {
 }
 
 func (c *CLI) Run(ctx context.Context, model, input string) (string, Usage, error) {
+	// Unsaved: a saved run would land in the transcripts recall reads.
+	return c.run(ctx, "", input, "-p", "--model", model, "--disallowedTools", "*", "--output-format", "json",
+		"--no-session-persistence")
+}
+
+// Editor answers one prompt with file tools confined to a set of
+// directories. Only the apply step uses one: every other model call reads
+// stdin and writes stdout and nothing else.
+type Editor interface {
+	// Edit sends input to the model named by model, lets it read and edit
+	// files in dirs (the first is its working directory), and returns its
+	// final text and what the call cost.
+	Edit(ctx context.Context, model, input string, dirs []string) (string, Usage, error)
+}
+
+// EditTools are the only tools an Edit run gets: no shell, no network.
+const EditTools = "Read Edit Write Glob Grep"
+
+// Edit runs the harness headless in dirs[0] with only EditTools, edits
+// accepted without a prompt, and every other dir added. The harness accepts
+// edits only inside those dirs, so a write anywhere else is refused.
+func (c *CLI) Edit(ctx context.Context, model, input string, dirs []string) (string, Usage, error) {
+	if len(dirs) == 0 {
+		return "", Usage{}, errors.New("edit: no directories to edit in")
+	}
+	args := []string{"-p", "--model", model, "--tools", EditTools, "--permission-mode", "acceptEdits",
+		"--output-format", "json", "--no-session-persistence"}
+	for _, d := range dirs[1:] {
+		args = append(args, "--add-dir", d)
+	}
+	return c.run(ctx, dirs[0], input, args...)
+}
+
+func (c *CLI) run(ctx context.Context, dir, input string, args ...string) (string, Usage, error) {
 	command := c.Command
 	if command == "" {
 		command = "claude"
 	}
-	// Unsaved: a saved run would land in the transcripts recall reads.
-	args := []string{"-p", "--model", model, "--disallowedTools", "*", "--output-format", "json",
-		"--no-session-persistence"}
 	cmd := exec.CommandContext(ctx, command, args...)
+	cmd.Dir = dir
 	cmd.Stdin = strings.NewReader(input)
 	var out, errOut bytes.Buffer
 	cmd.Stdout = &out
@@ -158,4 +190,30 @@ func (f *Fake) Run(ctx context.Context, model, input string) (string, Usage, err
 		return f.Responses[len(f.Responses)-1], f.Usage, nil
 	}
 	return f.Response, f.Usage, nil
+}
+
+// FakeEditor is an Editor for tests: Apply stands in for the model's edits,
+// and its return is the final text.
+type FakeEditor struct {
+	Apply func(input string, dirs []string) (string, error)
+	Usage Usage
+	Calls []FakeEdit
+}
+
+type FakeEdit struct {
+	Model string
+	Input string
+	Dirs  []string
+}
+
+func (f *FakeEditor) Edit(ctx context.Context, model, input string, dirs []string) (string, Usage, error) {
+	f.Calls = append(f.Calls, FakeEdit{Model: model, Input: input, Dirs: dirs})
+	if f.Apply == nil {
+		return "", f.Usage, nil
+	}
+	out, err := f.Apply(input, dirs)
+	if err != nil {
+		return "", Usage{}, err
+	}
+	return out, f.Usage, nil
 }

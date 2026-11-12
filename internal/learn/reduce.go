@@ -29,9 +29,15 @@ type Reducer struct {
 	// Home expands a ~ in a proposal's target to compare against them.
 	Targets []string
 	Home    string
+	// Skills and Bin are where a new skill and a graduated script go
+	// (learn.skills, learn.bin), so those proposals name the right path.
+	Skills, Bin string
 	// OwnerInstructions are the owner's extension text for the reduce
 	// (extensions.learn-reduce), appended to its input when set.
 	OwnerInstructions string
+	// Reviews are earlier proposals and the owner's verdicts: pending ones
+	// and recent rejections are shown so the reduce doesn't ask again.
+	Reviews []Review
 }
 
 // BuildInput renders the reduce model's input from the window's observations.
@@ -45,6 +51,16 @@ func (r *Reducer) BuildInput(window []SessionObservations) string {
 	}
 	for _, t := range r.Targets {
 		fmt.Fprintf(&b, "- %s\n", t)
+	}
+
+	if r.Skills != "" || r.Bin != "" {
+		b.WriteString("\n# PLACES\n\n")
+		if r.Skills != "" {
+			fmt.Fprintf(&b, "- a new skill goes at %s/<name>/SKILL.md\n", r.Skills)
+		}
+		if r.Bin != "" {
+			fmt.Fprintf(&b, "- a graduated script goes at %s/<name>\n", r.Bin)
+		}
 	}
 
 	b.WriteString("\n# CURRENT RULES\n\n")
@@ -69,7 +85,7 @@ func (r *Reducer) BuildInput(window []SessionObservations) string {
 			if o.Quote != "" {
 				fmt.Fprintf(&b, "Quote: %q\n", o.Quote)
 			}
-			fmt.Fprintf(&b, "Observation[%s] (session %s): %s\n", o.Category, so.Session, o.Text)
+			fmt.Fprintf(&b, "Observation[%s] (session %s%s): %s\n", o.Category, so.Session, observedOn(so.ObservedAt), o.Text)
 			total++
 		}
 	}
@@ -93,6 +109,22 @@ func (r *Reducer) BuildInput(window []SessionObservations) string {
 		fmt.Fprintf(&b, "retire Rule[%s] (no relevance in %d days): %s\n", rule.ID, retireDays, rule.Text)
 	}
 
+	cutoff := r.Clock.Now().AddDate(0, 0, -retireDays).Format("2006-01-02")
+	var shown []string
+	for _, rv := range r.Reviews {
+		rule := strings.Join(strings.Fields(rv.Rule), " ")
+		switch {
+		case rv.Verdict == "pending":
+			shown = append(shown, fmt.Sprintf("- pending since %s: %s: %s: %s", rv.Proposed, rv.Kind, rv.Title, rule))
+		case rv.Verdict == "closed" && rv.Decided >= cutoff:
+			shown = append(shown, fmt.Sprintf("- rejected %s: %s: %s: %s", rv.Decided, rv.Kind, rv.Title, rule))
+		}
+	}
+	if len(shown) > 0 {
+		b.WriteString("\n# REVIEWS\n\n")
+		b.WriteString(strings.Join(shown, "\n") + "\n")
+	}
+
 	if strings.TrimSpace(r.OwnerInstructions) != "" {
 		b.WriteString("\n# OWNER INSTRUCTIONS\n\n")
 		b.WriteString(strings.TrimRight(r.OwnerInstructions, "\n") + "\n")
@@ -105,6 +137,15 @@ func (r *Reducer) BuildInput(window []SessionObservations) string {
 		b.WriteString(strings.Join(r.Taken, ", ") + "\n")
 	}
 	return b.String()
+}
+
+// observedOn is ", observed <day>" for an observation's map date, so the
+// reduce can tell evidence that came after a rejection.
+func observedOn(ts string) string {
+	if len(ts) < 10 {
+		return ""
+	}
+	return ", observed " + ts[:10]
 }
 
 // Run writes proposals.md (the model's output) and input.md (what it saw)

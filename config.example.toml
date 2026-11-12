@@ -81,6 +81,21 @@ targets = ["~/.claude/CLAUDE.md"]
 ledger = "~/.claude/recall-ledger.json"
 # A rule with no relevance for this many days is proposed for retirement.
 retire_days = 90
+# The model that applies reviewed proposals as edits. It gets file tools,
+# confined to fresh worktrees, and no shell.
+apply_model = "sonnet"
+# Where a proposed new skill lands, as <skills>/<name>/SKILL.md, and where a
+# graduated script lands. Like every target, each must sit in a git checkout:
+# apply stages its edits in a worktree of that checkout, never the live files.
+skills = "~/.claude/skills"
+bin = "~/bin"
+# Where an applied change goes for review: "pr" pushes a branch to origin and
+# opens a pull request with gh; "branch" leaves the branch in the checkout.
+review = "pr"
+# A shell command run in each changed worktree before commit, with the staged
+# diff on stdin; a nonzero exit holds that repo's change back, staged in its
+# worktree. For example: "gitleaks stdin --redact --no-banner".
+check = ""
 
 [lint]
 # Paths recall lint never reports. A side drop-in ignores the other side's
@@ -96,12 +111,14 @@ targets = [
 # Where a lesson a script could enforce becomes a script.
 bin = "~/bin"
 # Anything under these paths is shared publicly; nothing personal goes there.
+# learn apply marks a repo under one as public: its pull request carries no
+# proposal text.
 public = ["~/go/src/github.com/you"]
 
 [extensions]
 # The owner's own instructions, appended where an extension point loads:
-# a recall skill by name (keep, recur, archive-chats), or learn-reduce for
-# the reduce prompt. Files are read in order; a missing one is skipped with a
+# a recall skill by name (keep, recur, archive-chats), or learn-reduce and
+# learn-apply for the reduce and apply prompts. Files are read in order; a missing one is skipped with a
 # warning. Keep personal steps here, in your own files, not in a fork.
 # Like any array, a later config file replaces the list.
 keep = ["~/.config/recall/keep.md"]

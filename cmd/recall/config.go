@@ -119,6 +119,9 @@ func plainValue(v any) string {
 }
 
 func tilde(path, home string) string {
+	if path == home {
+		return "~"
+	}
 	if strings.HasPrefix(path, home+"/") {
 		return "~" + path[len(home):]
 	}

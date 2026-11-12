@@ -353,3 +353,36 @@ func TestExtensions(t *testing.T) {
 		t.Errorf("err = %v, want a type error", err)
 	}
 }
+
+func TestApplySettings(t *testing.T) {
+	b := base(t)
+	write(t, b, "host = \"laptop-a\"\n")
+	c, err := Load(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.Settings("/home/you", "laptop-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l := s.Learn; l.ApplyModel != "sonnet" || l.Review != "pr" || l.Skills != "/home/you/.claude/skills" ||
+		l.Bin != "/home/you/bin" || l.Check != "" || len(s.Keep.Public) != 0 {
+		t.Errorf("defaults = %+v, keep %+v", l, s.Keep)
+	}
+
+	write(t, b, "host = \"laptop-a\"\n[learn]\napply_model = \"opus\"\nreview = \"branch\"\nskills = \"~/kit/skills\"\n"+
+		"bin = \"~/kit/bin\"\ncheck = \"gitleaks stdin\"\n[keep]\npublic = [\"~/src/you\"]\n")
+	if c, err = Load(b); err != nil {
+		t.Fatal(err)
+	}
+	if s, err = c.Settings("/home/you", "laptop-a"); err != nil {
+		t.Fatal(err)
+	}
+	if l := s.Learn; l.ApplyModel != "opus" || l.Review != "branch" || l.Skills != "/home/you/kit/skills" ||
+		l.Bin != "/home/you/kit/bin" || l.Check != "gitleaks stdin" {
+		t.Errorf("set = %+v", l)
+	}
+	if strings.Join(s.Keep.Public, ",") != "/home/you/src/you" {
+		t.Errorf("keep.public = %v", s.Keep.Public)
+	}
+}

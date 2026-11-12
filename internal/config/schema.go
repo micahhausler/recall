@@ -37,6 +37,11 @@ var schema = []string{
 	"learn.ledger",
 	"learn.retire_days",
 	"learn.map_workers",
+	"learn.apply_model",
+	"learn.skills",
+	"learn.bin",
+	"learn.review",
+	"learn.check",
 	"lint.ignore",
 	"keep.targets",
 	"keep.bin",
@@ -84,6 +89,7 @@ type Settings struct {
 	Recur     RecurSettings
 	Learn     LearnSettings
 	Lint      LintSettings
+	Keep      KeepSettings
 	// Extensions are the owner's instruction files per extension point (a
 	// skill name, or learn-reduce), home-expanded, in order.
 	Extensions map[string][]string
@@ -94,6 +100,13 @@ type LintSettings struct {
 	// Ignore lists paths lint never reports, such as a side file that
 	// sparse checkout deliberately keeps off this machine.
 	Ignore []string
+}
+
+// KeepSettings are the keep skill's keys the binary reads too.
+type KeepSettings struct {
+	// Public lists paths shared publicly, where nothing personal goes; the
+	// apply step marks a worktree under one as public.
+	Public []string
 }
 
 // LearnSettings configure the learning loop (docs/learning.md).
@@ -113,6 +126,17 @@ type LearnSettings struct {
 	// MapWorkers is how many sessions the map step observes at once,
 	// MinMapWorkers to MaxMapWorkers.
 	MapWorkers int
+	// ApplyModel edits worktrees with the reviewed proposals.
+	ApplyModel string
+	// Skills is where a new skill lands, as <Skills>/<name>/SKILL.md; Bin is
+	// where a graduated script lands.
+	Skills string
+	Bin    string
+	// Review is the publisher an applied change goes to: pr or branch.
+	Review string
+	// Check is a shell command run in each changed worktree with the staged
+	// diff on stdin; a nonzero exit holds that repo's change back.
+	Check string
 }
 
 type StoreSettings struct {
@@ -175,6 +199,10 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 			Ledger:      filepath.Join(home, ".claude", "recall-ledger.json"),
 			RetireDays:  90,
 			MapWorkers:  4,
+			ApplyModel:  "sonnet",
+			Skills:      filepath.Join(home, ".claude", "skills"),
+			Bin:         filepath.Join(home, "bin"),
+			Review:      "pr",
 		},
 	}
 	var err error
@@ -248,6 +276,26 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 	path("learn.ledger", &s.Learn.Ledger)
 	num("learn.retire_days", &s.Learn.RetireDays)
 	num("learn.map_workers", &s.Learn.MapWorkers)
+	str("learn.apply_model", &s.Learn.ApplyModel)
+	path("learn.skills", &s.Learn.Skills)
+	path("learn.bin", &s.Learn.Bin)
+	str("learn.review", &s.Learn.Review)
+	str("learn.check", &s.Learn.Check)
+	if v, ok := c.Get("keep.public"); ok && err == nil {
+		list, lok := v.([]any)
+		if !lok {
+			err = c.typeErr("keep.public", "an array of strings", v)
+		} else {
+			for _, e := range list {
+				ev, sok := e.(string)
+				if !sok {
+					err = c.typeErr("keep.public", "an array of strings", e)
+					break
+				}
+				s.Keep.Public = append(s.Keep.Public, ExpandHome(ev, home))
+			}
+		}
+	}
 	if err == nil && (s.Learn.MapWorkers < MinMapWorkers || s.Learn.MapWorkers > MaxMapWorkers) {
 		o, _ := c.Origin("learn.map_workers")
 		err = fmt.Errorf("%s: learn.map_workers must be %d to %d, got %d", o, MinMapWorkers, MaxMapWorkers, s.Learn.MapWorkers)

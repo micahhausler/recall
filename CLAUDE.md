@@ -21,7 +21,9 @@ Examples and tests use placeholders like `you`, `example.com`, and `laptop-a`.
 - `internal/events`: the normalized event schema (`docs/events.md`).
 - `internal/clock`: the injected clock; nothing calls `time.Now` directly where a week boundary matters.
 - `internal/model`: the headless harness-CLI runner model calls go through; never an API client.
-- `internal/learn`: the learning loop (`docs/learning.md`): render, map with cache, ledger, aging, reduce.
+  Only the apply step's `Editor` gets tools, and only file tools confined to its worktrees.
+- `internal/learn`: the learning loop (`docs/learning.md`): render, map with cache, ledger, aging, reduce, apply.
+- `internal/review`: staging an edit for review: a worktree per repo, a commit, and the publishers (`pr`, `branch`) that hand it over.
 - `internal/extension`: the owner's extension files that skills and the reduce append at load time.
 - `skills/<name>/SKILL.md`: one skill per subcommand, named like it, ending in the "Owner additions" block that loads `recall extension <name>` (except recall-setup, which runs before the binary exists).
 - `config.example.toml`: every config key, with a comment.

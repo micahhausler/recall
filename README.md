@@ -54,6 +54,10 @@ Archive, events, skills, lint, and learn all work from those two interfaces, and
 - `recall lint` finds paths, commands, and skill names your context files mention that don't exist on this machine.
 - `recall learn` is the learning loop: a cached map pass observes each session (`learn.map_workers` at once, default 4), a rule ledger tracks when each rule was last relevant or violated, and a reduce pass proposes edits for your review ([design](docs/learning.md)).
   The first run can map every session on disk (`--since all`); each machine maps its own sessions, and the reduce reads every machine's observations from the store.
+- `recall learn apply` stages the proposals as edits in a fresh git worktree of each repo they touch, and sends each changed repo to review: a pull request (`learn.review = "pr"`, with `gh`) or a local branch (`"branch"`).
+  Your targets, `learn.skills`, and `learn.bin` can live in one repo or several; a repo under `keep.public` gets no proposal text in its pull request.
+  `recall learn run` is rules sync, reduce, and apply in one command, for one machine's schedule.
+  Your verdicts feed back: a pull request you close is a rejection the next reduce reads, one still open holds its proposals back from a duplicate, and `recall learn reviews` lists them.
 - The `keep` skill is the loop's manual form: at the end of a session, propose up to three lessons and apply the ones you approve, without waiting for a scheduled run.
 - `recall config` reads and writes the layered TOML config without you parsing TOML.
 - `recall extension NAME` prints your extension files for a skill or the reduce prompt; see [Extend](#extend).
@@ -100,15 +104,15 @@ recall config set store.kind s3    # writes only to config.d/90-set.local.toml, 
 
 ## Extend
 
-Add your own steps to a recall skill or the reduce prompt without forking it.
-List files under `[extensions]`, keyed by skill name (`keep`, `recur`, `archive-chats`) or `learn-reduce`:
+Add your own steps to a recall skill or the reduce and apply prompts without forking them.
+List files under `[extensions]`, keyed by skill name (`keep`, `recur`, `archive-chats`), `learn-reduce`, or `learn-apply`:
 
 ```toml
 [extensions]
 keep = ["~/.config/recall/keep.md"]
 ```
 
-Each skill ends with an "Owner additions" section that loads `recall extension <name>` when the skill starts, and the reduce appends `learn-reduce` to its input as owner instructions.
+Each skill ends with an "Owner additions" section that loads `recall extension <name>` when the skill starts, and the reduce and apply append `learn-reduce` and `learn-apply` to their input as owner instructions.
 The files are instructions with the skill's permissions, so keep them in your own dotfiles.
 For tools of your own, keep a separate private repo or plugin and point these files at it.
 
