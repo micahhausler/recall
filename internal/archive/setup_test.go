@@ -284,9 +284,11 @@ type fakeCheckS3 struct {
 	listErr error
 	putErr  error
 	putKey  string
+	heads   int
 }
 
 func (f *fakeCheckS3) HeadBucket(ctx context.Context, in *s3.HeadBucketInput, opts ...func(*s3.Options)) (*s3.HeadBucketOutput, error) {
+	f.heads++
 	if f.headErr != nil {
 		return nil, f.headErr
 	}
@@ -352,6 +354,45 @@ func TestCheckUploadDenied(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("output misses %q:\n%s", want, out)
 		}
+	}
+}
+
+// The upload policy scopes s3:ListBucket to a prefix, which denies HeadBucket,
+// so the upload check must never call it.
+func TestCheckUploadSkipsHeadBucket(t *testing.T) {
+	forbidden := errors.New("HeadBucket, https response error StatusCode: 403, api error Forbidden: Forbidden")
+	f3 := &fakeCheckS3{headErr: forbidden}
+	rc, out := check(f3, &fakeSTS{}, false)
+	if rc != 0 {
+		t.Fatalf("rc=%d\n%s", rc, out)
+	}
+	if f3.heads != 0 {
+		t.Errorf("HeadBucket called %d times", f3.heads)
+	}
+	for _, want := range []string{"ok    s3:ListBucket", "ok    s3:PutObject"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output misses %q:\n%s", want, out)
+		}
+	}
+
+	// A bucket we can't use fails on the probes.
+	rc, out = check(&fakeCheckS3{listErr: errors.New("AccessDenied"), putErr: errors.New("AccessDenied")}, &fakeSTS{}, false)
+	if rc != 1 || !strings.Contains(out, "FAIL  s3:ListBucket") || !strings.Contains(out, "FAIL  s3:PutObject") {
+		t.Errorf("rc=%d\n%s", rc, out)
+	}
+
+	// A missing bucket points at setup and skips the write probe.
+	f3 = &fakeCheckS3{listErr: errors.New("api error NoSuchBucket: The specified bucket does not exist")}
+	rc, out = check(f3, &fakeSTS{}, false)
+	if rc != 1 || !strings.Contains(out, "run recall archive-chats setup") || f3.putKey != "" {
+		t.Errorf("rc=%d put=%q\n%s", rc, f3.putKey, out)
+	}
+
+	// Setup still asks HeadBucket, and a 403 there fails.
+	f3 = &fakeCheckS3{headErr: forbidden}
+	rc, out = check(f3, &fakeSTS{}, true)
+	if rc != 1 || f3.heads != 1 || !strings.Contains(out, "FAIL  bucket") {
+		t.Errorf("setup: rc=%d heads=%d\n%s", rc, f3.heads, out)
 	}
 }
 
