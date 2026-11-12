@@ -19,7 +19,7 @@ Usage:
   recall events [PATH...]          print normalized transcript events as JSONL
   recall skills                    report which skills sessions actually invoke
   recall lint [FILES...]           find stale paths and commands in context files
-  recall learn map|observations|rules|age|reduce   the learning loop (docs/learning.md)
+  recall learn ...                 the learning loop: map, reduce, apply, run, reviews
   recall extension NAME            print the owner's extension files for a skill
 
 Run 'recall <command> -h' for a command's flags.
