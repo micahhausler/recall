@@ -82,37 +82,37 @@ func (c *Check) Run(ctx context.Context) int {
 	}
 	report("ok", "region and credentials", fmt.Sprintf("%s, %s", c.Region, aws.ToString(ident.Arn)))
 
-	_, headErr := c.S3.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(c.Bucket)})
-	exists := headErr == nil
-	switch {
-	case exists:
-		report("ok", "bucket", fmt.Sprintf("%s exists and you can reach it", c.Bucket))
-	case isNotFound(headErr):
-		if c.Setup {
-			report("ok", "bucket", c.Bucket+" doesn't exist; setup will create it")
-		} else {
-			report("FAIL", "bucket", c.Bucket+" doesn't exist; run recall archive-chats setup")
-		}
-	default:
-		report("FAIL", "bucket", fmt.Sprintf("%s: %s (taken by another account, or no s3:ListBucket)", c.Bucket, lastLine(headErr.Error())))
-	}
-
 	if c.Setup {
+		// Setup decides between creating and reusing the bucket, and its
+		// policy grants s3:ListBucket on the whole bucket, which HeadBucket needs.
+		_, headErr := c.S3.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(c.Bucket)})
+		switch {
+		case headErr == nil:
+			report("ok", "bucket", fmt.Sprintf("%s exists and you can reach it", c.Bucket))
+		case isNotFound(headErr):
+			report("ok", "bucket", c.Bucket+" doesn't exist; setup will create it")
+		default:
+			report("FAIL", "bucket", fmt.Sprintf("%s: %s (taken by another account, or no s3:ListBucket)", c.Bucket, lastLine(headErr.Error())))
+		}
 		report("skip", "setup permissions", "IAM simulation isn't built in; compare your policy with: recall archive-chats policy setup")
 		return boolToRC(failed)
 	}
-	if !exists {
-		return boolToRC(failed)
-	}
+
+	// Uploads probe only the calls they make. No HeadBucket: the upload
+	// policy scopes s3:ListBucket to a prefix, and HeadBucket carries none.
 	prefix := c.Harnesses[0] + "/" + c.Host + "/"
 	one := int32(1)
 	_, lsErr := c.S3.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
 		Bucket: aws.String(c.Bucket), Prefix: aws.String(prefix), MaxKeys: &one,
 	})
-	if lsErr != nil {
-		report("FAIL", "s3:ListBucket", lastLine(lsErr.Error()))
-	} else {
+	switch {
+	case lsErr == nil:
 		report("ok", "s3:ListBucket", "")
+	case isNotFound(lsErr):
+		report("FAIL", "bucket", c.Bucket+" doesn't exist; run recall archive-chats setup")
+		return boolToRC(failed)
+	default:
+		report("FAIL", "s3:ListBucket", lastLine(lsErr.Error())+" (bucket taken by another account, or no s3:ListBucket on "+prefix+")")
 	}
 	_, putErr := c.S3.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: aws.String(c.Bucket), Key: aws.String(prefix + ".write-check"),
@@ -150,7 +150,7 @@ func isNotFound(err error) bool {
 		return false
 	}
 	msg := err.Error()
-	return strings.Contains(msg, "404") || strings.Contains(msg, "NotFound") || strings.Contains(msg, "Not Found")
+	return strings.Contains(msg, "404") || strings.Contains(msg, "NotFound") || strings.Contains(msg, "Not Found") || strings.Contains(msg, "NoSuchBucket")
 }
 
 func isPrecondition(err error) bool {
