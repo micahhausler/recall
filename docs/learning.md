@@ -61,6 +61,15 @@ The binary checks the output: an add, reword, or retire whose target isn't in `l
 Edits are staged file copies, reviewed and applied by the binary, never written live by the model.
 The owner's chosen review level decides what happens next: open a PR, write a pending note, or apply directly; never delete without the owner's chosen level of review.
 
+## Why apply is a separate stage
+
+The reduce proposes and the apply edits, and they stay two stages behind one command because the seam between them carries weight.
+
+- `proposals.md` is the contract: the artifact the owner can read, the thing `--dry-run` stops at, and the checkpoint a failed apply retries from without re-running the reduce.
+- The model that decides what to change never holds the pen.
+  The reduce runs with no tools, the apply edits only staged worktrees, and the binary, not a model, checks targets and names.
+- The owner's review level (PR, pending note, direct) plugs in at the seam, between deciding and landing.
+
 ## Rule ledger
 
 A sidecar file next to the context files (for example `.recall-ledger.json`), never comments inside them, because comments cost context in every session.
