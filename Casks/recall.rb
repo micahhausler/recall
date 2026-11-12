@@ -2,7 +2,7 @@
 cask "recall" do
   desc "Turn your coding agent's history into memory."
   homepage "https://github.com/micahhausler/recall"
-  version "0.1.2"
+  version "0.2.0"
 
   livecheck do
     skip "Auto-generated on release."
@@ -12,23 +12,23 @@ cask "recall" do
 
   on_macos do
     on_intel do
-      url "https://github.com/micahhausler/recall/releases/download/v0.1.2/recall_0.1.2_darwin_amd64.tar.gz"
-      sha256 "e67f51e8bb816161ad46f47da0b3a2beab7ebd6b56e61b572d0ee83c0ebd2372"
+      url "https://github.com/micahhausler/recall/releases/download/v0.2.0/recall_0.2.0_darwin_amd64.tar.gz"
+      sha256 "2372533aec314102d25ef984d5be1703a25fad26149e3f997771152bbd3d1f56"
     end
     on_arm do
-      url "https://github.com/micahhausler/recall/releases/download/v0.1.2/recall_0.1.2_darwin_arm64.tar.gz"
-      sha256 "33662517996497dfb29b48daf4aa6aab13334566a7d3d51c281e36ee0cdf7e60"
+      url "https://github.com/micahhausler/recall/releases/download/v0.2.0/recall_0.2.0_darwin_arm64.tar.gz"
+      sha256 "a96b20acaf1435a88d4015bf48a7b47f56517f416b45b3aff7863e297769aa7c"
     end
   end
 
   on_linux do
     on_intel do
-      url "https://github.com/micahhausler/recall/releases/download/v0.1.2/recall_0.1.2_linux_amd64.tar.gz"
-      sha256 "0267fa39303dc2588c4fce14efd6a54133c478c8889215f0b4dca7c8e252d6e4"
+      url "https://github.com/micahhausler/recall/releases/download/v0.2.0/recall_0.2.0_linux_amd64.tar.gz"
+      sha256 "c3e5ece89f0bfa10920a258e8d08e61367484e90178dfbcc0706613ef54fb5f2"
     end
     on_arm do
-      url "https://github.com/micahhausler/recall/releases/download/v0.1.2/recall_0.1.2_linux_arm64.tar.gz"
-      sha256 "f05c55b6c6ef71e9f6ca1940b70a4cc2d8797c45680f120dd84d4a82d5de17f0"
+      url "https://github.com/micahhausler/recall/releases/download/v0.2.0/recall_0.2.0_linux_arm64.tar.gz"
+      sha256 "0ac92f3b4ade8fef066fb6e49695085d7daaf7c65322f5cbbd99c2edbacdd896"
     end
   end
 
