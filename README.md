@@ -5,6 +5,11 @@ _Turn your agent's history into memory._
 `recall` captures transcripts from coding-agent harnesses, archives them, and learns from them, so your context files (`CLAUDE.md`, `AGENTS.md`, skills) gain the rules you keep repeating and lose the ones that stopped earning their place.
 It does memory management and nothing else.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/recall-loop-dark@2x.png">
+  <img alt="The recall learning loop: sessions write transcripts to local disk; scheduled jobs on every host archive them and map them to observations in the store; one host reduces observations into proposals and applies them as pull requests; you review, and merged changes update the live context the next session reads." src="docs/img/recall-loop@2x.png">
+</picture>
+
 ## Tenets
 
 * **Never say it twice.**
