@@ -1,6 +1,6 @@
 # recall
 
-_Turn your agent's history into memory._
+_Automate turning your agentic coding session history into memory, skills, and tools._
 
 `recall` captures transcripts from coding-agent harnesses, archives them, and learns from them, so your context files (`CLAUDE.md`, `AGENTS.md`, skills) gain the rules you keep repeating and lose the ones that stopped earning their place.
 It does memory management and nothing else.
