@@ -74,3 +74,28 @@ func TestCLIEditArgs(t *testing.T) {
 		t.Error("Edit with no dirs succeeded")
 	}
 }
+
+func TestCLIRunInEmptyScratchDir(t *testing.T) {
+	bin := t.TempDir()
+	script := filepath.Join(bin, "fake-harness")
+	// Report the working directory and how many entries it holds.
+	body := "#!/bin/sh\nprintf '{\"type\":\"result\",\"result\":\"%s|%s\"}' \"$(pwd -P)\" \"$(ls -A | wc -l | tr -d ' ')\"\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(bin) // a non-empty cwd the run must not inherit
+	got, _, err := (&CLI{Command: script}).Run(context.Background(), "haiku", "in")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, n, _ := strings.Cut(got, "|")
+	if want, _ := filepath.EvalSymlinks(bin); dir == want {
+		t.Errorf("ran in the caller's dir %s", dir)
+	}
+	if n != "0" {
+		t.Errorf("scratch dir %s held %s entries, want 0", dir, n)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("scratch dir %s left behind (stat err %v)", dir, err)
+	}
+}

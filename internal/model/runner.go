@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -68,8 +69,17 @@ type cliResult struct {
 }
 
 func (c *CLI) Run(ctx context.Context, model, input string) (string, Usage, error) {
+	// An empty scratch dir, not the caller's: the harness scans its working
+	// directory at startup, and from $HOME that touches TCC-protected folders
+	// (Photos, OneDrive) and prompts for access under recall's name. This run
+	// has no tools, so it needs no files.
+	dir, err := os.MkdirTemp("", "recall-run-")
+	if err != nil {
+		return "", Usage{}, err
+	}
+	defer os.RemoveAll(dir)
 	// Unsaved: a saved run would land in the transcripts recall reads.
-	return c.run(ctx, "", input, "-p", "--model", model, "--disallowedTools", "*", "--output-format", "json",
+	return c.run(ctx, dir, input, "-p", "--model", model, "--disallowedTools", "*", "--output-format", "json",
 		"--no-session-persistence")
 }
 
