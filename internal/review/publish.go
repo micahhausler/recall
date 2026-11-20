@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -15,6 +17,8 @@ type Change struct {
 	Worktree *Worktree
 	// Title and Body describe the change for the reviewer.
 	Title, Body string
+	// Proposals are the titles of the proposals the change applies.
+	Proposals []string
 }
 
 // Verdict is what became of a published change.
@@ -27,7 +31,9 @@ const (
 )
 
 // Published is a change as recorded when it was published, enough to ask
-// later what became of it.
+// later what became of it. Commit is the published proposal's own commit:
+// the apply stages one commit per proposal, so the owner can drop one
+// before merging and each proposal gets its own verdict.
 type Published struct {
 	Where, Repo, Branch, Base, Commit string
 }
@@ -85,8 +91,16 @@ func (p *PR) Publish(ctx context.Context, c Change) (string, error) {
 	if gh == "" {
 		gh = "gh"
 	}
-	cmd := exec.CommandContext(ctx, gh, "pr", "create", "--base", w.BaseBranch(), "--head", w.Branch,
-		"--title", c.Title, "--body-file", "-")
+	args := []string{"pr", "create", "--base", w.BaseBranch(), "--head", w.Branch, "--title", c.Title, "--body-file", "-"}
+	// Name origin as the repo the pull request opens on. In a fork, gh
+	// would otherwise aim it at the repo the fork came from, and a change
+	// learned from private sessions would land in front of other people.
+	if url, err := git(ctx, w.Dir, "", "remote", "get-url", w.Remote); err == nil {
+		if slug := RemoteSlug(url); slug != "" {
+			args = append(args, "--repo", strings.TrimPrefix(slug, "github.com/"))
+		}
+	}
+	cmd := exec.CommandContext(ctx, gh, args...)
 	cmd.Dir = w.Dir
 	cmd.Stdin = strings.NewReader(c.Body)
 	var out, errOut bytes.Buffer
@@ -97,7 +111,15 @@ func (p *PR) Publish(ctx context.Context, c Change) (string, error) {
 		if detail == "" {
 			detail = err.Error()
 		}
-		return "", fmt.Errorf("gh pr create in %s (branch %s is pushed): %s", w.Repo, w.Branch, detail)
+		// Take back the branch this call pushed above, so the next apply
+		// isn't refused over a branch no pull request tracks. A branch that
+		// existed on origin before the apply never gets here: AddWorktree
+		// already refused it.
+		cleanup := fmt.Sprintf("the pushed branch %s was deleted from %s", w.Branch, w.Remote)
+		if _, derr := git(ctx, w.Dir, "", "push", "-q", w.Remote, "--delete", w.Branch); derr != nil {
+			cleanup = fmt.Sprintf("deleting the pushed branch %s from %s also failed: %v", w.Branch, w.Remote, derr)
+		}
+		return "", fmt.Errorf("gh pr create in %s: %s (%s)", w.Repo, detail, cleanup)
 	}
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
 	return strings.TrimSpace(lines[len(lines)-1]), nil
@@ -180,6 +202,55 @@ func (Branch) Verdict(ctx context.Context, p Published) (Verdict, string, error)
 	return Closed, "", nil
 }
 
+// RuleLanded reports whether a review's proposal is in the base its change
+// merged into. The owner can drop one proposal's commit, or take its text
+// out, before merging, so a merged change doesn't prove every proposal in
+// it landed. The proposal's own commit being an ancestor of the base is the
+// strongest signal and wins whatever the wording became; a squash or rebase
+// merge loses that commit, so the fallback is the ledger's record of the
+// rule text that landed, matched as an exact whole bullet line so a short
+// rule can't match text that was already in the base. ok is false when
+// there is nothing to check against: no repo, no rule text, or a remote
+// base that can't be read.
+func RuleLanded(ctx context.Context, p Published, rule string) (landed, ok bool) {
+	// Rules are top-level bullets, one line each; sub-bullets under a rule
+	// are detail, so the first line identifies it.
+	rule = strings.TrimSpace(strings.Split(rule, "\n")[0])
+	if p.Repo == "" || p.Base == "" || rule == "" {
+		return false, false
+	}
+	if st, err := os.Stat(p.Repo); err != nil || !st.IsDir() {
+		return false, false
+	}
+	bases := []string{p.Base}
+	if remote, local, isRemote := strings.Cut(p.Base, "/"); isRemote {
+		// The merge may have happened on the remote, as a pull request does;
+		// read it fresh. When the remote can't be read, judge by local refs
+		// alone rather than by a stale remote-tracking ref.
+		if _, err := git(ctx, p.Repo, "", "fetch", "-q", remote); err != nil {
+			bases = bases[:0]
+		}
+		bases = append(bases, local)
+	}
+	checked := false
+	for _, b := range bases {
+		if b == "" || !exists(ctx, p.Repo, b) {
+			continue
+		}
+		checked = true
+		if p.Commit != "" {
+			if _, err := git(ctx, p.Repo, "", "merge-base", "--is-ancestor", p.Commit, b); err == nil {
+				return true, true
+			}
+		}
+		bullet := "^[-*][[:space:]]+" + regexp.QuoteMeta(rule) + "$"
+		if _, err := git(ctx, p.Repo, "", "grep", "-q", "-E", "-e", bullet, b); err == nil {
+			return true, true
+		}
+	}
+	return false, checked
+}
+
 // Fake records what it was asked to publish and answers verdicts from a
 // map keyed by where; a missing key is pending.
 type Fake struct {
@@ -187,9 +258,12 @@ type Fake struct {
 	Err      error
 	Verdicts map[string]Verdict
 	Decided  string
+	// Asked counts Verdict calls.
+	Asked int
 }
 
 func (f *Fake) Verdict(ctx context.Context, p Published) (Verdict, string, error) {
+	f.Asked++
 	if v, ok := f.Verdicts[p.Where]; ok {
 		return v, f.Decided, nil
 	}

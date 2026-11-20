@@ -83,6 +83,22 @@ func RepoRoot(ctx context.Context, path string) (root string, ok bool) {
 	return Resolve(top), true
 }
 
+// IgnoredLive reports whether an ignore rule matches path in the checkout
+// that holds it and the index doesn't already track it. A path outside any
+// checkout is not ignored, and the path need not exist yet.
+func IgnoredLive(ctx context.Context, path string) bool {
+	root, ok := RepoRoot(ctx, path)
+	if !ok {
+		return false
+	}
+	rel, err := filepath.Rel(root, Resolve(path))
+	if err != nil {
+		return false
+	}
+	_, gerr := git(ctx, root, "", "check-ignore", "-q", "--", rel)
+	return gerr == nil
+}
+
 // Worktree is one repo's staged checkout on a new branch.
 type Worktree struct {
 	// Repo is the live checkout; Dir is the worktree edits go to.
@@ -91,6 +107,8 @@ type Worktree struct {
 	// Remote is "origin" when the repo has one, else empty; Base is the ref
 	// the branch starts from, like origin/main.
 	Remote, Base string
+	// start is the commit the branch started from, for Committed.
+	start string
 }
 
 // AddWorktree fetches root's origin, when it has one, and checks out a new
@@ -127,6 +145,10 @@ func AddWorktree(ctx context.Context, root, dir, branch string) (*Worktree, erro
 		return nil, err
 	}
 	w.Dir = Resolve(dir)
+	w.start, err = git(ctx, w.Dir, "", "rev-parse", "HEAD")
+	if err != nil {
+		return nil, err
+	}
 	return w, nil
 }
 
@@ -161,7 +183,9 @@ func (w *Worktree) BaseBranch() string {
 // Changed lists the paths, relative to the worktree, that differ from the
 // branch's start: edited, added, or deleted, untracked files included.
 func (w *Worktree) Changed(ctx context.Context) ([]string, error) {
-	out, err := gitRaw(ctx, w.Dir, "", "status", "--porcelain=v1", "-z", "--untracked-files=all")
+	// A fresh worktree starts clean, so an ignored file present was
+	// written by this apply; --ignored lists it with the rest.
+	out, err := gitRaw(ctx, w.Dir, "", "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored")
 	if err != nil {
 		return nil, err
 	}
@@ -180,12 +204,78 @@ func (w *Worktree) Changed(ctx context.Context) ([]string, error) {
 	return paths, nil
 }
 
-// Stage adds every change and returns the staged diff, for a check to read.
-func (w *Worktree) Stage(ctx context.Context) (string, error) {
-	if _, err := git(ctx, w.Dir, "", "add", "-A"); err != nil {
-		return "", err
+// Ignored returns the subset of paths, relative to the worktree, that an
+// ignore rule matches and the index doesn't already track.
+func (w *Worktree) Ignored(ctx context.Context, paths []string) ([]string, error) {
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	cmd := exec.CommandContext(ctx, "git", "check-ignore", "-z", "--stdin")
+	cmd.Dir = w.Dir
+	cmd.Stdin = strings.NewReader(strings.Join(paths, "\x00"))
+	var out, errOut bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errOut
+	err := cmd.Run()
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		err = nil // no path is ignored
+	}
+	if err != nil {
+		detail := strings.TrimSpace(errOut.String())
+		if detail == "" {
+			detail = err.Error()
+		}
+		return nil, fmt.Errorf("git check-ignore: %s", detail)
+	}
+	var ignored []string
+	for _, p := range strings.Split(out.String(), "\x00") {
+		if p != "" {
+			ignored = append(ignored, p)
+		}
+	}
+	return ignored, nil
+}
+
+// Stage stages exactly the given paths, relative to the worktree, and
+// returns the staged diff, for a check to read. Each path is forced past
+// any ignore rule, so a file the apply wrote never falls out of the change
+// silently; Ignored says which paths that force mattered for.
+func (w *Worktree) Stage(ctx context.Context, paths []string) (string, error) {
+	if len(paths) > 0 {
+		args := append([]string{"add", "-f", "--"}, paths...)
+		if _, err := git(ctx, w.Dir, "", args...); err != nil {
+			return "", err
+		}
 	}
 	return gitRaw(ctx, w.Dir, "", "diff", "--cached")
+}
+
+// Unstage empties the index, so commits can be built path by path after
+// Stage read the whole diff.
+func (w *Worktree) Unstage(ctx context.Context) error {
+	_, err := git(ctx, w.Dir, "", "reset", "-q")
+	return err
+}
+
+// Committed lists the paths, relative to the worktree, that the branch's
+// commits touch since its base, across every commit the apply made.
+func (w *Worktree) Committed(ctx context.Context) ([]string, error) {
+	base := w.start
+	if base == "" {
+		base = w.Base // a worktree rebuilt from its fields, not AddWorktree
+	}
+	out, err := gitRaw(ctx, w.Dir, "", "diff", "--name-only", "-z", base, "HEAD")
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, p := range strings.Split(out, "\x00") {
+		if p != "" {
+			paths = append(paths, p)
+		}
+	}
+	return paths, nil
 }
 
 // Commit commits what's staged with title and body as the message.
@@ -198,9 +288,46 @@ func (w *Worktree) Commit(ctx context.Context, title, body string) error {
 	return err
 }
 
+// CommitPaths stages the changes under rels plus rest and commits them with
+// msg. It returns the new commit, or "" when nothing was left to stage,
+// which happens when an earlier commit already carried the same file. Each
+// path is forced past any ignore rule, like Stage: callers pass only paths
+// a Stage already vetted, so a file the apply wrote never falls out of a
+// commit silently.
+func (w *Worktree) CommitPaths(ctx context.Context, msg string, rels, rest []string) (string, error) {
+	for _, rel := range append(append([]string{}, rels...), rest...) {
+		if _, err := git(ctx, w.Dir, "", "add", "-f", "-A", "--", rel); err != nil {
+			return "", err
+		}
+	}
+	if _, err := git(ctx, w.Dir, "", "diff", "--cached", "--quiet"); err == nil {
+		return "", nil // nothing staged
+	}
+	if _, err := git(ctx, w.Dir, msg+"\n", "commit", "-q", "-F", "-"); err != nil {
+		return "", err
+	}
+	return git(ctx, w.Dir, "", "rev-parse", "HEAD")
+}
+
 // Head is the commit the worktree's branch points at.
 func (w *Worktree) Head(ctx context.Context) (string, error) {
 	return git(ctx, w.Dir, "", "rev-parse", "HEAD")
+}
+
+// Restore puts one staged file back the way it was when the stage was
+// made, undoing whatever was written to it: its original content, or gone
+// if the stage created it.
+func (w *Worktree) Restore(ctx context.Context, rel string) error {
+	at := filepath.Join(w.Dir, rel)
+	if _, err := git(ctx, w.Dir, "", "cat-file", "-e", "HEAD:"+filepath.ToSlash(rel)); err != nil {
+		// Not in the branch's start: the stage created it.
+		if err := os.Remove(at); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	_, err := git(ctx, w.Dir, "", "checkout", "-q", "HEAD", "--", rel)
+	return err
 }
 
 // Remove deletes the worktree, and the branch too unless keepBranch.

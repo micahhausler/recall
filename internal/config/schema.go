@@ -22,6 +22,7 @@ var schema = []string{
 	"store.s3.retention_days",
 	"archive-chats.lookback",
 	"archive-chats.price_per_gb",
+	"archive-chats.redact",
 	"harness.*.source",
 	"harness.*.enabled",
 	"recur.prefix",
@@ -34,14 +35,27 @@ var schema = []string{
 	"learn.map_model",
 	"learn.reduce_model",
 	"learn.targets",
+	"learn.repos",
 	"learn.ledger",
+	"learn.candidates",
 	"learn.retire_days",
+	"learn.window_days",
+	"learn.budget",
 	"learn.map_workers",
 	"learn.apply_model",
 	"learn.skills",
 	"learn.bin",
+	"learn.settings",
 	"learn.review",
 	"learn.check",
+	"learn.require_owner_evidence",
+	"learn.repeat_evidence_sessions",
+	"learn.replay",
+	"learn.evidence",
+	"learn.evidence_trailer",
+	"hooks.map",
+	"hooks.archive",
+	"hooks.learn_every",
 	"lint.ignore",
 	"keep.targets",
 	"keep.bin",
@@ -62,10 +76,21 @@ func matches(pattern, key string) bool {
 	return true
 }
 
+// removedEncryptKey matches the leaf keys of the removed client-side
+// encryption feature by segment, so the error below is recall's only word
+// on them.
+func removedEncryptKey(key string) bool {
+	ks := strings.Split(key, ".")
+	return len(ks) >= 2 && ks[0] == "store" && ks[1] == "encrypt"
+}
+
 // validate rejects any merged leaf key the schema doesn't allow, naming the
 // file and line that set it.
 func (c *Config) validate() error {
 	for _, key := range c.Leaves() {
+		if removedEncryptKey(key) {
+			return fmt.Errorf("%s: %q sets client-side encryption of the archive, a feature recall removed; the bucket's own encryption and access policy protect the store, so delete the key", c.origin[key], key)
+		}
 		allowed := false
 		for _, pattern := range schema {
 			if matches(pattern, key) {
@@ -90,9 +115,23 @@ type Settings struct {
 	Learn     LearnSettings
 	Lint      LintSettings
 	Keep      KeepSettings
+	Hooks     HookSettings
 	// Extensions are the owner's instruction files per extension point (a
 	// skill name, or learn-reduce), home-expanded, in order.
 	Extensions map[string][]string
+}
+
+// HookSettings say what the plugin's session hooks may do in the
+// background when a session ends. All are off by default: the hooks are
+// installed with the plugin, and each step spends money or bandwidth only
+// when the owner turns it on.
+type HookSettings struct {
+	// Map observes sessions that have gone quiet, with the map model.
+	Map bool
+	// Archive uploads missing weeks to the store, at most once a day.
+	Archive bool
+	// LearnEvery is how many days apart the reduce and apply run; 0 never.
+	LearnEvery int
 }
 
 // LintSettings configure the staleness lint.
@@ -118,11 +157,25 @@ type LearnSettings struct {
 	ReduceModel string
 	// Targets are the context files rules live in.
 	Targets []string
-	// Ledger is the sidecar file tracking each rule.
+	// Repos are the checkouts whose own context files a repo-only lesson
+	// may land in.
+	Repos []string
+	// Ledger is the separate file, kept beside the context files, that
+	// tracks each rule.
 	Ledger string
+	// Candidates is the candidate ledger: the lessons sessions have shown
+	// that aren't rules yet, and which of them a proposal already used.
+	Candidates string
 	// RetireDays: a rule with no relevance for this long is proposed for
 	// retirement.
 	RetireDays int
+	// WindowDays is how far back the reduce reads observations; 0, the
+	// default, reads RetireDays back, today's behavior. Retirement always
+	// uses RetireDays, so a wider window never retires rules faster.
+	WindowDays int
+	// Budget is how many tokens one target file may cost, estimated at
+	// four characters a token; 0 is no budget.
+	Budget int
 	// MapWorkers is how many sessions the map step observes at once,
 	// MinMapWorkers to MaxMapWorkers.
 	MapWorkers int
@@ -132,11 +185,36 @@ type LearnSettings struct {
 	// where a graduated script lands.
 	Skills string
 	Bin    string
+	// Settings is the harness settings file a graduated hook or permission
+	// rule goes in; empty turns those two off.
+	Settings string
 	// Review is the publisher an applied change goes to: pr or branch.
 	Review string
 	// Check is a shell command run in each changed worktree with the staged
 	// diff on stdin; a nonzero exit holds that repo's change back.
 	Check string
+	// RequireOwnerEvidence holds back a new rule or skill that cites no
+	// observation quoting words the owner typed.
+	RequireOwnerEvidence bool
+	// RepeatEvidenceSessions, when above 0, lets a new rule rest on repeat
+	// evidence alone when the binary counted the repeat in at least that
+	// many sessions; 0 turns that off.
+	RepeatEvidenceSessions int
+	// Replay re-runs the moment that earned a proposed rule before it goes
+	// to review, with and without the rule, and holds back an add the
+	// replay shows changing nothing. It also replays, without them, rules
+	// earned only on models no recent session ran, and proposes retiring
+	// one the current model follows unprompted in every replay. Each replay
+	// is a model call, so it is off by default.
+	Replay bool
+	// Evidence names the sources outside the chat the map reads, such as
+	// "github": review comments and failed checks on agent-authored pull
+	// requests in the learn.repos origins. Empty, the default, reads none.
+	Evidence []string
+	// EvidenceTrailer is the commit trailer that marks an agent-authored
+	// pull request to an evidence source. Set it when your harness writes
+	// a different trailer, or attribution is off and you add your own.
+	EvidenceTrailer string
 }
 
 type StoreSettings struct {
@@ -157,6 +235,9 @@ type S3Settings struct {
 type ArchiveSettings struct {
 	Lookback   int
 	PricePerGB float64
+	// Redact replaces secret-shaped tokens in a week's text files as its
+	// tarball is built.
+	Redact bool
 }
 
 type HarnessSettings struct {
@@ -197,12 +278,17 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 			ReduceModel: "opus",
 			Targets:     []string{filepath.Join(home, ".claude", "CLAUDE.md")},
 			Ledger:      filepath.Join(home, ".claude", "recall-ledger.json"),
+			Candidates:  filepath.Join(home, ".local", "state", "recall", "learn", "candidates.json"),
 			RetireDays:  90,
 			MapWorkers:  4,
 			ApplyModel:  "sonnet",
 			Skills:      filepath.Join(home, ".claude", "skills"),
 			Bin:         filepath.Join(home, "bin"),
 			Review:      "pr",
+
+			RequireOwnerEvidence: true,
+			// The default agent trailer (evidence.Trailer).
+			EvidenceTrailer: "Co-Authored-By: Claude",
 		},
 	}
 	var err error
@@ -253,6 +339,7 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 	num("store.s3.retention_days", &s.Store.S3.RetentionDays)
 	num("archive-chats.lookback", &s.Archive.Lookback)
 	flt("archive-chats.price_per_gb", &s.Archive.PricePerGB)
+	c.boolKey("archive-chats.redact", &s.Archive.Redact, &err)
 	str("recur.prefix", &s.Recur.Prefix)
 	str("recur.cron_tz", &s.Recur.CronTZ)
 	if v, ok := c.Get("lint.ignore"); ok && err == nil {
@@ -270,17 +357,49 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 			}
 		}
 	}
+	c.boolKey("hooks.map", &s.Hooks.Map, &err)
+	c.boolKey("hooks.archive", &s.Hooks.Archive, &err)
+	num("hooks.learn_every", &s.Hooks.LearnEvery)
 	str("learn.runner", &s.Learn.Runner)
 	str("learn.map_model", &s.Learn.MapModel)
 	str("learn.reduce_model", &s.Learn.ReduceModel)
 	path("learn.ledger", &s.Learn.Ledger)
+	path("learn.candidates", &s.Learn.Candidates)
 	num("learn.retire_days", &s.Learn.RetireDays)
+	num("learn.window_days", &s.Learn.WindowDays)
+	num("learn.budget", &s.Learn.Budget)
 	num("learn.map_workers", &s.Learn.MapWorkers)
 	str("learn.apply_model", &s.Learn.ApplyModel)
 	path("learn.skills", &s.Learn.Skills)
 	path("learn.bin", &s.Learn.Bin)
+	path("learn.settings", &s.Learn.Settings)
 	str("learn.review", &s.Learn.Review)
+	if err == nil && s.Learn.Review == "inbox" {
+		// This review channel was removed; branch reviews locally too, and
+		// needs no remote and no gh.
+		o, _ := c.Origin("learn.review")
+		err = fmt.Errorf("%s: learn.review %q was removed; use \"branch\" for a local branch with no remote, or \"pr\"", o, s.Learn.Review)
+	}
 	str("learn.check", &s.Learn.Check)
+	str("learn.evidence_trailer", &s.Learn.EvidenceTrailer)
+	c.boolKey("learn.require_owner_evidence", &s.Learn.RequireOwnerEvidence, &err)
+	num("learn.repeat_evidence_sessions", &s.Learn.RepeatEvidenceSessions)
+	c.boolKey("learn.replay", &s.Learn.Replay, &err)
+	if v, ok := c.Get("learn.evidence"); ok && err == nil {
+		list, lok := v.([]any)
+		if !lok {
+			err = c.typeErr("learn.evidence", "an array of strings", v)
+		} else {
+			for _, e := range list {
+				ev, sok := e.(string)
+				if !sok {
+					err = c.typeErr("learn.evidence", "an array of strings", e)
+					break
+				}
+				s.Learn.Evidence = append(s.Learn.Evidence, ev)
+			}
+		}
+	}
 	if v, ok := c.Get("keep.public"); ok && err == nil {
 		list, lok := v.([]any)
 		if !lok {
@@ -313,6 +432,21 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 					break
 				}
 				s.Learn.Targets = append(s.Learn.Targets, ExpandHome(ev, home))
+			}
+		}
+	}
+	if v, ok := c.Get("learn.repos"); ok && err == nil {
+		list, lok := v.([]any)
+		if !lok {
+			err = c.typeErr("learn.repos", "an array of strings", v)
+		} else {
+			for _, e := range list {
+				ev, sok := e.(string)
+				if !sok {
+					err = c.typeErr("learn.repos", "an array of strings", e)
+					break
+				}
+				s.Learn.Repos = append(s.Learn.Repos, ExpandHome(ev, home))
 			}
 		}
 	}
@@ -354,10 +488,7 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 		}
 	}
 	for _, name := range c.tableNames("harness") {
-		h := HarnessSettings{Enabled: true}
-		if name == "claude" {
-			h.Source = filepath.Join(home, ".claude", "projects")
-		}
+		h := HarnessSettings{Enabled: true, Source: DefaultSource(name, home)}
 		base := "harness." + name
 		path(base+".source", &h.Source)
 		c.boolKey(base+".enabled", &h.Enabled, &err)
@@ -366,7 +497,25 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 		}
 	}
 	if _, declared := c.Get("harness.claude"); !declared {
-		s.Harnesses["claude"] = HarnessSettings{Source: filepath.Join(home, ".claude", "projects"), Enabled: true}
+		s.Harnesses["claude"] = HarnessSettings{Source: DefaultSource("claude", home), Enabled: true}
+	}
+	if _, set := c.Get("learn.targets"); !set {
+		// Each enabled harness's own context file.
+		s.Learn.Targets = nil
+		for _, name := range []string{"claude", "kiro"} {
+			if _, ok := s.Harnesses[name]; ok {
+				s.Learn.Targets = append(s.Learn.Targets, DefaultTarget(name, home))
+			}
+		}
+	}
+	if s.Learn.Runner == "kiro" {
+		// Kiro names its models differently; auto lets it choose.
+		if _, set := c.Get("learn.map_model"); !set {
+			s.Learn.MapModel = "auto"
+		}
+		if _, set := c.Get("learn.reduce_model"); !set {
+			s.Learn.ReduceModel = "auto"
+		}
 	}
 	for _, name := range c.tableNames("recur.jobs") {
 		j := Job{Name: name}
@@ -393,6 +542,31 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// DefaultSource is where a known harness keeps transcripts; "" for one
+// recall doesn't know, which must set harness.<name>.source.
+func DefaultSource(name, home string) string {
+	switch name {
+	case "claude":
+		return filepath.Join(home, ".claude", "projects")
+	case "kiro":
+		return filepath.Join(home, ".kiro", "sessions")
+	}
+	return ""
+}
+
+// DefaultTarget is the context file a known harness loads in every session
+// and the owner edits: CLAUDE.md for Claude Code, the global AGENTS.md
+// steering file for Kiro.
+func DefaultTarget(name, home string) string {
+	switch name {
+	case "claude":
+		return filepath.Join(home, ".claude", "CLAUDE.md")
+	case "kiro":
+		return filepath.Join(home, ".kiro", "steering", "AGENTS.md")
+	}
+	return ""
 }
 
 // The bounds on learn.map_workers: at least one, and few enough that the

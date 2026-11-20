@@ -131,6 +131,38 @@ const toolSession = `{"type":"user","timestamp":"2026-11-01T00:00:01Z","cwd":"/w
 {"type":"user","timestamp":"2026-11-01T00:00:05Z","cwd":"/w","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","content":"done"}]}}
 `
 
+func TestToolInput(t *testing.T) {
+	token := "ghp_" + strings.Repeat("a1B2", 9) // built here so no scanner sees a token in the repo
+	for _, tc := range []struct{ tool, input, want string }{
+		{"Bash", `{"command":"go test ./...\n  -run X","description":"Run tests"}`, "go test ./... -run X"},
+		{"Read", `{"file_path":"/w/internal/a.go","limit":10}`, "/w/internal/a.go"},
+		{"Edit", `{"file_path":"/w/b.go","old_string":"x","new_string":"y"}`, "/w/b.go"},
+		{"Grep", `{"pattern":"func main","path":"cmd"}`, "func main in cmd"},
+		{"Glob", `{"pattern":"**/*.md"}`, "**/*.md"},
+		{"Agent", `{"description":"Survey the repo","prompt":"long"}`, "Survey the repo"},
+		{"WebFetch", `{"url":"https://example.com/doc","prompt":"p"}`, "https://example.com/doc"},
+		{"mcp__x__lookup", `{"id": 7}`, `{"id": 7}`},
+		{"Bash", `{"command":"curl -H 'Authorization: Bearer ` + token + `' https://example.com"}`,
+			"curl -H 'Authorization: Bearer [REDACTED:github-token]' https://example.com"},
+		{"Bash", `{"command":"` + strings.Repeat("x", 300) + `"}`, strings.Repeat("x", 200) + "…"},
+		{"Bash", `"not an object"`, ""},
+	} {
+		line := `{"type":"assistant","timestamp":"2026-11-01T00:00:02Z","message":{"model":"m","content":[{"type":"tool_use","id":"t1","name":"` +
+			tc.tool + `","input":` + tc.input + `}]}}` + "\n"
+		evs, err := claude(t, t.TempDir()).ReadSession(strings.NewReader(line), "s", "laptop-a")
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := ""
+		if len(evs) == 1 {
+			got = evs[0].Input
+		}
+		if got != tc.want {
+			t.Errorf("input of %s %s = %q, want %q", tc.tool, tc.input, got, tc.want)
+		}
+	}
+}
+
 func TestToolCallsResultsAndSkills(t *testing.T) {
 	h := claude(t, t.TempDir())
 	evs, err := h.ReadSession(strings.NewReader(toolSession), "s", "laptop-a")
@@ -141,10 +173,10 @@ func TestToolCallsResultsAndSkills(t *testing.T) {
 		events.ToolResult, events.SkillInvoked, events.ToolResult) {
 		t.Fatalf("kinds = %v", kinds(evs))
 	}
-	if call := evs[2]; call.Tool != "Bash" || call.Model != "claude-opus-5-5" {
+	if call := evs[2]; call.Tool != "Bash" || call.Model != "claude-opus-5-5" || call.Input != "go test" {
 		t.Errorf("tool call = %+v", call)
 	}
-	if res := evs[3]; res.Tool != "Bash" || res.OK == nil || *res.OK || res.Text != "FAIL" {
+	if res := evs[3]; res.Tool != "Bash" || res.OK == nil || *res.OK || res.Text != "FAIL" || res.Input != "go test" {
 		t.Errorf("failed tool result = %+v; is_error must mean ok=false", res)
 	}
 	if sk := evs[4]; sk.Skill != "fix-tests" || sk.Tool != "Skill" {
@@ -201,7 +233,7 @@ func TestSessionsAndArchiveReading(t *testing.T) {
 	os.Chtimes(session, now, now)
 	tarPath := filepath.Join(root, "week.tar.zst")
 	files := []string{"projects/-home-you/11111111-2222-3333-4444-555555555555.jsonl"}
-	if _, _, err := archive.BuildFile(filepath.Dir(source), files, tarPath); err != nil {
+	if _, _, err := archive.BuildFile(filepath.Dir(source), files, tarPath, archive.Options{}); err != nil {
 		t.Fatal(err)
 	}
 	fromTar, err := harness.ReadTarZst(h, tarPath, "")

@@ -11,6 +11,8 @@
 
 # This machine's name in archive keys and reports. Default: hostname -s.
 # Set an alias such as "laptop" to keep the real hostname out of archive keys.
+# Pin it before the first `recall init`: the reducer claim and every store
+# record key on this name, and macOS hostnames drift.
 host = "laptop-a"
 
 [store]
@@ -41,12 +43,30 @@ retention_days = 3650
 lookback = 4
 # S3 Standard USD per GB-month, for `recall archive-chats estimate`.
 price_per_gb = 0.023
+# Replace secret-shaped tokens in each week's transcripts and the text files
+# beside them (.jsonl, .json, .txt, .md) with [REDACTED:<kind>] as the tarball
+# is built; the files on disk are never changed. It matches token shapes only:
+# AWS access key IDs, GitHub and Slack tokens, sk- API keys, PEM private keys,
+# bearer headers, and JWTs. A password in prose passes through, and what it
+# replaces is gone from the archive for good, so it is off by default.
+redact = false
 
 # One table per harness. `enabled = false` in a later file turns one off.
+# claude is on unless turned off; any other harness is on once its table
+# exists. Known harnesses: claude, kiro.
 [harness.claude]
-# Where this harness keeps transcripts.
+# Where this harness keeps transcripts. Its context file, CLAUDE.md, is
+# read from this directory's parent.
 source = "~/.claude/projects"
 
+[harness.kiro]
+# Kiro CLI's sessions: cli/<id>.jsonl (V2 engine) and
+# <hash>/sess_<id>/messages.jsonl (v3 engine). Its context files, the
+# steering directory with AGENTS.md, are read from this directory's parent.
+source = "~/.kiro/sessions"
+
+# Recurring jobs are the opt-in alternative to the session hooks, for a
+# machine that wants a fixed schedule or whose sessions never end cleanly.
 [recur]
 # Crontab marker and launchd label prefix.
 prefix = "recall.recur"
@@ -63,24 +83,55 @@ schedule = "0 12 * * 1"
 command = "recall archive-chats run"
 
 [learn]
-# The harness CLI model calls go through, in headless mode. Never an API
-# client, so existing auth works unchanged.
+# The harness CLI model calls go through, in headless mode: "claude"
+# (claude -p) or "kiro" (kiro-cli chat --no-interactive). Never an API
+# client, so existing auth works unchanged. Kiro saves every headless run as
+# a session; recall deletes each one it starts. learn apply needs "claude":
+# Kiro trusts a tool on any path, so it can't confine edits to worktrees.
 runner = "claude"
 # The model that reads one session (map), and the model that folds a window
 # of observations into proposals (reduce). Measured on real sessions, haiku
 # missed plain corrections that sonnet caught, so the map defaults to sonnet
-# (a long session costs a few cents).
+# (a long session costs a few cents). With runner = "kiro" both default to
+# "auto"; `kiro-cli chat --list-models` lists the IDs Kiro accepts.
 map_model = "sonnet"
 reduce_model = "opus"
 # How many sessions the map observes at once, each its own headless harness
 # run, 1 to 32. More finishes sooner until the harness's rate limits push back.
 map_workers = 4
 # The context files rules live in; bullets in them become ledger entries.
-targets = ["~/.claude/CLAUDE.md"]
-# The sidecar rule ledger (docs/learning.md), never comments in the files.
+# Unset: each enabled harness's own file, ~/.claude/CLAUDE.md for claude and
+# ~/.kiro/steering/AGENTS.md for kiro.
+targets = ["~/.claude/CLAUDE.md", "~/.kiro/steering/AGENTS.md"]
+# Checkouts whose own context files a lesson may land in when every session
+# behind it ran in that repo: its CLAUDE.md, .claude/CLAUDE.md, or AGENTS.md,
+# path-scoped rules under .claude/rules, and a directory's own CLAUDE.md.
+# recall never proposes a change to a repo that isn't listed here, since a
+# pull request there may be read by other people. Default: none.
+repos = ["~/src/project"]
+# The rule ledger, a separate file beside the context files (docs/learning.md),
+# never comments in the files. The store holds the authoritative copy for
+# every machine that shares it: the reducer writes a new version there after
+# each reduce and apply, every other machine treats this file as a cache of
+# the newest store version, and a missing file is restored from the store.
 ledger = "~/.claude/recall-ledger.json"
+# The candidate ledger: lessons your sessions have shown that aren't rules
+# yet, each a group of alike observations, and which ones a proposal already
+# used. It holds observation text, so it defaults to local state, on the one
+# machine that runs the reduce.
+candidates = "~/.local/state/recall/learn/candidates.json"
 # A rule with no relevance for this many days is proposed for retirement.
 retire_days = 90
+# How far back the reduce reads observations, in days. 0, the default, reads
+# retire_days back, and retirement always uses retire_days, so a wider window
+# surfaces old lessons without retiring rules faster. For a one-off pass over
+# every observation, run `recall learn reduce --window all`.
+window_days = 0
+# How many tokens one context file may cost, estimated at four characters a
+# token. A new rule that would put its file over must name the rule it
+# displaces, or the apply holds it back. 0, the default, is no budget; the
+# reduce still shows what each file and each rule costs.
+budget = 2000
 # The model that applies reviewed proposals as edits. It gets file tools,
 # confined to fresh worktrees, and no shell.
 apply_model = "sonnet"
@@ -89,13 +140,85 @@ apply_model = "sonnet"
 # apply stages its edits in a worktree of that checkout, never the live files.
 skills = "~/.claude/skills"
 bin = "~/bin"
+# The harness settings file a graduated rule may be enforced in: a hook that
+# runs a script under `bin` on matching tool calls, or a permission rule
+# that denies a command or asks first. The binary makes the edit, never the
+# model, and never adds an allow rule. It must sit in a git checkout and be
+# tracked: when a generator writes your settings.json (so it is ignored),
+# point this at the tracked layer the generator merges, like
+# settings.base.json, and regenerate after merging a graduate. A graduate
+# into a git-ignored settings file is held back. Unset: a graduated global
+# rule is a script the agent has to remember to run. A rule in a repo's own
+# context file graduates into that repo's .claude/settings.json either way,
+# when every cited session ran there.
+settings = "~/.claude/settings.json"
 # Where an applied change goes for review: "pr" pushes a branch to origin and
-# opens a pull request with gh; "branch" leaves the branch in the checkout.
+# opens a pull request with gh; "branch" leaves the branch in the checkout,
+# which works with any git host or none. Either way the change is one commit
+# per proposal, so you can drop one before merging; after a merge, a proposal
+# whose text did not land is recorded as rejected.
 review = "pr"
 # A shell command run in each changed worktree before commit, with the staged
 # diff on stdin; a nonzero exit holds that repo's change back, staged in its
 # worktree. For example: "gitleaks stdin --redact --no-banner".
 check = ""
+# A new rule or skill must cite at least one observation that quotes words
+# you typed, checked by the binary against the session. Tool output and
+# assistant prose reach the map too; with this on, they can support a
+# proposal but can't be its only evidence. false lets them stand alone.
+require_owner_evidence = true
+# Let a new rule rest on repeats alone when the binary counted the same
+# thing in at least this many sessions: the same opening actions, or the same
+# tool failure, keyed by the tool and its normalized error text and counted
+# across sessions. Repeats are tool-derived evidence, counted from tool
+# calls, never words you typed, and proposals label them as such. Expected
+# nonzero exits never count, and the map never sees them as failures: a grep
+# or rg that matched nothing, a diff that found differences, a false test.
+# 0, the default, counts no failures and keeps require_owner_evidence as the
+# only gate for a new rule.
+repeat_evidence_sessions = 0
+# Replay the moment that earned a proposed rule before it goes to review:
+# the reduce re-runs the session up to your correction, once with the
+# context file as it is and once with the proposed rule added, and holds the
+# add back when the two runs end the same way, since the rule changed
+# nothing. It also replays, without them, rules earned only on models no
+# recent session ran, and proposes retiring one the current model follows
+# unprompted in every replay. At most 8 moments are replayed per run, each
+# one or two headless calls on learn.map_model; a replay that fails blocks
+# nothing. Off by default, since each replay is a model call.
+replay = false
+# Evidence from outside the chat, read by `recall learn map` with no model
+# call. "github" reads review comments and failed checks on pull requests in
+# the learn.repos origins whose commits carry the agent's co-author trailer,
+# through the gh CLI. Comments and failures are tool-derived evidence, never
+# owner-typed unless you (the login gh is authenticated as) wrote the
+# comment. The session-end hook worker scans each source at most once a day,
+# like the archive step; a map you run by hand always scans. Empty, the
+# default, reads none.
+evidence = ["github"]
+# The commit trailer that marks a pull request as agent-authored to an
+# evidence source. Set it when your harness writes a different trailer, or
+# attribution is off and your commits carry your own marker.
+evidence_trailer = "Co-Authored-By: Claude"
+
+[hooks]
+# What the plugin's session-end hook does in the background when a session
+# ends: the default way to run the loop, with no cron job or LaunchAgent.
+# Nothing recall installs runs at session start. All default to off, so
+# nothing runs until `recall init` turns them on. A step never runs twice:
+# the hook skips a step an enabled recur job's command already runs
+# ("recall archive-chats run", "recall learn map", "recall learn run"),
+# and init applies the same test when it decides which keys to set.
+# Observe sessions that have been quiet for six hours, with the map model.
+map = true
+# Upload missing weeks to the store, at most once a day.
+archive = true
+# Run rules sync, the reduce, and the apply this many days apart; 0 never.
+# `recall init` sets this only on the first machine to init against a store:
+# that init records the host under learn/reducer in the store, and a later
+# init on another machine sees the claim and leaves the reduce off, so one
+# store gets one reducer and no duplicate proposals.
+learn_every = 7
 
 [lint]
 # Paths recall lint never reports. A side drop-in ignores the other side's
@@ -117,7 +240,7 @@ public = ["~/go/src/github.com/you"]
 
 [extensions]
 # The owner's own instructions, appended where an extension point loads:
-# a recall skill by name (keep, recur, archive-chats), or learn-reduce and
+# a recall skill by name (keep, recur, archive-chats, report-issue), or learn-reduce and
 # learn-apply for the reduce and apply prompts. Files are read in order; a missing one is skipped with a
 # warning. Keep personal steps here, in your own files, not in a fork.
 # Like any array, a later config file replaces the list.

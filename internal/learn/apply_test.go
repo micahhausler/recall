@@ -32,8 +32,45 @@ func TestParseProposals(t *testing.T) {
 	if p := got[1]; p.Kind != "skill" || p.Name != "practice" {
 		t.Errorf("second = %+v", p)
 	}
+	if strings.Join(got[0].Evidence, ",") != "s1,s2" {
+		t.Errorf("evidence = %v", got[0].Evidence)
+	}
+	reword := ParseProposals("### reword: Ask first\n- target: x\n- replaces: Rule[r-0012]\n- rule: Ask.\n")
+	if len(reword) != 1 || reword[0].Replaces != "r-0012" {
+		t.Errorf("replaces = %+v", reword)
+	}
 	if got := ParseProposals("## Proposals\n\n(none)\n"); len(got) != 0 {
 		t.Errorf("none parsed as %+v", got)
+	}
+}
+
+// An evidence line ExpandEvidence rewrote carries labels ("tool-derived
+// repeats") beside the session ids, and an ablation retire cites the rule id
+// it removes; neither may leak into Evidence, which feeds Review.Evidence
+// and then Rule.SourceSessions on the ledger.
+func TestParseProposalsEvidenceCarriesOnlySessionIDs(t *testing.T) {
+	expanded := ParseProposals("### add: Quote for zsh\n- target: x\n- rule: Quote.\n" +
+		"- evidence: c-0001 (tool-derived repeats; sessions s-a, s-b), c-0002 (sessions s-c)\n")
+	if len(expanded) != 1 {
+		t.Fatalf("got %d proposals, want 1", len(expanded))
+	}
+	if got := strings.Join(expanded[0].Candidates, ","); got != "c-0001,c-0002" {
+		t.Errorf("candidates = %q, want c-0001,c-0002", got)
+	}
+	if got := strings.Join(expanded[0].Evidence, ","); got != "s-a,s-b,s-c" {
+		t.Errorf("evidence = %q, want only the session ids s-a,s-b,s-c", got)
+	}
+
+	retire := ParseProposals("### retire: Ablation\n- target: x\n- replaces: r-0001\n- rule: Old.\n" +
+		"- evidence: r-0001, s-x, s-y\n")
+	if len(retire) != 1 {
+		t.Fatalf("got %d proposals, want 1", len(retire))
+	}
+	if got := strings.Join(retire[0].Evidence, ","); got != "s-x,s-y" {
+		t.Errorf("evidence = %q, want only the session ids s-x,s-y", got)
+	}
+	if retire[0].Candidates != nil {
+		t.Errorf("candidates = %v, want none", retire[0].Candidates)
 	}
 }
 
@@ -158,6 +195,12 @@ func newApplyFixture(t *testing.T, proposals string) *applyFixture {
 		Targets: []string{"~/dotfiles/.claude/CLAUDE.md", "~/loose/notes.md"},
 		Skills:  filepath.Join(f.kit, "skills"), Bin: filepath.Join(f.kit, "bin"),
 		Public: []string{f.kit}, Taken: []string{"Old"}, Home: base,
+		Ledger: &Ledger{Rules: []Rule{
+			{ID: "r-0001", Target: filepath.Join(f.dot, ".claude", "CLAUDE.md"), Text: "one"},
+			{ID: "r-0002", Target: filepath.Join(base, "loose", "notes.md"), Text: "loose rule"},
+			{ID: "r-0007", Target: filepath.Join(f.dot, ".claude", "CLAUDE.md"), Text: "Ask before a push."},
+			{ID: "r-0008", Target: filepath.Join(f.dot, ".claude", "CLAUDE.md"), Text: "Never force-push."},
+		}},
 		Clock: &clock.Fake{T: time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)},
 	}
 	return f
@@ -179,6 +222,7 @@ const mixedProposals = `## Proposals
 
 ### graduate: Check the time math
 - target: ~/kit/bin/check-time
+- replaces: r-0001
 - rule: a script sketch
 - evidence: s4
 
@@ -192,6 +236,7 @@ const mixedProposals = `## Proposals
 
 ### retire: Loose rule
 - target: ~/loose/notes.md
+- replaces: r-0002
 - rule: loose rule
 `
 
@@ -290,6 +335,63 @@ func TestApplyEndToEnd(t *testing.T) {
 		t.Errorf("second plan err = %v, want ErrApplied", err)
 	}
 }
+
+// A repo that ignores everything must still get every routed file into the
+// commit: the apply force-adds each one and names it in the pull request
+// body, so the owner can fix the ignore file.
+func TestApplyCommitsIgnoredFiles(t *testing.T) {
+	ctx := context.Background()
+	f := newApplyFixture(t, ignoredRepoProposals)
+	writeFile(t, filepath.Join(f.kit, ".gitignore"), "*\n")
+	gitIn(t, f.kit, "add", "-f", ".gitignore")
+	gitIn(t, f.kit, "commit", "-q", "-m", "ignore everything")
+	gitIn(t, f.kit, "push", "-q", "origin", "HEAD:main")
+
+	plan, err := f.applier.Plan(ctx, f.run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := f.applier.Run(ctx, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range res.Changes {
+		if l.Error != "" {
+			t.Fatalf("change failed: %+v", l)
+		}
+	}
+	for _, rel := range []string{"bin/check-time", "skills/practice/SKILL.md"} {
+		if got := gitIn(t, f.kit, "ls-tree", plan.Branch, rel); got == "" {
+			t.Errorf("%s missing from the commit", rel)
+		}
+	}
+	var kitBody string
+	for _, c := range f.pub.Changes {
+		if c.Worktree != nil && c.Worktree.Repo == f.kit {
+			kitBody = c.Body
+		}
+	}
+	if !strings.Contains(kitBody, "An ignore rule matches these files") ||
+		!strings.Contains(kitBody, "- `bin/check-time`") ||
+		!strings.Contains(kitBody, "- `skills/practice/SKILL.md`") {
+		t.Errorf("kit body doesn't name the ignored files:\n%s", kitBody)
+	}
+}
+
+const ignoredRepoProposals = `## Proposals
+
+### skill: Timed practice
+- target: ~/kit/skills/practice/SKILL.md
+- name: practice
+- rule: steps
+- evidence: s3
+
+### graduate: Check the time math
+- target: ~/kit/bin/check-time
+- replaces: r-0001
+- rule: a script sketch
+- evidence: s4
+`
 
 func TestApplyNothingChangedDropsBranches(t *testing.T) {
 	ctx := context.Background()
@@ -392,19 +494,6 @@ func TestDryRunInput(t *testing.T) {
 	}
 }
 
-func TestLatestRun(t *testing.T) {
-	root := t.TempDir()
-	writeFile(t, filepath.Join(root, "2026-11-04", "proposals.md"), "x")
-	writeFile(t, filepath.Join(root, "2026-11-11", "input.md"), "reduce failed before proposals")
-	writeFile(t, filepath.Join(root, "notes", "proposals.md"), "x")
-	if got, err := LatestRun(root); err != nil || filepath.Base(got) != "2026-11-04" {
-		t.Errorf("LatestRun = %q, %v", got, err)
-	}
-	if _, err := LatestRun(t.TempDir()); err == nil {
-		t.Error("an empty root has a latest run")
-	}
-}
-
 func TestParseProposalRule(t *testing.T) {
 	got := ParseProposals("### skill: Practice\n- name: practice\n- rule: A procedure, in two parts:\n" +
 		"  - **One:** do this.\n  - **Two:** then that.\n- evidence: s1\n")
@@ -418,7 +507,7 @@ func TestParseProposalRule(t *testing.T) {
 
 func TestApplyHoldsBackReviewed(t *testing.T) {
 	f := newApplyFixture(t, mixedProposals)
-	f.applier.Reviews = []Review{
+	f.applier.Ledger.Reviews = []Review{
 		// Same title, still open: a second PR would duplicate it.
 		{Kind: "add", Title: "Branch first", Verdict: "pending", Where: "https://example.com/pull/1"},
 		// Retitled, same text, still open.
@@ -480,7 +569,8 @@ func TestRecordAndRefreshReviews(t *testing.T) {
 		t.Errorf("review = %+v", add)
 	}
 
-	// One answer per repo's change decides all three proposals.
+	// Each proposal has its own commit, so each is asked about on its own,
+	// through one publisher.
 	pub := &review.Fake{Verdicts: map[string]review.Verdict{"fake:learn-2026-11-11": review.Closed}}
 	calls := 0
 	lookup := func(via string) (review.Publisher, error) {
@@ -489,8 +579,8 @@ func TestRecordAndRefreshReviews(t *testing.T) {
 	}
 	today := time.Date(2026, 11, 18, 0, 0, 0, 0, time.UTC)
 	n, err := l.RefreshReviews(ctx, lookup, today)
-	if err != nil || n != 3 || calls != 2 {
-		t.Errorf("refresh decided %d, err %v, %d lookups", n, err, calls)
+	if err != nil || n != 3 || calls != 1 || pub.Asked != 3 {
+		t.Errorf("refresh decided %d, err %v, %d lookups, %d verdicts asked", n, err, calls, pub.Asked)
 	}
 	for _, rv := range l.Reviews {
 		if rv.Verdict != "closed" || rv.Decided != "2026-11-18" {
@@ -505,6 +595,62 @@ func TestRecordAndRefreshReviews(t *testing.T) {
 	}, today)
 	if err == nil || l2.Reviews[0].Verdict != "pending" {
 		t.Errorf("err %v, review %+v", err, l2.Reviews[0])
+	}
+}
+
+// An apply whose model echoes a reworded title still links the review back
+// to its proposal: reviews are keyed on the plan's route, carried through
+// the apply, not on an exact title echo, and they record the hash of the
+// rule text that actually landed in the staged diff.
+func TestReviewLinksByRouteNotTitleEcho(t *testing.T) {
+	ctx := context.Background()
+	f := newApplyFixture(t, "## Proposals\n\n"+
+		"### reword: Ask before pushing\n"+
+		"- target: ~/dotfiles/.claude/CLAUDE.md\n"+
+		"- replaces: r-0007\n"+
+		"- rule: Ask before any push.\n"+
+		"- evidence: s1\n")
+	landed := "Ask before any push or force push."
+	f.editor.Apply = func(input string, dirs []string) (string, error) {
+		var path string
+		for _, line := range strings.Split(input, "\n") {
+			if p, ok := strings.CutPrefix(line, "- edit: "); ok {
+				path = p
+			}
+		}
+		if err := os.WriteFile(path, []byte("# Rules\n\n- one\n- "+landed+"\n"), 0o644); err != nil {
+			return "", err
+		}
+		return "Applied[reword]: Ask before pushing, now tightened -- " + path, nil
+	}
+	plan, err := f.applier.Plan(ctx, f.run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := f.applier.Run(ctx, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Changes) != 1 || strings.Join(res.Changes[0].Proposals, ",") != "Ask before pushing" {
+		t.Fatalf("changes = %+v, want the proposal under its own title", res.Changes)
+	}
+	l := &Ledger{Rules: f.applier.Ledger.Rules}
+	if n := l.RecordReviews(plan, res, "pr"); n != 1 {
+		t.Fatalf("recorded %d reviews: %+v", n, l.Reviews)
+	}
+	rv := l.Reviews[0]
+	if rv.Kind != "reword" || rv.Replaces != "r-0007" || rv.Title != "Ask before pushing" {
+		t.Errorf("review lost its lineage behind a reworded title: %+v", rv)
+	}
+	if rv.RuleHash != ruleHash(landed) {
+		t.Errorf("rule hash is of %q, want the text that landed (%q)", rv.Rule, landed)
+	}
+	// Open finds the pending review under the proposal's own title, so the
+	// candidate it cited is held back while the owner decides.
+	clusters := []Cluster{{ID: "c-0001", Proposed: []Cited{{Date: plan.Date, Kind: "reword", Title: "Ask before pushing"}}}}
+	open, used := Open(clusters, l.Reviews)
+	if used != 1 || len(open) != 0 {
+		t.Errorf("open = %+v, used = %d; the pending review wasn't found", open, used)
 	}
 }
 
@@ -532,5 +678,369 @@ func TestRefreshKeysByRepo(t *testing.T) {
 	}
 	if got := l.Reviews[1].Place(); got != "branch learn-x in /r/kit" {
 		t.Errorf("place = %q", got)
+	}
+}
+
+// End-to-end on fakes and a local repo: the apply stages one commit per
+// proposal, the owner drops one commit and merges the rest, and the ledger
+// finds one proposal merged and one rejected.
+func TestPerProposalVerdictsOnABranch(t *testing.T) {
+	ctx := context.Background()
+	isolateGit(t)
+	base := review.Resolve(t.TempDir())
+	repo := liveRepo(t, base, "dotfiles", map[string]string{
+		".claude/CLAUDE.md": "# Rules\n\n- one\n",
+		".claude/work.md":   "# Work\n\n- two\n",
+	})
+	rules := filepath.Join(repo, ".claude", "CLAUDE.md")
+	work := filepath.Join(repo, ".claude", "work.md")
+	run := filepath.Join(base, "state", "2026-11-11")
+	writeFile(t, filepath.Join(run, "proposals.md"), "## Proposals\n\n"+
+		"### add: Branch first\n- target: "+rules+"\n- rule: Branch before committing.\n- evidence: s1\n\n"+
+		"### add: Vet first\n- target: "+work+"\n- rule: Run go vet before saying done.\n- evidence: s2\n")
+	bullets := map[string]string{
+		"Branch first": "Branch before committing.",
+		"Vet first":    "Run go vet before saying done.",
+	}
+	editor := &model.FakeEditor{Apply: func(input string, dirs []string) (string, error) {
+		var out []string
+		title := ""
+		for _, line := range strings.Split(input, "\n") {
+			if rest, ok := strings.CutPrefix(line, "### add: "); ok {
+				title = strings.TrimSpace(rest)
+			}
+			if p, ok := strings.CutPrefix(line, "- edit: "); ok {
+				data, err := os.ReadFile(p)
+				if err != nil {
+					return "", err
+				}
+				if err := os.WriteFile(p, append(data, []byte("- "+bullets[title]+"\n")...), 0o644); err != nil {
+					return "", err
+				}
+				out = append(out, "Applied[add]: "+title+" -- "+p)
+			}
+		}
+		return strings.Join(out, "\n"), nil
+	}}
+	a := &Applier{
+		Editor: editor, Model: "sonnet", Publisher: review.Branch{},
+		Targets: []string{rules, work}, Home: base,
+		Skills: filepath.Join(repo, "skills"), Bin: filepath.Join(repo, "bin"),
+		Clock: &clock.Fake{T: time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)},
+	}
+	plan, err := a.Plan(ctx, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := a.Run(ctx, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Changes) != 1 || len(res.Changes[0].Proposals) != 2 {
+		t.Fatalf("changes = %+v", res.Changes)
+	}
+	ch := res.Changes[0]
+	if got := gitIn(t, repo, "rev-list", "--count", plan.Branch, "^origin/main"); got != "2" {
+		t.Fatalf("the branch carries %s commit(s), want one per proposal", got)
+	}
+	branchFirst, vetFirst := ch.Commits[plan.Routes[0].ID], ch.Commits[plan.Routes[1].ID]
+	if branchFirst == "" || vetFirst == "" || branchFirst == vetFirst {
+		t.Fatalf("commits = %+v, want one per proposal", ch.Commits)
+	}
+	if msg := gitIn(t, repo, "log", "-1", "--format=%s", branchFirst); msg != "add: Branch first" {
+		t.Errorf("commit message = %q", msg)
+	}
+
+	l := &Ledger{}
+	if n := l.RecordReviews(plan, res, "branch"); n != 2 {
+		t.Fatalf("recorded %d reviews: %+v", n, l.Reviews)
+	}
+	for _, rv := range l.Reviews {
+		if rv.Commit != ch.Commits["p-01"] && rv.Commit != ch.Commits["p-02"] {
+			t.Errorf("review %q carries commit %q, want its own proposal's", rv.Title, rv.Commit)
+		}
+	}
+
+	// The owner drops the second proposal's commit, merges the first, and
+	// deletes the branch.
+	gitIn(t, repo, "merge", "-q", branchFirst)
+	gitIn(t, repo, "branch", "-q", "-D", plan.Branch)
+	lookup := func(string) (review.Publisher, error) { return review.Branch{}, nil }
+	n, err := l.RefreshReviews(ctx, lookup, time.Date(2026, 11, 18, 0, 0, 0, 0, time.UTC))
+	if err != nil || n != 2 {
+		t.Fatalf("refresh decided %d, %v", n, err)
+	}
+	got := map[string]review.Verdict{}
+	for _, rv := range l.Reviews {
+		got[rv.Title] = rv.Verdict
+	}
+	if got["Branch first"] != "merged" || got["Vet first"] != "closed" {
+		t.Errorf("verdicts = %v, want the merged proposal merged and the dropped one rejected", got)
+	}
+	if live, _ := os.ReadFile(rules); !strings.Contains(string(live), "Branch before committing.") {
+		t.Errorf("the merged rule never reached the live file: %q", live)
+	}
+}
+
+// A merged change proves only that the change landed. A proposal whose rule
+// text is absent from the merged base was taken out before the merge, and
+// is recorded as rejected.
+func TestMergedWithoutProposalTextIsRejected(t *testing.T) {
+	ctx := context.Background()
+	isolateGit(t)
+	base := review.Resolve(t.TempDir())
+	repo := liveRepo(t, base, "dotfiles", map[string]string{"CLAUDE.md": "# Rules\n\n- Kept rule.\n"})
+	head := gitIn(t, repo, "rev-parse", "HEAD")
+	// The dropped proposal's commit stays on the review branch, never
+	// merged: the apply stages one commit per proposal, and the owner
+	// dropped this one before merging.
+	gitIn(t, repo, "checkout", "-q", "-b", "learn-x")
+	writeFile(t, filepath.Join(repo, "notes.md"), "- Dropped rule.\n")
+	gitIn(t, repo, "add", "-A")
+	gitIn(t, repo, "commit", "-q", "-m", "add: Taken out")
+	dropped := gitIn(t, repo, "rev-parse", "HEAD")
+	gitIn(t, repo, "checkout", "-q", "main")
+	l := &Ledger{Reviews: []Review{
+		{Kind: "add", Title: "Kept", Rule: "Kept rule.", Via: "branch", Where: "branch learn-x",
+			Repo: repo, Base: "origin/main", Commit: head, Verdict: "pending"},
+		{Kind: "add", Title: "Taken out", Rule: "Dropped rule.", Via: "branch", Where: "branch learn-x",
+			Repo: repo, Base: "origin/main", Commit: dropped, Verdict: "pending"},
+	}}
+	pub := &review.Fake{Verdicts: map[string]review.Verdict{"branch learn-x": review.Merged}}
+	n, err := l.RefreshReviews(ctx, func(string) (review.Publisher, error) { return pub, nil },
+		time.Date(2026, 11, 18, 0, 0, 0, 0, time.UTC))
+	if err != nil || n != 2 {
+		t.Fatalf("refresh decided %d, %v", n, err)
+	}
+	if l.Reviews[0].Verdict != "merged" || l.Reviews[1].Verdict != "closed" {
+		t.Errorf("verdicts = %q, %q; want the landed text merged and the missing text rejected",
+			l.Reviews[0].Verdict, l.Reviews[1].Verdict)
+	}
+}
+
+// Phase 4 gate: one ledger carries rules from both CLAUDE.md and a Kiro
+// steering file, and one apply stages an edit to each.
+func TestOneLedgerWritesClaudeAndKiroSteering(t *testing.T) {
+	ctx := context.Background()
+	isolateGit(t)
+	base := review.Resolve(t.TempDir())
+	home := liveRepo(t, base, "home", map[string]string{
+		".claude/CLAUDE.md":        "# Rules\n\n- one\n",
+		".kiro/steering/AGENTS.md": "---\ninclusion: always\n---\n\n# Steering\n\n- kiro rule\n",
+	})
+	claudeMD := filepath.Join(home, ".claude", "CLAUDE.md")
+	steering := filepath.Join(home, ".kiro", "steering", "AGENTS.md")
+	fakeClock := &clock.Fake{T: time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)}
+
+	// Both targets' bullets land on the same ledger; the steering file's
+	// frontmatter stays YAML, not a rule.
+	l := &Ledger{}
+	if _, err := l.SyncTargets([]string{claudeMD, steering}, fakeClock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	byText := map[string]string{}
+	for _, r := range l.Rules {
+		byText[r.Text] = r.Target
+	}
+	if len(l.Rules) != 2 || byText["one"] != claudeMD || byText["kiro rule"] != steering {
+		t.Fatalf("rules = %+v", l.Rules)
+	}
+
+	run := filepath.Join(base, "state", "2026-11-11")
+	writeFile(t, filepath.Join(run, "proposals.md"), "## Proposals\n\n"+
+		"### add: Branch first\n- target: "+claudeMD+"\n- rule: Branch before committing.\n- evidence: s1\n\n"+
+		"### add: Name the workspace\n- target: "+steering+"\n- rule: Name the workspace in the first prompt.\n- evidence: s2\n")
+	editor := &model.FakeEditor{Apply: fakeApply("edited")}
+	a := &Applier{
+		Editor: editor, Model: "sonnet", Publisher: review.Branch{},
+		Targets: []string{claudeMD, steering},
+		Skills:  filepath.Join(home, "skills"), Bin: filepath.Join(home, "bin"),
+		Home: base, Clock: fakeClock,
+	}
+	plan, err := a.Plan(ctx, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range plan.Routes {
+		if r.Skip != "" {
+			t.Fatalf("%q held back: %s", r.Title, r.Skip)
+		}
+	}
+	res, err := a.Run(ctx, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Changes) != 1 || len(res.Changes[0].Proposals) != 2 {
+		t.Fatalf("landed = %+v", res.Changes)
+	}
+	for _, rel := range []string{".claude/CLAUDE.md", ".kiro/steering/AGENTS.md"} {
+		if got := gitIn(t, home, "show", plan.Branch+":"+rel); !strings.Contains(got, "edited for ") {
+			t.Errorf("%s on the branch = %q, want the staged edit", rel, got)
+		}
+	}
+
+	// The one ledger records both reviews, and merging the branch lands
+	// both edits.
+	l.RecordReviews(plan, res, "branch")
+	if len(l.Reviews) != 2 {
+		t.Fatalf("reviews = %+v", l.Reviews)
+	}
+	gitIn(t, home, "merge", "-q", "--no-edit", plan.Branch)
+	if live, _ := os.ReadFile(claudeMD); !strings.Contains(string(live), "edited for Branch first") {
+		t.Errorf("CLAUDE.md after the merge = %q", live)
+	}
+	if live, _ := os.ReadFile(steering); !strings.Contains(string(live), "edited for Name the workspace") {
+		t.Errorf("steering file after the merge = %q", live)
+	}
+}
+
+// A displaced bullet inside a steering file's YAML frontmatter is judged the
+// same way by SyncTargets and hasBullet: configuration, not a rule.
+func TestSyncAndHasBulletAgreeOnFrontmatter(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "AGENTS.md")
+	data := []byte(strings.Join([]string{
+		"---",
+		"inclusion: fileMatch",
+		"fileMatchPattern:",
+		"- 'src/**'",
+		"---",
+		"",
+		"- Run the build before saying done.",
+	}, "\n") + "\n")
+	if err := os.WriteFile(target, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	l := &Ledger{}
+	if _, err := l.SyncTargets([]string{target}, time.Date(2026, 11, 11, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	synced := map[string]bool{}
+	for _, r := range l.Rules {
+		synced[r.Text] = true
+	}
+	for text, want := range map[string]bool{"'src/**'": false, "Run the build before saying done.": true} {
+		if synced[text] != want {
+			t.Errorf("sync found %q = %t, want %t", text, synced[text], want)
+		}
+		if got := hasBullet(data, text); got != want {
+			t.Errorf("hasBullet(%q) = %t, want %t, the answer sync gives", text, got, want)
+		}
+	}
+}
+
+// A bullet added inside a code fence is an example, not a rule: landedRules
+// reads the diff's new side by the same fence rules sync reads a target.
+func TestLandedRulesIgnoresFencedBullets(t *testing.T) {
+	plan := &Plan{Routes: []Route{
+		{ID: "r1", Proposal: Proposal{Kind: "add", Title: "Vet first", Rule: "Run go vet before saying done."}},
+		{ID: "r2", Proposal: Proposal{Kind: "add", Title: "Fenced", Rule: "Only in the fence, never landed."}},
+	}}
+	applied := []Outcome{{Route: "r1", Applied: true}, {Route: "r2", Applied: true}}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "CLAUDE.md"), strings.Join([]string{
+		"# Rules",
+		"",
+		"- Run go vet before saying done.",
+		"",
+		"```",
+		"- Only in the fence, never landed.",
+		"```",
+		"",
+	}, "\n"))
+	diff := strings.Join([]string{
+		"diff --git a/CLAUDE.md b/CLAUDE.md",
+		"--- a/CLAUDE.md",
+		"+++ b/CLAUDE.md",
+		"@@ -1,2 +1,8 @@",
+		" # Rules",
+		" ",
+		"+- Run go vet before saying done.",
+		"+",
+		"+```",
+		"+- Only in the fence, never landed.",
+		"+```",
+	}, "\n")
+	landed := landedRules(plan, applied, diff, dir)
+	if landed["r1"] != "Run go vet before saying done." {
+		t.Errorf("r1 landed %q, want the unfenced bullet", landed["r1"])
+	}
+	if text, ok := landed["r2"]; ok {
+		t.Errorf("the fenced bullet landed as %q; a fenced bullet is not a rule", text)
+	}
+}
+
+// A hunk that starts inside an existing code fence shows only the closing
+// fence line as context. The staged file, not the hunk, is the ground truth
+// for fence state: a genuine bullet added after the fenced example must land,
+// so lineage records the text that is in the file.
+func TestLandedRulesSeesBulletAfterFencedExample(t *testing.T) {
+	plan := &Plan{Routes: []Route{
+		{ID: "r1", Proposal: Proposal{Kind: "add", Title: "Vet first", Rule: "Run go vet before saying done."}},
+	}}
+	applied := []Outcome{{Route: "r1", Applied: true}}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "CLAUDE.md"), strings.Join([]string{
+		"# Rules",
+		"",
+		"An example:",
+		"",
+		"```",
+		"go vet ./...",
+		"```",
+		"",
+		"- Run go vet before saying done.",
+		"",
+	}, "\n"))
+	diff := strings.Join([]string{
+		"diff --git a/CLAUDE.md b/CLAUDE.md",
+		"--- a/CLAUDE.md",
+		"+++ b/CLAUDE.md",
+		"@@ -6,3 +6,4 @@",
+		" go vet ./...",
+		" ```",
+		" ",
+		"+- Run go vet before saying done.",
+	}, "\n")
+	landed := landedRules(plan, applied, diff, dir)
+	if landed["r1"] != "Run go vet before saying done." {
+		t.Errorf("r1 landed %q, want the bullet added after the fenced example", landed["r1"])
+	}
+}
+
+// A hunk inside a steering file's YAML frontmatter never shows the opening
+// --- line, and a scanner restarted at the hunk can't know it is inside
+// frontmatter. The staged file says so: a YAML list item added there is
+// configuration, never a landed rule.
+func TestLandedRulesSkipsFrontmatterHunk(t *testing.T) {
+	plan := &Plan{Routes: []Route{
+		{ID: "r1", Proposal: Proposal{Kind: "add", Title: "Docs too", Rule: "docs and examples included"}},
+	}}
+	applied := []Outcome{{Route: "r1", Applied: true}}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "AGENTS.md"), strings.Join([]string{
+		"---",
+		"inclusion: fileMatch",
+		"fileMatchPattern:",
+		"- 'src/**'",
+		"- docs and examples included",
+		"---",
+		"",
+		"- Run the build before saying done.",
+		"",
+	}, "\n"))
+	diff := strings.Join([]string{
+		"diff --git a/AGENTS.md b/AGENTS.md",
+		"--- a/AGENTS.md",
+		"+++ b/AGENTS.md",
+		"@@ -2,3 +2,4 @@",
+		" inclusion: fileMatch",
+		" fileMatchPattern:",
+		" - 'src/**'",
+		"+- docs and examples included",
+	}, "\n")
+	landed := landedRules(plan, applied, diff, dir)
+	if text, ok := landed["r1"]; ok {
+		t.Errorf("the frontmatter YAML item landed as %q; frontmatter is configuration, not a rule", text)
 	}
 }

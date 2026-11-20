@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/micahhausler/recall/internal/events"
+	"github.com/micahhausler/recall/internal/redact"
 )
 
 // line is one Claude Code transcript line; only metadata the mapping needs.
@@ -63,7 +64,7 @@ func (c *Claude) Sessions() ([]string, error) {
 	}
 	var out []string
 	for _, f := range files {
-		if strings.HasSuffix(f.Rel, ".jsonl") {
+		if _, ok := c.SessionID(f.Rel); ok {
 			out = append(out, filepath.Join(filepath.Dir(c.source), filepath.FromSlash(f.Rel)))
 		}
 	}
@@ -77,7 +78,8 @@ func (c *Claude) ReadSessionFile(path, host string) ([]events.Event, error) {
 		return nil, err
 	}
 	defer f.Close()
-	return c.ReadSession(f, strings.TrimSuffix(filepath.Base(path), ".jsonl"), host)
+	session, _ := c.SessionID(path)
+	return c.ReadSession(f, session, host)
 }
 
 // ReadSession parses one transcript stream into normalized events.
@@ -87,9 +89,9 @@ func (c *Claude) ReadSession(r io.Reader, session, host string) ([]events.Event,
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 1024*1024), 32*1024*1024)
 	var out []events.Event
-	toolNames := map[string]string{} // tool_use id -> tool name
-	pending := -1                    // the slash command whose kind the next lines settle
-	skillCalls := map[string]int{}   // Skill tool_use id -> its event's index
+	toolNames := map[string]toolCall{} // tool_use id -> the call
+	pending := -1                      // the slash command whose kind the next lines settle
+	skillCalls := map[string]int{}     // Skill tool_use id -> its event's index
 	base := func(l *line) events.Event {
 		return events.Event{
 			Harness:   c.Name(),
@@ -199,7 +201,64 @@ func classifyCommand(l *line, msg *message, cmd *events.Event, idx int) int {
 	return idx
 }
 
-func (c *Claude) userEvents(l *line, msg *message, base func(*line) events.Event, toolNames map[string]string) []events.Event {
+// toolCall is what a later tool result needs from the call it answers.
+type toolCall struct {
+	name, input string
+}
+
+// inputBudget is how much of a tool's input an event keeps.
+const inputBudget = 200
+
+// toolInput summarizes a tool call's input in one line: the field that says
+// what the call did, for the tools whose input has one, and compact JSON
+// for the rest. Secret-shaped tokens are redacted and the rest is cut to
+// inputBudget.
+func toolInput(name string, raw json.RawMessage) string {
+	var in map[string]json.RawMessage
+	if json.Unmarshal(raw, &in) != nil {
+		return ""
+	}
+	str := func(key string) string {
+		var v string
+		json.Unmarshal(in[key], &v)
+		return v
+	}
+	var out string
+	switch name {
+	case "Bash":
+		out = str("command")
+	case "Read", "Edit", "Write", "NotebookEdit":
+		out = str("file_path")
+		if out == "" {
+			out = str("notebook_path")
+		}
+	case "Grep":
+		out = str("pattern")
+		if path := str("path"); path != "" {
+			out += " in " + path
+		}
+	case "Glob":
+		out = str("pattern")
+	case "Agent", "Task":
+		out = str("description")
+	case "WebFetch":
+		out = str("url")
+	case "WebSearch":
+		out = str("query")
+	default:
+		if len(in) > 0 {
+			out = string(raw)
+		}
+	}
+	out = strings.Join(strings.Fields(out), " ")
+	out, _ = redact.String(out)
+	if r := []rune(out); len(r) > inputBudget {
+		out = string(r[:inputBudget]) + "…"
+	}
+	return out
+}
+
+func (c *Claude) userEvents(l *line, msg *message, base func(*line) events.Event, toolNames map[string]toolCall) []events.Event {
 	if l.IsMeta {
 		return nil // harness bookkeeping, not something a person said
 	}
@@ -219,7 +278,8 @@ func (c *Claude) userEvents(l *line, msg *message, base func(*line) events.Event
 		e := base(l)
 		e.Kind = events.ToolResult
 		e.Role = "user"
-		e.Tool = toolNames[b.ToolUseID]
+		e.Tool = toolNames[b.ToolUseID].name
+		e.Input = toolNames[b.ToolUseID].input
 		e.OK = events.Bool(!b.IsError)
 		e.Text = contentText(b.Content)
 		out = append(out, e)
@@ -258,7 +318,7 @@ func orCLI(entrypoint string) string {
 	return entrypoint
 }
 
-func (c *Claude) assistantEvents(l *line, msg *message, base func(*line) events.Event, toolNames map[string]string) []events.Event {
+func (c *Claude) assistantEvents(l *line, msg *message, base func(*line) events.Event, toolNames map[string]toolCall) []events.Event {
 	model := msg.Model
 	if l.RequestedModel != "" {
 		model = l.RequestedModel
@@ -277,11 +337,13 @@ func (c *Claude) assistantEvents(l *line, msg *message, base func(*line) events.
 			e.Text = b.Text
 			out = append(out, e)
 		case "tool_use":
-			toolNames[b.ID] = b.Name
+			call := toolCall{name: b.Name, input: toolInput(b.Name, b.Input)}
+			toolNames[b.ID] = call
 			e := base(l)
 			e.Role = "assistant"
 			e.Model = model
 			e.Tool = b.Name
+			e.Input = call.input
 			if b.Name == "Skill" {
 				e.Kind = events.SkillInvoked
 				var in struct {

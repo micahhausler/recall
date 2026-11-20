@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -15,6 +16,7 @@ import (
 	"github.com/micahhausler/recall/internal/clock"
 	"github.com/micahhausler/recall/internal/config"
 	"github.com/micahhausler/recall/internal/harness"
+	"github.com/micahhausler/recall/internal/model"
 	"github.com/micahhausler/recall/internal/store"
 )
 
@@ -33,6 +35,29 @@ type archiveEnv struct {
 	settings  *config.Settings
 	harnesses []harness.Harness
 	clk       clock.Clock
+	// runner and editor, when set, stand in for the harness CLI the learn
+	// steps call through; tests inject fakes here.
+	runner model.Runner
+	editor model.Editor
+}
+
+// newRunner is the model runner the map and reduce steps call through,
+// registered under the learn.runner name.
+func (e *archiveEnv) newRunner() (model.Runner, error) {
+	if e.runner != nil {
+		return e.runner, nil
+	}
+	return model.Open(e.settings.Learn.Runner)
+}
+
+// newEditor is the editor the apply step calls through. A runner whose
+// harness can't confine edits to the apply worktrees has none, and apply
+// refuses to run.
+func (e *archiveEnv) newEditor() (model.Editor, error) {
+	if e.editor != nil {
+		return e.editor, nil
+	}
+	return model.OpenEditor(e.settings.Learn.Runner)
 }
 
 func loadArchiveEnv() (*archiveEnv, error) {
@@ -54,6 +79,11 @@ func loadArchiveEnv() (*archiveEnv, error) {
 		return nil, err
 	}
 	return &archiveEnv{home: home, settings: settings, harnesses: hs, clk: clock.Real{}}, nil
+}
+
+// buildOptions are how this config builds a week's tarball.
+func (e *archiveEnv) buildOptions() archive.Options {
+	return archive.Options{Redact: e.settings.Archive.Redact}
 }
 
 func (e *archiveEnv) harnessNames() []string {
@@ -152,6 +182,7 @@ func archiveRun(ctx context.Context, env *archiveEnv, lookback int, dryRun, offl
 		Out:       os.Stdout,
 		Err:       os.Stderr,
 		Dest:      func(key string) string { return "s3://<bucket>/" + key },
+		Build:     env.buildOptions(),
 	}
 	if !offline {
 		st, dest, err := openStore(ctx, env)
@@ -181,6 +212,13 @@ func archiveBuild(env *archiveEnv, args []string) int {
 	if err != nil {
 		return fail(err)
 	}
+	// The name says what the file is: a tar.zst that zstd and tar read.
+	// Client-side encryption was removed, so an OUT asking for it is an
+	// error, never a plaintext file with a misleading name.
+	if strings.HasSuffix(args[1], ".age") {
+		return fail(fmt.Errorf("%s asks for client-side encryption, a feature recall removed; write a plain .tar.zst and encrypt it yourself if you need to", args[1]))
+	}
+	opts := env.buildOptions()
 	start, end := w.Bounds(time.Local)
 	total := 0
 	for _, h := range env.harnesses {
@@ -195,12 +233,16 @@ func archiveBuild(env *archiveEnv, args []string) int {
 		if len(env.harnesses) > 1 {
 			out = h.Name() + "-" + out
 		}
-		kept, size, err := archive.BuildFile(filepath.Dir(h.SourceDir()), files, out)
+		built, size, err := archive.BuildFile(filepath.Dir(h.SourceDir()), files, out, opts)
 		if err != nil {
 			return fail(err)
 		}
-		fmt.Printf("%s: %d files, %d bytes\n", out, len(kept), size)
-		total += len(kept)
+		note := ""
+		if opts.Redact {
+			note = fmt.Sprintf("; redacted %d secret-shaped token(s)", built.Redactions)
+		}
+		fmt.Printf("%s: %d files, %d bytes%s\n", out, len(built.Files), size, note)
+		total += len(built.Files)
 	}
 	if total == 0 {
 		fmt.Fprintf(os.Stderr, "recall: %s: no changed files\n", w)
@@ -221,7 +263,8 @@ func archiveInfo(ctx context.Context, env *archiveEnv) int {
 		fmt.Printf("profile:   %s\n", orBlank(s.Store.S3.Profile, "(default credential chain)"))
 		fmt.Printf("region:    %s\n", orBlank(s.Store.S3.Region, "(none)"))
 	}
-	fmt.Printf("objects:   %s\n", dest("<harness>/"+s.Host+"/<year>/W<week>.tar.zst"))
+	object := "<harness>/" + s.Host + "/<year>/W<week>.tar.zst"
+	fmt.Printf("objects:   %s\n", dest(object))
 	fmt.Printf("lookback:  %d weeks; retention %d days\n", s.Archive.Lookback, s.Store.S3.RetentionDays)
 	for _, h := range env.harnesses {
 		keys, err := st.List(ctx, h.Name()+"/"+s.Host+"/")
@@ -229,7 +272,11 @@ func archiveInfo(ctx context.Context, env *archiveEnv) int {
 			return fail(err)
 		}
 		for _, k := range keys {
-			fmt.Printf("  %s\n", k)
+			note := ""
+			if strings.HasSuffix(k, ".age") {
+				note = "  (encrypted by a feature recall removed; the age CLI still reads it)"
+			}
+			fmt.Printf("  %s%s\n", k, note)
 		}
 	}
 	return 0

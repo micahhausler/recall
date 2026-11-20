@@ -9,7 +9,7 @@ One JSON object per event:
 
 | Field | Meaning |
 |---|---|
-| `harness` | The adapter that emitted it: `claude` today. |
+| `harness` | The adapter that emitted it: `claude` or `kiro`. |
 | `host` | The machine the session ran on; empty when reading a downloaded archive, whose key path names the host. |
 | `session` | The session id: the transcript file name without `.jsonl`. |
 | `cwd` | The working directory of the turn. |
@@ -18,6 +18,7 @@ One JSON object per event:
 | `role` | `user` or `assistant`, when the harness says. |
 | `text` | The prose: a prompt, the model's text, a tool result, a refusal category. |
 | `tool` | The tool a `tool_call` invoked; on a `tool_result`, the tool that produced it. |
+| `input` | On `tool_call`: a one-line summary of the tool's input, such as a shell command or a file path, at most 200 characters, with secret-shaped tokens redacted. On `tool_result`: the input of the call it answers. |
 | `ok` | On `tool_result`: false when the harness marked it an error. |
 | `skill` | The skill a `skill_invoked` or `slash_command` names, or the command a `builtin_command` names, without the slash. |
 | `skill_dir` | On `slash_command` and `skill_invoked`: the directory the harness loaded the skill from, when the transcript records it. |
@@ -49,10 +50,32 @@ Empty fields are omitted.
 - The stream is faithful: gated or refused sessions still emit their events, and filtering is the consumer's job (distill's drop-gated-chats rule was policy, not schema).
 - Meta turns (`isMeta`) and `<...>`-wrapped wrappers other than `<command-name>` emit nothing; they're harness bookkeeping.
 - A torn last line (an active session mid-write) is skipped, not an error.
-- Tool names on results come from correlating `tool_use_id` with the earlier call in the same session.
+- Tool names and inputs on results come from correlating `tool_use_id` with the earlier call in the same session.
+- A tool's input is summarized by the one field that says what the call did (`command`, `file_path`, `pattern`, `url`, `query`, `description`); a tool with no such field keeps its input as compact JSON.
+  The summary passes through the same token-shape redaction the archive offers, since a command can carry a credential.
 
 ## Adapters
 
 An adapter implements `harness.Harness`: name the archive prefix, list sessions, say which files a week's archive includes, and read one session stream into events.
 `claude` reads `~/.claude/projects/*/*.jsonl`.
-Codex, Kiro, and others plug in beside it later; `docs/learning.md` says what they must emit.
+Codex and others plug in beside them later; `docs/learning.md` says what they must emit.
+
+### Kiro
+
+`kiro` reads both layouts Kiro CLI writes under `~/.kiro/sessions`:
+
+- V2 engine: `cli/<id>.jsonl`, lines of `{"kind", "data"}`, with the working directory in `cli/<id>.json`.
+  Only a `Prompt` carries a time (epoch seconds), so the turns after it take the prompt's time.
+- v3 engine: `<hash>/sess_<id>/messages.jsonl`, lines of `{"timestamp", "payload"}`, with the working directory in `session.json`; the session id is the `sess_<id>` directory.
+
+The mapping:
+
+- A user turn is a `user_prompt` unless Kiro or an add-on wrote it: a synthetic turn, a `<...>` wrapper, or a bracketed tag like `[AGENT SYSTEM PROMPT]` or `[RUNTIME]`.
+  A `[LIVE STEERING - New message from user]` turn is a message typed mid-turn, so it's a prompt with the header removed.
+- Assistant prose (`Say` in v3, `text` in V2) is `assistant_text`; reasoning emits nothing but names the model.
+- A tool call is `tool_call`, once per call id, though v3 writes a call again as its status moves; a v3 `load_resource` of `skill::<name>` is `skill_invoked`.
+  Kiro transcripts don't record a one-line input summary, so `input` stays empty on its events.
+- A tool result is `tool_result`, failed when its status isn't `success`.
+- A turn that ends with stop reason `refusal` is `refusal`.
+
+Kiro offers its skills and agents as slash commands, which its transcripts don't record as such, so `slash_command` and `builtin_command` never come from Kiro.

@@ -104,7 +104,7 @@ func TestWorktreeLifecycle(t *testing.T) {
 	if err != nil || strings.Join(changed, ",") != "CLAUDE.md,skills/new/SKILL.md" {
 		t.Errorf("changed = %v, %v", changed, err)
 	}
-	diff, err := w.Stage(ctx)
+	diff, err := w.Stage(ctx, changed)
 	if err != nil || !strings.Contains(diff, "+- two") {
 		t.Errorf("staged diff = %q, %v", diff, err)
 	}
@@ -176,7 +176,7 @@ func TestPRPushesAndOpens(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(w.Dir, "CLAUDE.md"), []byte("changed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.Stage(ctx); err != nil {
+	if _, err := w.Stage(ctx, []string{"CLAUDE.md"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := w.Commit(ctx, "t", ""); err != nil {
@@ -197,11 +197,101 @@ func TestPRPushesAndOpens(t *testing.T) {
 	if !strings.Contains(string(args), "--base main --head learn-x --title Apply") {
 		t.Errorf("gh args = %s", args)
 	}
+	if strings.Contains(string(args), "--repo") {
+		t.Errorf("an origin that names no host has no repo to pass: %s", args)
+	}
 	if body, _ := os.ReadFile(argsFile + ".body"); string(body) != "the body" {
 		t.Errorf("gh body = %q", body)
 	}
 	run(t, live, "fetch", "-q", "origin")
 	run(t, live, "rev-parse", "--verify", "refs/remotes/origin/learn-x") // pushed
+}
+
+// In a fork, gh would aim a pull request at the repo the fork came from.
+// The publisher names origin, so the change stays on the owner's own repo.
+func TestPROpensOnOrigin(t *testing.T) {
+	ctx := context.Background()
+	live := clone(t)
+	w, err := AddWorktree(ctx, live, filepath.Join(t.TempDir(), "wt"), "learn-y")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(w.Dir, "CLAUDE.md"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Stage(ctx, []string{"CLAUDE.md"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Commit(ctx, "t", ""); err != nil {
+		t.Fatal(err)
+	}
+	// Fetches read the hosted URL; pushes still go to the local bare repo.
+	bare := run(t, live, "remote", "get-url", "origin")
+	run(t, live, "remote", "set-url", "origin", "git@github.com:you/dotfiles.git")
+	run(t, live, "remote", "set-url", "--push", "origin", bare)
+	bin := t.TempDir()
+	argsFile := filepath.Join(bin, "args")
+	gh := filepath.Join(bin, "gh")
+	script := "#!/bin/sh\necho \"$*\" > " + argsFile + "\ncat > /dev/null\necho https://example.com/pull/2\n"
+	if err := os.WriteFile(gh, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&PR{GH: gh}).Publish(ctx, Change{Worktree: w, Title: "Apply", Body: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	if args, _ := os.ReadFile(argsFile); !strings.Contains(string(args), "--repo you/dotfiles") {
+		t.Errorf("gh args = %s, want the pull request opened on origin", args)
+	}
+}
+
+// gh failing after the push must not leave the branch on origin, where it
+// would block the next apply until the owner deletes it by hand.
+func TestPRDeletesPushedBranchWhenGHFails(t *testing.T) {
+	ctx := context.Background()
+	live := clone(t)
+	w, err := AddWorktree(ctx, live, filepath.Join(t.TempDir(), "wt"), "learn-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(w.Dir, "CLAUDE.md"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Stage(ctx, []string{"CLAUDE.md"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Commit(ctx, "t", ""); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	gh := filepath.Join(bin, "gh")
+	script := "#!/bin/sh\necho 'gh: not signed in' >&2\nexit 1\n"
+	if err := os.WriteFile(gh, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err = (&PR{GH: gh}).Publish(ctx, Change{Worktree: w, Title: "Apply", Body: "b"})
+	if err == nil || !strings.Contains(err.Error(), "not signed in") || !strings.Contains(err.Error(), "deleted") {
+		t.Fatalf("publish err = %v, want gh's failure plus what became of the pushed branch", err)
+	}
+	run(t, live, "fetch", "-q", "--prune", "origin")
+	if exists(ctx, live, "refs/remotes/origin/learn-x") {
+		t.Error("the pushed branch was left on origin")
+	}
+}
+
+// A branch already on origin is an earlier apply's, waiting for review: the
+// worktree refuses before anything is pushed, and the branch stays.
+func TestPreexistingRemoteBranchRefusedAndKept(t *testing.T) {
+	ctx := context.Background()
+	live := clone(t)
+	run(t, live, "push", "-q", "origin", "HEAD:refs/heads/learn-x")
+	if _, err := AddWorktree(ctx, live, filepath.Join(t.TempDir(), "wt"), "learn-x"); err == nil ||
+		!strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("err = %v, want the existing-branch refusal", err)
+	}
+	run(t, live, "fetch", "-q", "--prune", "origin")
+	if !exists(ctx, live, "refs/remotes/origin/learn-x") {
+		t.Error("the pre-existing remote branch was deleted")
+	}
 }
 
 func TestNew(t *testing.T) {
@@ -262,7 +352,7 @@ func TestBranchVerdict(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(w.Dir, branch+".md"), []byte("x\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := w.Stage(ctx); err != nil {
+		if _, err := w.Stage(ctx, []string{branch + ".md"}); err != nil {
 			t.Fatal(err)
 		}
 		if err := w.Commit(ctx, branch, ""); err != nil {
@@ -287,5 +377,49 @@ func TestBranchVerdict(t *testing.T) {
 		if v, _, err := (Branch{}).Verdict(ctx, tc.p); err != nil || v != tc.want {
 			t.Errorf("%s: %s, %v; want %s", tc.p.Branch, v, err, tc.want)
 		}
+	}
+}
+
+// RuleLanded must not read a discarded proposal as merged because its short
+// text was already somewhere in the base, and must read a proposal whose
+// own commit is an ancestor of the base as landed whatever the wording
+// became.
+func TestRuleLandedAncestryAndExactBullet(t *testing.T) {
+	ctx := context.Background()
+	live := clone(t)
+	// The base holds "one" as a bullet, and the short rule text only inside
+	// a longer line.
+	if err := os.WriteFile(filepath.Join(live, "CLAUDE.md"),
+		[]byte("# rules\n\n- one\n- Run tests. Then run vet.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(t, live, "add", "-A")
+	run(t, live, "commit", "-q", "-m", "landed")
+	head := run(t, live, "rev-parse", "HEAD")
+	run(t, live, "push", "-q", "origin", "HEAD:main")
+	// A commit the owner dropped before merging: on a branch, never in main.
+	run(t, live, "checkout", "-q", "-b", "learn-x")
+	if err := os.WriteFile(filepath.Join(live, "extra.md"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(t, live, "add", "-A")
+	run(t, live, "commit", "-q", "-m", "dropped")
+	dropped := run(t, live, "rev-parse", "HEAD")
+	run(t, live, "checkout", "-q", "main")
+
+	p := Published{Repo: live, Base: "origin/main", Branch: "learn-x", Commit: dropped}
+	// A short rule whose text pre-existed in the base, inside a longer
+	// line, is not landed when its commit is absent.
+	if landed, ok := RuleLanded(ctx, p, "Run tests."); landed || !ok {
+		t.Errorf("short pre-existing text: landed=%v ok=%v, want false true", landed, ok)
+	}
+	// The exact whole bullet line still lands.
+	if landed, ok := RuleLanded(ctx, p, "one"); !landed || !ok {
+		t.Errorf("exact bullet: landed=%v ok=%v, want true true", landed, ok)
+	}
+	// An ancestor commit landed, even reworded past recognition.
+	p.Commit = head
+	if landed, ok := RuleLanded(ctx, p, "Totally reworded before merging."); !landed || !ok {
+		t.Errorf("ancestor commit: landed=%v ok=%v, want true true", landed, ok)
 	}
 }

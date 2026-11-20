@@ -22,7 +22,8 @@ import (
 )
 
 // fakeS3 is a path-style S3 over HTTP: enough of PutObject (honoring
-// If-None-Match), GetObject, HeadObject, and ListObjectsV2 for the store.
+// If-None-Match), GetObject, HeadObject, DeleteObject, and ListObjectsV2
+// for the store.
 type fakeS3 struct {
 	mu      sync.Mutex
 	objects map[string][]byte
@@ -41,18 +42,22 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodPut:
 		f.puts = append(f.puts, key)
-		if r.Header.Get("If-None-Match") != "*" {
-			http.Error(w, "test wants conditional puts only", http.StatusBadRequest)
-			return
-		}
-		if _, ok := f.objects[key]; ok {
-			w.WriteHeader(http.StatusPreconditionFailed)
-			fmt.Fprint(w, `<?xml version="1.0"?><Error><Code>PreconditionFailed</Code><Message>exists</Message></Error>`)
-			return
+		// A conditional put (If-None-Match: *) refuses an existing key; a
+		// plain put, which only the reducer-claim handoff uses, replaces it.
+		if r.Header.Get("If-None-Match") == "*" {
+			if _, ok := f.objects[key]; ok {
+				w.WriteHeader(http.StatusPreconditionFailed)
+				fmt.Fprint(w, `<?xml version="1.0"?><Error><Code>PreconditionFailed</Code><Message>exists</Message></Error>`)
+				return
+			}
 		}
 		body, _ := io.ReadAll(r.Body)
 		f.objects[key] = body
 		w.WriteHeader(http.StatusOK)
+	case r.Method == http.MethodDelete:
+		// S3 answers 204 whether or not the key held an object.
+		delete(f.objects, key)
+		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodHead:
 		data, ok := f.objects[key]
 		if !ok {

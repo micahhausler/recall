@@ -31,10 +31,18 @@ type Info struct {
 type Store interface {
 	// PutIfAbsent writes an object only if the key is empty; ErrExists otherwise.
 	PutIfAbsent(ctx context.Context, key string, r io.Reader) error
+	// Put writes an object, replacing any existing one. The reducer claim
+	// handoff (`recall learn reducer --take`) is its only caller; archives
+	// and ledger versions go through PutIfAbsent and are never overwritten.
+	Put(ctx context.Context, key string, r io.Reader) error
 	Get(ctx context.Context, key string) (io.ReadCloser, error)
 	// List returns every key under the prefix, sorted.
 	List(ctx context.Context, prefix string) ([]string, error)
 	Head(ctx context.Context, key string) (Info, error)
+	// Delete removes the object at key; a missing key is no error, so a
+	// repeated prune is safe. The reducer's host-review prune is its only
+	// caller; archives and ledger versions are never deleted.
+	Delete(ctx context.Context, key string) error
 }
 
 // Factory opens a backend from the merged store settings.
@@ -86,6 +94,17 @@ func (m *Mem) PutIfAbsent(ctx context.Context, key string, r io.Reader) error {
 	return nil
 }
 
+func (m *Mem) Put(ctx context.Context, key string, r io.Reader) error {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.objects[key] = data
+	return nil
+}
+
 func (m *Mem) Get(ctx context.Context, key string) (io.ReadCloser, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -107,6 +126,13 @@ func (m *Mem) List(ctx context.Context, prefix string) ([]string, error) {
 	}
 	sort.Strings(keys)
 	return keys, nil
+}
+
+func (m *Mem) Delete(ctx context.Context, key string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.objects, key)
+	return nil
 }
 
 func (m *Mem) Head(ctx context.Context, key string) (Info, error) {

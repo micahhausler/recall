@@ -18,9 +18,10 @@ const eventsUsage = `Usage:
   recall events [--since T] [--harness NAME] [PATH...]
 
 Prints normalized transcript events as JSONL. With no PATH, every session of
-every enabled harness on this machine. A PATH is a .jsonl transcript, a
-directory of them, or a week's .tar.zst archive. --since takes RFC 3339, a
-date, or a window like 90d or 24h.
+every enabled harness on this machine. A PATH is a transcript, a directory
+of them, or a week's .tar.zst archive. The harness whose source directory
+holds the PATH reads it, or the one --harness names. --since takes RFC 3339,
+a date, or a window like 90d or 24h.
 `
 
 func cmdEvents(args []string) int {
@@ -90,8 +91,28 @@ func cmdEvents(args []string) int {
 	return 0
 }
 
+// harnessFor picks the harness that reads path: the one whose source
+// directory holds it, else one named by a path segment (an archive key is
+// <harness>/<host>/...), else the first.
+func harnessFor(hs []harness.Harness, path string) harness.Harness {
+	abs, _ := filepath.Abs(path)
+	for _, h := range hs {
+		if rel, err := filepath.Rel(h.SourceDir(), abs); err == nil && !strings.HasPrefix(rel, "..") {
+			return h
+		}
+	}
+	for _, seg := range strings.Split(filepath.ToSlash(abs), "/") {
+		for _, h := range hs {
+			if seg == h.Name() {
+				return h
+			}
+		}
+	}
+	return hs[0]
+}
+
 func readPath(hs []harness.Harness, path, host string) ([]events.Event, error) {
-	h := hs[0]
+	h := harnessFor(hs, path)
 	st, err := os.Stat(path)
 	if err != nil {
 		return nil, err
@@ -100,8 +121,11 @@ func readPath(hs []harness.Harness, path, host string) ([]events.Event, error) {
 	case st.IsDir():
 		var all []events.Event
 		err := filepath.WalkDir(path, func(p string, d os.DirEntry, err error) error {
-			if err != nil || d.IsDir() || !strings.HasSuffix(p, ".jsonl") {
+			if err != nil || d.IsDir() {
 				return err
+			}
+			if _, ok := h.SessionID(p); !ok {
+				return nil
 			}
 			evs, err := h.ReadSessionFile(p, host)
 			if err != nil {
@@ -115,6 +139,10 @@ func readPath(hs []harness.Harness, path, host string) ([]events.Event, error) {
 		// An archived week names its host in the key path; the local host
 		// doesn't apply to a downloaded archive.
 		return harness.ReadTarZst(h, path, "")
+	case strings.HasSuffix(path, ".age"):
+		// Written by the removed client-side encryption feature; name it,
+		// never read it as something else.
+		return nil, fmt.Errorf("%s is encrypted by a feature recall removed; decrypt it with the age CLI first", path)
 	default:
 		return h.ReadSessionFile(path, host)
 	}

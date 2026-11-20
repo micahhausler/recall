@@ -2,10 +2,7 @@ package learn
 
 import (
 	"context"
-	"crypto/sha256"
 	_ "embed"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +14,7 @@ import (
 	"github.com/micahhausler/recall/internal/clock"
 	"github.com/micahhausler/recall/internal/events"
 	"github.com/micahhausler/recall/internal/model"
+	"github.com/micahhausler/recall/internal/redact"
 	"github.com/micahhausler/recall/internal/store"
 )
 
@@ -30,30 +28,101 @@ var reducePrompt string
 type Observation struct {
 	Category string `json:"category"`
 	Text     string `json:"text"`
-	Quote    string `json:"quote,omitempty"`
+	// Quote is the owner's words behind the observation, kept only when
+	// the binary found them in a prompt the owner typed; Source is then
+	// SourceOwner.
+	Quote  string `json:"quote,omitempty"`
+	Source string `json:"source,omitempty"`
+	// Origin is the session a native memory note came from, when the note
+	// says: evidence from the note and from that session counts once.
+	Origin string `json:"origin,omitempty"`
 }
 
 // RuleHit is the map step reporting an existing rule mattered in a session.
 type RuleHit struct {
-	ID     string `json:"id"`
-	Status string `json:"status"` // relevant, followed, or violated
-	Note   string `json:"note,omitempty"`
+	ID string `json:"id"`
+	// TextHash is the wording the model was shown, set by the binary, so a
+	// hit never lands on a different rule that happens to share the id.
+	TextHash string `json:"text_hash,omitempty"`
+	Status   string `json:"status"` // relevant, followed, or violated
+	Note     string `json:"note,omitempty"`
 }
 
 // SessionObservations is the cached map output for one session.
 type SessionObservations struct {
-	Fingerprint  string        `json:"fingerprint"`
-	Harness      string        `json:"harness"`
-	Host         string        `json:"host,omitempty"`
-	Session      string        `json:"session"`
-	Model        string        `json:"model"`
-	ObservedAt   string        `json:"observed_at"`
+	Fingerprint string `json:"fingerprint"`
+	Harness     string `json:"harness"`
+	Host        string `json:"host,omitempty"`
+	Session     string `json:"session"`
+	Model       string `json:"model"`
+	// ObservedAt is when the map step read the session; FirstEvent and
+	// LastEvent are when the session itself ran. Evidence and rule hits are
+	// dated by the session, so mapping an old session today is not new
+	// evidence.
+	ObservedAt string `json:"observed_at"`
+	FirstEvent string `json:"first_event,omitempty"`
+	LastEvent  string `json:"last_event,omitempty"`
+	// Scope is where the session ran.
+	Scope Scope `json:"scope,omitzero"`
+	// Prompts is how many prompts the owner typed, and Signals the
+	// session's first look-around actions, which the binary counts across
+	// sessions to find an agent rediscovering the same layout.
+	Prompts int      `json:"prompts,omitempty"`
+	Signals []Signal `json:"signals,omitempty"`
+	// Failures are the session's distinct tool failures, by tool and
+	// normalized error text, skipping expected nonzero exits; the binary
+	// counts them across sessions (learn.repeat_evidence_sessions).
+	Failures []Signal `json:"failures,omitempty"`
+	// Models are the models that answered in the session. A rule is earned
+	// against the model that needed it, and a later model may not.
+	Models       []string      `json:"models,omitempty"`
 	CostUSD      float64       `json:"cost_usd,omitempty"`
 	Observations []Observation `json:"observations"`
-	RuleHits     []RuleHit     `json:"rule_hits,omitempty"`
+	// RuleHits is set only on records written before rule hits moved to
+	// their own records (SessionHits).
+	RuleHits []RuleHit `json:"rule_hits,omitempty"`
 	// Partial is set when the model refused the whole session and only a
 	// prefix of it was observed.
 	Partial *Partial `json:"partial,omitempty"`
+}
+
+// Dated reports whether the record carries the session's own time. One
+// written before session dating doesn't, and falls back to its map time.
+func (so SessionObservations) Dated() bool { return len(so.LastEvent) >= 10 }
+
+// Day is the day (UTC) the session last ran, which dates its evidence and
+// rule hits. A record without session times answers with the day it was
+// mapped, the only date it has.
+func (so SessionObservations) Day() string {
+	if so.Dated() {
+		return so.LastEvent[:10]
+	}
+	if len(so.ObservedAt) >= 10 {
+		return so.ObservedAt[:10]
+	}
+	return ""
+}
+
+// span returns the first and last event times of a session, in UTC. Events
+// without a readable timestamp don't count.
+func span(evs []events.Event) (first, last string) {
+	var lo, hi time.Time
+	for _, e := range evs {
+		t, err := time.Parse(time.RFC3339, e.Timestamp)
+		if err != nil {
+			continue
+		}
+		if lo.IsZero() || t.Before(lo) {
+			lo = t
+		}
+		if t.After(hi) {
+			hi = t
+		}
+	}
+	if lo.IsZero() {
+		return "", ""
+	}
+	return lo.UTC().Format(time.RFC3339), hi.UTC().Format(time.RFC3339)
 }
 
 // Partial records how much of a refused session the map step could read.
@@ -64,14 +133,11 @@ type Partial struct {
 	Reason  string `json:"reason"`
 }
 
-// Fingerprint keys the cache: the rendered session, the prompt, the model,
-// and the rule ids shown. Any change re-observes; a match skips.
-func Fingerprint(rendered, mapModel string, ruleIDs []string) string {
-	h := sha256.New()
-	for _, part := range []string{rendered, mapPrompt, mapModel, strings.Join(ruleIDs, ",")} {
-		fmt.Fprintf(h, "%d:%s", len(part), part)
-	}
-	return hex.EncodeToString(h.Sum(nil))[:16]
+// Fingerprint keys the observation cache: the rendered session, the prompt,
+// and the model. Any change re-observes; a match skips. The rules aren't
+// part of it: a rule change re-judges rule hits and never re-observes.
+func Fingerprint(rendered, mapModel string) string {
+	return shortHash(rendered, mapPrompt, mapModel)
 }
 
 // Key is where one session's observations live in the store.
@@ -80,14 +146,27 @@ func Key(harness, session, fingerprint string) string {
 }
 
 // Mapper runs the map step: one cheap model call per new or changed session,
-// cached in the store.
+// cached in the store. A session read for the first time is observed and
+// judged against the rules in one call; the two results are stored apart.
 type Mapper struct {
 	Store  store.Store
 	Runner model.Runner
 	Model  string
 	Host   string
-	// Rules are the current rules shown to the model for rule hits.
+	// Rules are the current rules a session is judged against.
 	Rules []Rule
+	// Home is this machine's home directory and Locate finds the checkout
+	// that holds a directory here. Both are set only when the sessions
+	// being mapped ran on this machine; another host's paths mean nothing
+	// here.
+	Home   string
+	Locate Locator
+	// Scoping limits a repo's own rules to the sessions that ran in that
+	// repo; nil judges every session against every rule.
+	Scoping *Scoping
+	// Redact, when set (archive-chats.redact), runs observation text and
+	// quotes through the redactor before they are written to the store.
+	Redact bool
 	// mu guards Usage; one Mapper may map several sessions at once.
 	mu    sync.Mutex
 	Clock clock.Clock
@@ -96,82 +175,246 @@ type Mapper struct {
 	Usage model.Usage
 }
 
-// MapSession observes one session's events, reusing the cache when the
-// fingerprint matches. The bool reports whether the model ran.
-func (m *Mapper) MapSession(ctx context.Context, harnessName, session string, evs []events.Event) (*SessionObservations, bool, error) {
-	rendered, fp, key := m.key(harnessName, session, evs)
-	if r, err := m.Store.Get(ctx, key); err == nil {
-		defer r.Close()
-		var cached SessionObservations
-		if json.NewDecoder(r).Decode(&cached) == nil {
-			return &cached, false, nil
+// Mapped is what MapSession found or made for one session.
+type Mapped struct {
+	Observations *SessionObservations
+	// Hits is the judgment this call made; nil when no rule needed judging.
+	Hits *SessionHits
+	// Observed and Judged report which model work this call did; both are
+	// false for a session answered wholly from the cache.
+	Observed, Judged bool
+	CostUSD          float64
+}
+
+// Ran reports whether the model ran.
+func (m *Mapped) Ran() bool { return m.Observed || m.Judged }
+
+// plan is what one session needs from the model.
+type plan struct {
+	rendered, content, obsKey string
+	first, last               string
+	scope                     Scope
+	prompts                   int
+	signals                   []Signal
+	failures                  []Signal
+	models                    []string
+	cached                    *SessionObservations
+	// judge are the rules still to judge this content against.
+	judge []Rule
+	// owner is false for a session no person typed into.
+	owner bool
+}
+
+// selfPrompts open every input the loop sends through a runner; a session
+// whose first prompt starts with one is recall's own model run read back as
+// a transcript, not a session the owner typed into.
+var selfPrompts = []string{mapPrompt, hitsOnlyPrompt, reducePrompt, applyPrompt, replayPrompt}
+
+// selfAuthored reports whether the session is one of recall's own model
+// runs: its first owner prompt starts with one of recall's embedded
+// prompts, verbatim. Claude runs are unsaved and hook-guarded, but a
+// harness that saves every run, like Kiro, can leak one when the run
+// crashes before its runner learns the session's id; counting a leaked run
+// as the owner would feed the loop its own prompts as owner evidence.
+func selfAuthored(evs []events.Event) bool {
+	for _, e := range evs {
+		if e.Kind != events.UserPrompt || e.Sidechain {
+			continue
 		}
-	} else if !errors.Is(err, store.ErrNotExist) {
-		return nil, false, err
+		text := strings.TrimSpace(e.Text)
+		for _, p := range selfPrompts {
+			if strings.HasPrefix(text, strings.TrimSpace(p)) {
+				return true
+			}
+		}
+		// Only the first prompt decides: a leaked run's input is its
+		// first and only prompt, and an owner quoting a prompt later in
+		// a real session is still the owner.
+		return false
 	}
-	if !strings.Contains(rendered, "[owner] ") {
+	return false
+}
+
+func (m *Mapper) plan(ctx context.Context, harnessName, session string, evs []events.Event) (*plan, error) {
+	p := &plan{rendered: Render(evs)}
+	p.content = contentHash(p.rendered)
+	p.obsKey = Key(harnessName, session, Fingerprint(p.rendered, m.Model))
+	p.first, p.last = span(evs)
+	p.scope = scopeOf(evs, m.Home, m.Locate)
+	p.signals = signalsOf(evs, m.Home)
+	p.failures = failuresOf(evs, m.Home)
+	seenModel := map[string]bool{}
+	for _, e := range evs {
+		if e.Kind == events.UserPrompt && !e.Sidechain {
+			p.prompts++
+		}
+		// A harness writes a placeholder like <synthetic> for a turn no
+		// model produced.
+		if !e.Sidechain && e.Model != "" && !strings.HasPrefix(e.Model, "<") && !seenModel[e.Model] {
+			seenModel[e.Model] = true
+			p.models = append(p.models, e.Model)
+		}
+	}
+	p.owner = strings.Contains(p.rendered, "[owner] ") && !selfAuthored(evs)
+	cached, ok, err := getJSON[SessionObservations](ctx, m.Store, p.obsKey)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		p.cached = &cached
+	}
+	if !p.owner || len(m.Rules) == 0 {
+		return p, nil
+	}
+	day := ""
+	if len(p.last) >= 10 {
+		day = p.last[:10]
+	}
+	var rules []Rule
+	for _, r := range m.Rules {
+		if m.Scoping.Applies(r.Target, p.scope) {
+			rules = append(rules, r)
+		}
+	}
+	// candidate is what this session would be judged against had nothing
+	// been judged yet. When it is empty, no listing can add to it; when a
+	// judgment of this content against exactly these rules exists, its key
+	// is deterministic, so one Head answers the common fully-cached case
+	// without a List and a Get per prior judgment. Only a miss (rules
+	// judged piecemeal across earlier records) pays to read them all.
+	candidate := unjudged(rules, nil, day)
+	if len(candidate) == 0 {
+		return p, nil
+	}
+	if _, err := m.Store.Head(ctx, HitsKey(harnessName, session, p.content, m.Model, refs(candidate))); err == nil {
+		return p, nil
+	}
+	prior, err := priorHits(ctx, m.Store, harnessName, session, p.content, m.Model)
+	if err != nil {
+		return nil, err
+	}
+	p.judge = unjudged(rules, prior, day)
+	return p, nil
+}
+
+// MapSession observes one session's events and judges it against the rules,
+// reusing what the store already holds: observations by the session's
+// content, and rule hits by the content and the rule wordings shown.
+func (m *Mapper) MapSession(ctx context.Context, harnessName, session string, evs []events.Event) (*Mapped, error) {
+	p, err := m.plan(ctx, harnessName, session, evs)
+	if err != nil {
+		return nil, err
+	}
+	res := &Mapped{Observations: p.cached}
+	now := m.Clock.Now().UTC().Format(time.RFC3339)
+	if !p.owner {
 		// No owner prompts: a scripted run or subagent noise. Nothing to
 		// learn from a person here; cache the empty result without a call.
-		so := &SessionObservations{Fingerprint: fp, Harness: harnessName, Host: m.Host,
-			Session: session, Model: m.Model, ObservedAt: m.Clock.Now().UTC().Format(time.RFC3339)}
-		return so, false, m.put(ctx, key, so)
+		if p.cached == nil {
+			res.Observations = &SessionObservations{Fingerprint: Fingerprint(p.rendered, m.Model), Harness: harnessName,
+				Host: m.Host, Session: session, Model: m.Model, ObservedAt: now, FirstEvent: p.first, LastEvent: p.last,
+				Scope: p.scope, Prompts: p.prompts, Signals: p.signals, Failures: p.failures, Models: p.models}
+			return res, putJSON(ctx, m.Store, p.obsKey, res.Observations)
+		}
+		return res, nil
+	}
+	if p.cached != nil && len(p.judge) == 0 {
+		return res, nil
 	}
 
-	var cost float64
-	out, err := m.call(ctx, rendered, &cost)
+	observe := p.cached == nil
 	var partial *Partial
+	refused := false
+	out, err := m.call(ctx, m.input(p.rendered, observe, p.judge), &res.CostUSD)
 	if errors.Is(err, model.ErrRefusal) {
-		out, partial, err = m.salvage(ctx, evs, &cost)
+		if observe {
+			out, partial, err = m.salvage(ctx, evs, p.judge, &res.CostUSD)
+		} else {
+			// The observations are cached; record the refusal so later
+			// runs don't pay to be refused again.
+			out, refused, err = "", true, nil
+		}
 	}
 	if err != nil {
-		return nil, false, fmt.Errorf("map %s/%s: %w", harnessName, session, err)
+		return nil, fmt.Errorf("map %s/%s: %w", harnessName, session, err)
 	}
 	obs, hits := ParseObservations(out)
-	so := &SessionObservations{
-		Fingerprint: fp, Harness: harnessName, Host: m.Host, Session: session,
-		Model: m.Model, ObservedAt: m.Clock.Now().UTC().Format(time.RFC3339),
-		CostUSD:      cost,
-		Observations: obs, RuleHits: hits, Partial: partial,
+	obs = verifyQuotes(obs, evs)
+	if m.Redact {
+		// After the quote check, which needs the words as typed; the quote
+		// stays owner-typed with the token replaced.
+		for i := range obs {
+			obs[i].Text, _ = redact.String(obs[i].Text)
+			obs[i].Quote, _ = redact.String(obs[i].Quote)
+		}
 	}
-	return so, true, m.put(ctx, key, so)
+	if observe {
+		res.Observed = true
+		res.Observations = &SessionObservations{
+			Fingerprint: Fingerprint(p.rendered, m.Model), Harness: harnessName, Host: m.Host, Session: session,
+			Model: m.Model, ObservedAt: now, FirstEvent: p.first, LastEvent: p.last,
+			Scope: p.scope, Prompts: p.prompts, Signals: p.signals, Failures: p.failures, Models: p.models,
+			CostUSD: res.CostUSD, Observations: obs, Partial: partial,
+		}
+		if err := putJSON(ctx, m.Store, p.obsKey, res.Observations); err != nil {
+			return nil, err
+		}
+	}
+	if len(p.judge) > 0 {
+		shown := refs(p.judge)
+		res.Judged = true
+		res.Hits = &SessionHits{
+			Harness: harnessName, Host: m.Host, Session: session, Content: p.content, Prompt: hitsPromptHash(),
+			Model: m.Model, JudgedAt: now, FirstEvent: p.first, LastEvent: p.last,
+			Rules: shown, Hits: known(hits, p.judge), Partial: partial, Refused: refused,
+		}
+		if !observe {
+			res.Hits.CostUSD = res.CostUSD
+		}
+		key := HitsKey(harnessName, session, p.content, m.Model, shown)
+		res.Hits.Fingerprint = strings.TrimSuffix(strings.TrimPrefix(key, hitsPrefix(harnessName, session)), ".json")
+		if err := putJSON(ctx, m.Store, key, res.Hits); err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
 }
 
-func (m *Mapper) key(harnessName, session string, evs []events.Event) (rendered, fp, key string) {
-	rendered = Render(evs)
-	ids := make([]string, len(m.Rules))
-	for i, r := range m.Rules {
-		ids[i] = r.ID
+// WouldCall reports whether mapping the session would call the model, and
+// for what: to observe it, to judge it against rules, or both.
+func (m *Mapper) WouldCall(ctx context.Context, harnessName, session string, evs []events.Event) (observe, judge bool, err error) {
+	p, err := m.plan(ctx, harnessName, session, evs)
+	if err != nil || !p.owner {
+		return false, false, err
 	}
-	fp = Fingerprint(rendered, m.Model, ids)
-	return rendered, fp, Key(harnessName, session, fp)
+	return p.cached == nil, len(p.judge) > 0, nil
 }
 
-// WouldCall reports whether mapping the session would call the model: it
-// has owner prompts and no cached observations for its current content.
-func (m *Mapper) WouldCall(ctx context.Context, harnessName, session string, evs []events.Event) (bool, error) {
-	rendered, _, key := m.key(harnessName, session, evs)
-	if !strings.Contains(rendered, "[owner] ") {
-		return false, nil
+// input builds one model input: the session, with the prompt for
+// observations, rule hits, or both, and the rules to judge it against.
+func (m *Mapper) input(rendered string, observe bool, judge []Rule) string {
+	var b strings.Builder
+	switch {
+	case observe && len(judge) > 0:
+		b.WriteString(mapPrompt + "\n\n" + hitsPrompt)
+	case observe:
+		b.WriteString(mapPrompt)
+	default:
+		b.WriteString(hitsOnlyPrompt + "\n\n" + hitsPrompt)
 	}
-	_, err := m.Store.Head(ctx, key)
-	if errors.Is(err, store.ErrNotExist) {
-		return true, nil
-	}
-	return false, err
-}
-
-// call runs the map model over one rendered session, adding to the usage
-// and to the session's cost.
-func (m *Mapper) call(ctx context.Context, rendered string, cost *float64) (string, error) {
-	input := mapPrompt + "\n\n# SESSION\n\n" + rendered
-	if len(m.Rules) > 0 {
-		var b strings.Builder
+	b.WriteString("\n\n# SESSION\n\n" + rendered)
+	if len(judge) > 0 {
 		b.WriteString("\n\n# CURRENT RULES\n\n")
-		for _, r := range m.Rules {
+		for _, r := range judge {
 			fmt.Fprintf(&b, "Rule[%s]: %s\n", r.ID, r.Text)
 		}
-		input += b.String()
 	}
+	return b.String()
+}
+
+// call runs the map model over one input, adding to the usage and to the
+// session's cost.
+func (m *Mapper) call(ctx context.Context, input string, cost *float64) (string, error) {
 	out, usage, err := m.Runner.Run(ctx, m.Model, input)
 	m.mu.Lock()
 	m.Usage = m.Usage.Add(usage)
@@ -186,7 +429,7 @@ func (m *Mapper) call(ctx context.Context, rendered string, cost *float64) (stri
 // one, then binary-searches down. A session with nothing salvageable is
 // still cached, so later runs don't pay to be refused again; a new map
 // model changes the fingerprint and retries it.
-func (m *Mapper) salvage(ctx context.Context, evs []events.Event, cost *float64) (string, *Partial, error) {
+func (m *Mapper) salvage(ctx context.Context, evs []events.Event, judge []Rule, cost *float64) (string, *Partial, error) {
 	var prompts []int // index in evs of each owner prompt
 	firstRefusal := len(evs)
 	for i, e := range evs {
@@ -218,7 +461,7 @@ func (m *Mapper) salvage(ctx context.Context, evs []events.Event, cost *float64)
 	}
 	best, bestOut := 0, ""
 	try := func(k int) (bool, error) {
-		out, err := m.call(ctx, Render(prefix(k)), cost)
+		out, err := m.call(ctx, m.input(Render(prefix(k)), true, judge), cost)
 		if errors.Is(err, model.ErrRefusal) {
 			return false, nil
 		}
@@ -252,18 +495,6 @@ func (m *Mapper) salvage(ctx context.Context, evs []events.Event, cost *float64)
 		}
 	}
 	return bestOut, &Partial{Prompts: best, Of: total, Reason: "refusal"}, nil
-}
-
-func (m *Mapper) put(ctx context.Context, key string, so *SessionObservations) error {
-	data, err := json.MarshalIndent(so, "", "  ")
-	if err != nil {
-		return err
-	}
-	err = m.Store.PutIfAbsent(ctx, key, strings.NewReader(string(data)))
-	if errors.Is(err, store.ErrExists) {
-		return nil // a concurrent run won; same fingerprint, same content
-	}
-	return err
 }
 
 // Categories the map prompt allows; anything else is discarded at parse time.
@@ -314,26 +545,29 @@ func ListObservations(ctx context.Context, st store.Store, harnessName string) (
 		return nil, err
 	}
 	// A changed session leaves its old fingerprint behind (the store never
-	// deletes), so keep only the newest observation per session.
+	// deletes), so keep only the newest observation per host and session.
+	// The host is part of the key because native memory notes reuse one
+	// session key ("memory:<project>/<name>") on every machine, and one
+	// machine's note must not shadow another's. Records written before
+	// this change already carry their host, so they dedupe the same way;
+	// an old record another host's note had shadowed simply reappears.
 	newest := map[string]SessionObservations{}
 	var order []string
 	for _, key := range keys {
-		r, err := st.Get(ctx, key)
+		so, ok, err := getJSON[SessionObservations](ctx, st, key)
 		if err != nil {
 			return nil, err
 		}
-		var so SessionObservations
-		err = json.NewDecoder(r).Decode(&so)
-		r.Close()
-		if err != nil {
+		if !ok {
 			continue // a torn or foreign object; skip, don't fail the window
 		}
-		prev, seen := newest[so.Session]
+		id := so.Host + "\x00" + so.Session
+		prev, seen := newest[id]
 		if !seen {
-			order = append(order, so.Session)
+			order = append(order, id)
 		}
 		if !seen || so.ObservedAt > prev.ObservedAt {
-			newest[so.Session] = so
+			newest[id] = so
 		}
 	}
 	out := make([]SessionObservations, 0, len(order))

@@ -47,8 +47,12 @@ type Event struct {
 	Role      string `json:"role,omitempty"`
 	Text      string `json:"text,omitempty"`
 	Tool      string `json:"tool,omitempty"`
-	OK        *bool  `json:"ok,omitempty"`
-	Skill     string `json:"skill,omitempty"`
+	// Input is a short summary of a tool call's input, such as a shell
+	// command or a file path, with secret-shaped tokens redacted. A tool
+	// result carries the input of the call it answers.
+	Input string `json:"input,omitempty"`
+	OK    *bool  `json:"ok,omitempty"`
+	Skill string `json:"skill,omitempty"`
 	// SkillDir is the directory the harness loaded a slash-invoked skill
 	// from, when the transcript records it.
 	SkillDir  string `json:"skill_dir,omitempty"`

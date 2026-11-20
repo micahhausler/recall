@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func write(t *testing.T, path, text string) string {
@@ -63,8 +64,10 @@ func TestLintFindsStaleMentions(t *testing.T) {
 		"`/help` is a builtin.",                     // no finding
 		"Keep `one sentence per line` in Markdown.", // prose: never checked
 		"Globs like `~/notes/*.md` are skipped.",
-		"Run `go test ./...` before pushing.", // plain word command: skipped
-		"Write scratch files under `/tmp`.",   // a path that exists, not a skill
+		"Run `go test ./...` before pushing.",    // plain word command: skipped
+		"Write scratch files under `/tmp`.",      // a path that exists, not a skill
+		"Pass `-p PackageName -p Other` to it.",  // a flag, not a command
+		"Run from `/path/to/workspace/src/pkg`.", // the docs placeholder
 	}, "\n")+"\n")
 	got := run(t, linter(t, home, "chat-archive"), main)
 	want := []string{
@@ -136,5 +139,68 @@ func TestLintIgnoredPaths(t *testing.T) {
 	l.Ignore = map[string]bool{filepath.Join(dir, "home.md"): true}
 	if got := run(t, l, main); len(got) != 1 || !strings.Contains(got[0], "gone.md") {
 		t.Errorf("findings = %v, want only gone.md", got)
+	}
+}
+
+// AGENTS.md points at more context with Markdown links, not @imports.
+func TestLintFollowsMarkdownLinks(t *testing.T) {
+	home := t.TempDir()
+	write(t, filepath.Join(home, "docs", "build.md"), "Read `~/gone.md` first.\n")
+	write(t, filepath.Join(home, "notes.txt"), "x")
+	agents := write(t, filepath.Join(home, "AGENTS.md"), strings.Join([]string{
+		"See [the build guide](docs/build.md#steps) and [notes](notes.txt \"Notes\").", // followed; exists
+		"See [old](docs/old.md).",                               // finding
+		"See [site](https://example.com/x.md) and [top](#top).", // not local: skipped
+		"Not a link: `[x](missing.md)`.",                        // backticked: skipped
+	}, "\n"))
+	got := run(t, linter(t, home), agents)
+	want := []string{
+		agents + ":2: link docs/old.md: " + filepath.Join(home, "docs", "old.md") + " doesn't exist",
+		filepath.Join(home, "docs", "build.md") + ":1: path ~/gone.md doesn't exist",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("findings =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestLintMemory(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, "memory")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, text string) string {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	index := write("MEMORY.md", "- [Listed](listed.md) — fine\n- [Gone](gone.md) — deleted since\n")
+	listed := write("listed.md", "Run `~/bin/missing-script` first.\n")
+	unlisted := write("unlisted.md", "Nothing stale in here.\n")
+	now := time.Date(2026, 11, 11, 0, 0, 0, 0, time.UTC)
+	notes := []Note{
+		{Path: listed, Index: index, Modified: now.AddDate(0, 0, -10)},
+		{Path: unlisted, Index: index, Modified: now.AddDate(0, 0, -200)},
+	}
+	l := &Linter{Home: home, LookPath: func(string) (string, error) { return "", os.ErrNotExist }}
+	findings, err := l.Memory(notes, 90, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, f := range findings {
+		got = append(got, filepath.Base(f.File)+": "+f.Message)
+	}
+	want := []string{
+		"listed.md: path ~/bin/missing-script doesn't exist",
+		"MEMORY.md: index points at gone.md, which doesn't exist",
+		"unlisted.md: not listed in MEMORY.md, so the harness never loads it",
+		"unlisted.md: last changed 200 days ago; nothing has kept it current",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("findings:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }

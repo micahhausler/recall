@@ -41,10 +41,15 @@ type Linter struct {
 
 var backtickRE = regexp.MustCompile("`([^`\n]+)`")
 var importRE = regexp.MustCompile(`^@(\S+)$`)
+
+// linkRE is a Markdown link, [text](target) with an optional "title".
+var linkRE = regexp.MustCompile(`\[[^\]\n]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)`)
 var slashRE = regexp.MustCompile(`^/[a-z0-9][a-z0-9-]*$`)
 var commandishRE = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
 
-// Run lints the files and every @import they pull in, depth first.
+// Run lints the files and every file they pull in, depth first: @imports,
+// the CLAUDE.md way, and links to local Markdown files, the way AGENTS.md
+// and Kiro steering files point at more context.
 func (l *Linter) Run(files []string) ([]Finding, error) {
 	if l.LookPath == nil {
 		l.LookPath = exec.LookPath
@@ -87,6 +92,19 @@ func (l *Linter) Run(files []string) ([]Finding, error) {
 				continue
 			}
 			findings = append(findings, l.lintLine(abs, n, line)...)
+			for _, m := range linkRE.FindAllStringSubmatch(backtickRE.ReplaceAllString(line, ""), -1) {
+				target, ok := l.linkTarget(abs, m[1])
+				if !ok {
+					continue
+				}
+				if _, err := os.Stat(target); err != nil {
+					if !l.Ignore[target] {
+						findings = append(findings, Finding{abs, n, fmt.Sprintf("link %s: %s doesn't exist", m[1], target)})
+					}
+				} else if strings.HasSuffix(target, ".md") {
+					imports = append(imports, target)
+				}
+			}
 		}
 		if err := sc.Err(); err != nil {
 			return err
@@ -104,6 +122,20 @@ func (l *Linter) Run(files []string) ([]Finding, error) {
 		}
 	}
 	return findings, nil
+}
+
+// linkTarget resolves a Markdown link to a local file, relative to the
+// linking file; ok is false for URLs, anchors, and placeholders.
+func (l *Linter) linkTarget(file, link string) (string, bool) {
+	link, _, _ = strings.Cut(link, "#")
+	if link == "" || strings.Contains(link, ":") || strings.ContainsAny(link, "<>*?$") {
+		return "", false
+	}
+	target := l.expand(link)
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(file), target)
+	}
+	return target, true
 }
 
 func (l *Linter) lintLine(file string, n int, line string) []Finding {
@@ -138,6 +170,9 @@ func (l *Linter) check(token string) string {
 	}
 	first, _, hasArgs := strings.Cut(token, " ")
 	// `~/path` or `/path`, alone or as a command's first word.
+	if strings.HasPrefix(first, "/path/to/") {
+		return "" // the docs placeholder, not a path
+	}
 	if strings.HasPrefix(first, "~/") || strings.HasPrefix(first, "/") || strings.HasPrefix(first, "$HOME/") {
 		p := l.expand(first)
 		if !strings.HasPrefix(p, "/") {
@@ -150,7 +185,7 @@ func (l *Linter) check(token string) string {
 	}
 	// A command's first word, only when it looks script-like (a hyphen, so
 	// plain words in prose never match), e.g. `jobs-sync --check`.
-	if hasArgs && strings.Contains(first, "-") && commandishRE.MatchString(first) && !strings.Contains(first, "/") {
+	if hasArgs && strings.Contains(first, "-") && !strings.HasPrefix(first, "-") && commandishRE.MatchString(first) && !strings.Contains(first, "/") {
 		if _, err := l.LookPath(first); err != nil {
 			return fmt.Sprintf("command %s not on PATH", first)
 		}

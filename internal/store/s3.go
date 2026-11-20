@@ -124,6 +124,21 @@ func (s *S3Store) PutIfAbsent(ctx context.Context, key string, r io.Reader) erro
 	return err
 }
 
+// Put replaces the object at key: the same upload without the absence
+// condition.
+func (s *S3Store) Put(ctx context.Context, key string, r io.Reader) error {
+	body, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+	_, err = s.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+		Body:   bytes.NewReader(body),
+	})
+	return err
+}
+
 func (s *S3Store) Get(ctx context.Context, key string) (io.ReadCloser, error) {
 	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.bucket),
@@ -155,6 +170,15 @@ func (s *S3Store) List(ctx context.Context, prefix string) ([]string, error) {
 		}
 	}
 	return keys, nil
+}
+
+// Delete removes the object at key; S3 reports success for a missing one.
+func (s *S3Store) Delete(ctx context.Context, key string) error {
+	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	})
+	return err
 }
 
 func (s *S3Store) Head(ctx context.Context, key string) (Info, error) {

@@ -10,16 +10,22 @@ Your input, after this prompt, has these sections:
 - OWNER INSTRUCTIONS, when present: the owner's own guidance for this step; follow it where it doesn't conflict with the rules below.
 - PROPOSALS: `### <kind>: <title>` blocks from the reduce, each with a rule, evidence, and a reason.
   The binary has already checked each one and added `- edit:` lines naming the exact worktree paths it may change.
+- DISPLACED RULES, when present: the text of each rule a proposal's `- displaces:` line names.
 
 Apply each proposal by kind:
 
 - **add**: add the rule to its target file, in the section where it fits.
   If an existing bullet already says most of it, reword that bullet instead of adding a near-duplicate.
+  When the proposal has a `- displaces:` line, also remove that rule from the same file: the file is at its budget, and the new rule takes the old one's place.
+  DISPLACED RULES, at the end of your input, gives the text of each rule a proposal displaces.
 - **reword**: replace the existing rule with the proposed text.
 - **retire**: remove the rule.
 - **skill**: create or change the skill file at its `- edit:` path, with `name` and `description` frontmatter.
 - **graduate**: write the sketched script at its `- script:` path, starting with a shebang, and replace the prose rule it retires, in whichever target holds it, with a one-line pointer to the script.
   The binary makes the script executable after you finish.
+  A graduate with an `- enforced:` line is enforced by the harness, not remembered by the agent: remove the prose rule and leave no pointer.
+  For a hook, write the script so it reads the hook's JSON from stdin and exits 2 with the reason on stderr to block a call, and exits 0 otherwise.
+  Never edit a settings file yourself; the binary adds the hook or the permission rule.
 
 Rules:
 

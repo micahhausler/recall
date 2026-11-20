@@ -8,12 +8,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/micahhausler/recall/internal/archive"
 	"github.com/micahhausler/recall/internal/events"
+	"github.com/micahhausler/recall/internal/evidence"
 	"github.com/micahhausler/recall/internal/extension"
 	"github.com/micahhausler/recall/internal/harness"
 	"github.com/micahhausler/recall/internal/learn"
@@ -23,42 +27,74 @@ import (
 )
 
 const learnUsage = `Usage:
-  recall learn map [--since 30d|all] [--limit N] [--archives] [--dry-run]
+  recall learn map [--since 30d|all] [--limit N] [--idle 6h] [--archives] [--dry-run]
         observe new or changed sessions with the map model; cached in the store.
-        --archives also maps other hosts' archived weeks; by default each
-        host maps its own sessions and the reduce reads every host's
+        --idle skips a session active more recently than that, so one still
+        going isn't mapped now and again when it grows.
+        --archives also maps archived weeks from the store: other hosts'
+        sessions, and this host's own that are no longer on disk; a session
+        still on disk is read from disk. By default each host maps its own
+        sessions and the reduce reads every host's
   recall learn observations [--harness claude]
         print the cached observations as JSONL
+  recall learn candidates
+        list the lessons the window's sessions showed, as the reduce will
+        read them: alike observations grouped and counted, no model call
   recall learn rules sync
-        reconcile the rule ledger with the bullets in learn.targets
+        reconcile the rule ledger with the bullets in learn.targets and in the
+        context files of each learn.repos checkout
+  recall learn targets
+        list every context file a proposal may land in, and its scope
   recall learn age
-        report rules the ledger says to reword or retire; exit 1 if any
-  recall learn reduce [--out DIR] [--dry-run]
-        fold the window's observations and the ledger into proposals for review
+        report rules the ledger says to reword or retire; exit 1 if any.
+        Also lists, as "check", rules earned on a model no recent session
+        runs, which the current model may follow unprompted
+  recall learn reduce [--out DIR] [--window all] [--dry-run] [--force]
+        fold the window's observations and the ledger into proposals for
+        review. The window is learn.window_days (default learn.retire_days);
+        --window all is a one-off that reads every observation without
+        changing retirement, which always uses learn.retire_days.
+        On a machine that isn't the store's reducer the reduce refuses,
+        since only the reducer assigns rule ids; --force runs it anyway,
+        saving locally and leaving the store ledger unwritten
   recall learn apply [--from DIR] [--dry-run]
         stage a reduce run's proposals (default: the newest) as edits in fresh
         worktrees, one per repo they touch, and send each changed repo to
-        review (learn.review: a pull request, or a local branch)
-  recall learn run [--out DIR]
+        review (learn.review: a pull request or a local branch), one commit
+        per proposal so a reviewer can drop one before merging
+  recall learn run [--out DIR] [--force]
         rules sync, reduce, then apply: the scheduled form of the loop
+  recall learn reducer [--take]
+        say which host runs the reduce on this store; --take moves the
+        claim to this host, for when that machine is retired, reimaged,
+        or renamed
   recall learn reviews
         check what became of applied proposals (merged, closed, pending) and
         list them; the reduce and apply do the same check first
 
 The map, reduce, and apply steps call a model through the harness CLI
-(learn.runner, default claude -p); --dry-run builds and prints what would be
+(learn.runner, claude or kiro); --dry-run builds and prints what would be
 sent instead. Nothing is written to a live file: apply edits worktrees, and
 every change waits for your review.
 `
 
+// mapWindowDays is the default map window: `recall learn map --since`
+// covers this many days unless told otherwise, `recall init` prints it,
+// and the hook worker's first run maps back over it.
+const mapWindowDays = 30
+
 func cmdLearn(args []string) int {
 	fs := flag.NewFlagSet("learn", flag.ContinueOnError)
-	since := fs.String("since", "30d", "map: only sessions with events in this window")
+	since := fs.String("since", fmt.Sprintf("%dd", mapWindowDays), "map: only sessions with events in this window")
 	limit := fs.Int("limit", 0, "map: at most this many sessions, newest first")
 	fromArchives := fs.Bool("archives", false, "map: also map other hosts' archived sessions from the store (downloads their weeks)")
+	idle := fs.Duration("idle", 0, "map: skip a session whose transcript changed more recently than this")
 	outDir := fs.String("out", "", "reduce, run: where proposals land (default ~/.local/state/recall/learn/<date>)")
+	window := fs.String("window", "", "reduce: \"all\" reads every observation; retirement still uses learn.retire_days")
 	from := fs.String("from", "", "apply: the reduce run to apply (default the newest under ~/.local/state/recall/learn)")
 	dryRun := fs.Bool("dry-run", false, "build model inputs and report; call no model")
+	force := fs.Bool("force", false, "reduce, run: run on a machine that isn't the store's reducer; the store ledger stays unwritten")
+	take := fs.Bool("take", false, "reducer: move the store's reduce claim to this host")
 	harnessName := fs.String("harness", "claude", "observations: which harness")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, learnUsage) }
 	cmd := ""
@@ -78,48 +114,228 @@ func cmdLearn(args []string) int {
 		return fail(err)
 	}
 	ctx := context.Background()
-	runner := &model.CLI{Command: env.settings.Learn.Runner}
+	runner, err := env.newRunner()
+	if err != nil {
+		return fail(err)
+	}
 
 	switch cmd {
 	case "map":
-		return learnMap(ctx, env, runner, *since, *limit, *dryRun, *fromArchives)
+		return learnMap(ctx, env, runner, *since, *limit, *dryRun, *fromArchives, *idle, nil)
 	case "observations":
 		return learnObservations(ctx, env, *harnessName)
+	case "candidates":
+		return learnCandidates(ctx, env)
 	case "rules-sync":
-		return learnRulesSync(env)
+		return learnRulesSync(ctx, env)
+	case "targets":
+		return learnTargets(ctx, env)
 	case "age":
 		return learnAge(env)
 	case "reduce":
-		return learnReduce(ctx, env, runner, *outDir, *dryRun)
+		allWindow := false
+		switch *window {
+		case "":
+		case "all":
+			allWindow = true
+		default:
+			fmt.Fprintf(os.Stderr, "recall: learn reduce --window takes only \"all\"; for a fixed wider window, set learn.window_days\n")
+			return 2
+		}
+		return learnReduce(ctx, env, runner, *outDir, *dryRun, allWindow, *force)
 	case "apply":
 		return learnApply(ctx, env, *from, *dryRun)
 	case "reviews":
 		return learnReviews(ctx, env)
+	case "reducer":
+		return learnReducer(ctx, env, *take)
 	case "run":
 		if *dryRun {
 			fmt.Fprintln(os.Stderr, "recall: learn run has no --dry-run; use learn reduce --dry-run, then learn apply --dry-run")
 			return 2
 		}
-		return learnRun(ctx, env, runner, *outDir)
+		code, _ := learnRun(ctx, env, runner, *outDir, *force)
+		return code
 	default:
 		fmt.Fprint(os.Stderr, learnUsage)
 		return 2
 	}
 }
 
-func loadLedgerAndHits(ctx context.Context, env *archiveEnv, st store.Store) (*learn.Ledger, error) {
-	ledger, err := learn.LoadLedger(env.settings.Learn.Ledger)
+// loadRepos finds the context files of each learn.repos checkout. An entry
+// that isn't a git checkout is an error, not a skip: a typo here would
+// silently send a repo's lessons to the global files.
+func loadRepos(ctx context.Context, env *archiveEnv) ([]learn.Repo, error) {
+	var repos []learn.Repo
+	seen := map[string]bool{}
+	for _, path := range env.settings.Learn.Repos {
+		root, ok := review.RepoRoot(ctx, path)
+		if !ok {
+			return nil, fmt.Errorf("learn.repos: %s isn't in a git checkout", tilde(path, env.home))
+		}
+		if seen[root] {
+			continue
+		}
+		seen[root] = true
+		repo, err := learn.DiscoverRepo(root)
+		if err != nil {
+			return nil, fmt.Errorf("learn.repos: %s: %w", tilde(path, env.home), err)
+		}
+		repos = append(repos, repo)
+	}
+	return repos, nil
+}
+
+// evidenceRepos are the repositories an evidence source scans: the origins
+// of the learn.repos checkouts, the only repos the loop may read.
+func evidenceRepos(repos []learn.Repo) []string {
+	var slugs []string
+	for _, r := range repos {
+		if r.Remote != "" {
+			slugs = append(slugs, r.Remote)
+		}
+	}
+	return slugs
+}
+
+// ledgerTargets are the files whose bullets are rules: the global targets
+// and every existing context file of the listed repos.
+func ledgerTargets(env *archiveEnv, repos []learn.Repo) []string {
+	targets := append([]string{}, env.settings.Learn.Targets...)
+	for _, repo := range repos {
+		targets = append(targets, repo.Paths()...)
+	}
+	return targets
+}
+
+func learnTargets(ctx context.Context, env *archiveEnv) int {
+	repos, err := loadRepos(ctx, env)
+	if err != nil {
+		return fail(err)
+	}
+	for _, t := range env.settings.Learn.Targets {
+		fmt.Printf("global  %s\n", tilde(t, env.home))
+	}
+	for _, repo := range repos {
+		kind := "repo  "
+		name := repo.Remote
+		if name == "" {
+			name = tilde(repo.Root, env.home)
+		}
+		for _, f := range repo.Files {
+			note := ""
+			switch {
+			case f.New:
+				note = "  (doesn't exist yet)"
+			case len(f.Globs) > 0:
+				note = "  (paths: " + fmt.Sprint(f.Globs) + ")"
+			}
+			fmt.Printf("%s  %s%s  [%s]\n", kind, tilde(f.Path, env.home), note, name)
+		}
+	}
+	return 0
+}
+
+// syncedLedger loads the rule ledger against the store's newest version
+// (docs/learning.md): on the reducer the local file is authoritative and is
+// restored from the store when it is gone; on every other host it is a cache
+// of the store's copy, so the rule ids this host shows the model are the
+// reducer's.
+//
+// strict says a failure folding other hosts' review objects fails the run.
+// The reduce and apply paths set it: both hold a proposal back when a
+// pending review matches it, so a review missed there re-proposes or
+// re-publishes a change that is still open for review. Map, rules sync,
+// age, and reviews only read rules or refresh verdicts, so there a
+// transient store error is a warning and the sync keeps what it read.
+func syncedLedger(ctx context.Context, env *archiveEnv, st store.Store, strict bool) (*learn.Ledger, error) {
+	reducer, err := storeReducer(ctx, st)
 	if err != nil {
 		return nil, err
 	}
-	for _, h := range env.harnesses {
-		window, err := learn.ListObservations(ctx, st, h.Name())
-		if err != nil {
-			return nil, err
-		}
-		ledger.ApplyHits(window)
+	return learn.SyncLedger(ctx, st, env.settings.Learn.Ledger, env.settings.Host, reducer, strict, os.Stderr)
+}
+
+// publishStoreLedger writes the ledger to the store as its newest version,
+// after a reduce or apply. Only the reducer writes one; a store nobody has
+// claimed is claimed first, since the host running the reduce is its
+// reducer. On any other host (a forced run), the reviews this run recorded
+// go to a per-host store object instead, which the reducer folds into the
+// shared ledger at its next sync. Failing to publish is a warning, never a
+// failed run: the local ledger holds the result, and the next reduce
+// publishes it.
+func publishStoreLedger(ctx context.Context, env *archiveEnv, st store.Store, ledger *learn.Ledger) {
+	warn := func(err error) {
+		fmt.Fprintf(os.Stderr, "recall: warning: publishing the rule ledger to the store: %v\n", err)
 	}
-	return ledger, nil
+	host := env.settings.Host
+	claim, err := storeReducer(ctx, st)
+	if err != nil {
+		warn(err)
+		return
+	}
+	if claim == "" {
+		if err := claimReducer(ctx, st, host); err != nil {
+			warn(err)
+			return
+		}
+		if claim, err = storeReducer(ctx, st); err != nil {
+			warn(err)
+			return
+		}
+	}
+	if claim != host {
+		note := "it recorded no review the store ledger lacks"
+		if key, perr := learn.PutHostReviews(ctx, st, host, ledger, env.clk.Now()); perr != nil {
+			note = fmt.Sprintf("writing this run's reviews for the reducer failed (%v); they stay on this host's local ledger until a later run writes them", perr)
+		} else if key != "" {
+			note = fmt.Sprintf("reviews recorded by this run were written to %s, and the reducer folds them into the shared ledger at its next sync", key)
+		}
+		fmt.Fprintf(os.Stderr, "recall: note: %s is this store's reducer and this machine is %s, so this host didn't write the store ledger; %s; "+
+			"if %s is gone, `recall learn reducer --take` moves the claim here\n", claim, host, note, claim)
+		return
+	}
+	if _, err := learn.PutStoreLedger(ctx, st, ledger, env.clk.Now()); err != nil {
+		warn(err)
+	}
+}
+
+// loadLedgerAndHits loads the synced ledger with every harness's rule hits
+// applied, and returns the observations it read alongside it.
+func loadLedgerAndHits(ctx context.Context, env *archiveEnv, st store.Store, strict bool) (*learn.Ledger, []learn.SessionObservations, error) {
+	ledger, err := syncedLedger(ctx, env, st, strict)
+	if err != nil {
+		return nil, nil, err
+	}
+	undated := 0
+	// One ApplyHits call over every harness's hits: it recomputes each
+	// rule's dates from all hits for the rule, so a partial batch would
+	// drop the other harnesses' dates.
+	var window []learn.SessionObservations
+	var judged []learn.SessionHits
+	for _, h := range env.harnesses {
+		w, err := learn.ListObservations(ctx, st, h.Name())
+		if err != nil {
+			return nil, nil, err
+		}
+		window = append(window, w...)
+		j, err := learn.ListHits(ctx, st, h.Name())
+		if err != nil {
+			return nil, nil, err
+		}
+		judged = append(judged, j...)
+	}
+	ledger.ApplyHits(window, judged)
+	for _, so := range window {
+		if !so.Dated() {
+			undated++
+		}
+	}
+	if undated > 0 {
+		fmt.Fprintf(os.Stderr, "recall: warning: %d session(s) were mapped before observations carried the session's own time, "+
+			"so their evidence is dated by the day they were mapped; `recall learn map --since all` reads them again\n", undated)
+	}
+	return ledger, window, nil
 }
 
 // mapJob is one session waiting for the map step.
@@ -135,9 +351,11 @@ type mapJob struct {
 // mapRun is one learn map pass: the counts it reports and the failure
 // streak that stops it. Workers share it under mu.
 type mapRun struct {
-	mu                                               sync.Mutex
-	mapped, cached, skipped, failed, partial, streak int
-	cancel                                           context.CancelFunc
+	mu sync.Mutex
+	// mapped sessions were observed; judged ones were only judged against
+	// rules, their observations already cached.
+	mapped, judged, cached, skipped, failed, partial, streak int
+	cancel                                                   context.CancelFunc
 }
 
 // inWindow reports whether any of a session's events fall at or after
@@ -151,6 +369,36 @@ func inWindow(evs []events.Event, cutoff string) bool {
 	return false
 }
 
+// datedEvents reports whether any of a session's events carries a
+// timestamp; a session with none can't be placed in a bounded window.
+func datedEvents(evs []events.Event) bool {
+	for _, e := range evs {
+		if e.Timestamp != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// takeSession says whether the map reads a session. One in the window is
+// read. One whose events carry no timestamps falls out of every window,
+// even --since all, if judged by timestamp alone; so an unbounded window
+// (all) takes it, and it maps as undated, while a bounded window skips and
+// counts it for the caller's one warning.
+func takeSession(evs []events.Event, cutoff string, all bool, undatedSkipped *int) bool {
+	if inWindow(evs, cutoff) {
+		return true
+	}
+	if datedEvents(evs) {
+		return false
+	}
+	if all {
+		return true
+	}
+	*undatedSkipped++
+	return false
+}
+
 func newJob(m *learn.Mapper, harnessName, session string, evs []events.Event) mapJob {
 	return mapJob{m: m, harness: harnessName, session: session, evs: evs,
 		label: harnessName + "/" + session + " @" + m.Host}
@@ -158,14 +406,17 @@ func newJob(m *learn.Mapper, harnessName, session string, evs []events.Event) ma
 
 // dryRun reports what mapping the job would do, without a model call.
 func (r *mapRun) dryRun(ctx context.Context, j mapJob) {
-	call, err := j.m.WouldCall(ctx, j.harness, j.session, j.evs)
+	observe, judge, err := j.m.WouldCall(ctx, j.harness, j.session, j.evs)
 	switch {
 	case err != nil:
 		fmt.Fprintf(os.Stderr, "recall: %s: %v (skipped)\n", j.label, err)
 		r.skipped++
-	case call:
+	case observe:
 		fmt.Printf("would map %s (%d events)\n", j.label, len(j.evs))
 		r.mapped++
+	case judge:
+		fmt.Printf("would judge %s against rules it hasn't seen (%d events)\n", j.label, len(j.evs))
+		r.judged++
 	default:
 		r.cached++
 	}
@@ -173,7 +424,7 @@ func (r *mapRun) dryRun(ctx context.Context, j mapJob) {
 
 // work maps one job and records the result.
 func (r *mapRun) work(ctx context.Context, j mapJob) {
-	so, ran, err := j.m.MapSession(ctx, j.harness, j.session, j.evs)
+	res, err := j.m.MapSession(ctx, j.harness, j.session, j.evs)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err != nil {
@@ -193,18 +444,26 @@ func (r *mapRun) work(ctx context.Context, j mapJob) {
 		return
 	}
 	r.streak = 0
-	if !ran {
+	hits := 0
+	if res.Hits != nil {
+		hits = len(res.Hits.Hits)
+	}
+	switch {
+	case res.Observed:
+		r.mapped++
+		note := ""
+		if p := res.Observations.Partial; p != nil {
+			note = fmt.Sprintf("; %s: read the first %d of %d prompts", p.Reason, p.Prompts, p.Of)
+			r.partial++
+		}
+		fmt.Printf("observed %s: %d observation(s), %d rule hit(s) ($%.4f%s)\n",
+			j.label, len(res.Observations.Observations), hits, res.CostUSD, note)
+	case res.Judged:
+		r.judged++
+		fmt.Printf("judged %s: %d rule hit(s) ($%.4f)\n", j.label, hits, res.CostUSD)
+	default:
 		r.cached++
-		return
 	}
-	r.mapped++
-	note := ""
-	if p := so.Partial; p != nil {
-		note = fmt.Sprintf("; %s: read the first %d of %d prompts", p.Reason, p.Prompts, p.Of)
-		r.partial++
-	}
-	fmt.Printf("observed %s: %d observation(s), %d rule hit(s) ($%.4f%s)\n",
-		j.label, len(so.Observations), len(so.RuleHits), so.CostUSD, note)
 }
 
 // runAll maps the jobs with workers running at once, in order, until done
@@ -236,26 +495,46 @@ feed:
 	wg.Wait()
 }
 
-func learnMap(ctx context.Context, env *archiveEnv, runner model.Runner, since string, limit int, dryRun, fromArchives bool) int {
+// learnMap maps the window's sessions and reads the evidence sources.
+// evidenceGate, when set, says whether a named source is scanned this run;
+// the hook worker passes one so a scan's subprocess calls happen at most
+// once a day, while a map run by hand (nil) always scans.
+func learnMap(ctx context.Context, env *archiveEnv, runner model.Runner, since string, limit int, dryRun, fromArchives bool,
+	idle time.Duration, evidenceGate func(name string) bool) int {
 	cutoffTime, err := parseSince(since, env.clk.Now())
 	if err != nil {
 		return fail(err)
 	}
 	cutoff := cutoffTime.UTC().Format("2006-01-02T15:04:05Z")
+	allWindow := cutoffTime.IsZero() // --since all
+	undatedSkipped := 0
 	st, _, err := openStore(ctx, env)
 	if err != nil {
 		return fail(err)
 	}
-	ledger, err := learn.LoadLedger(env.settings.Learn.Ledger)
+	// The store's ledger first, so the rule ids this host shows the model
+	// are the reducer's, whichever host this is. A map only shows rules, so
+	// a failure folding other hosts' reviews degrades to a warning.
+	ledger, err := syncedLedger(ctx, env, st, false)
 	if err != nil {
 		return fail(err)
 	}
+	repos, err := loadRepos(ctx, env)
+	if err != nil {
+		return fail(err)
+	}
+	scoping := &learn.Scoping{Repos: repos, Home: env.home}
 	run := &mapRun{}
 	var mappers []*learn.Mapper
 	mapper := func(host string) *learn.Mapper {
 		m := &learn.Mapper{
 			Store: st, Runner: runner, Model: env.settings.Learn.MapModel,
-			Host: host, Rules: ledger.Rules, Clock: env.clk, Out: os.Stdout,
+			Host: host, Rules: ledger.Rules, Clock: env.clk, Out: os.Stdout, Scoping: scoping,
+			Redact: env.settings.Archive.Redact,
+		}
+		if host == env.settings.Host {
+			// Only this machine's sessions name paths that exist here.
+			m.Home, m.Locate = env.home, learn.LocateCheckout(env.home)
 		}
 		mappers = append(mappers, m)
 		return m
@@ -267,6 +546,14 @@ func learnMap(ctx context.Context, env *archiveEnv, runner model.Runner, since s
 		if err != nil {
 			return fail(err)
 		}
+		// Sessions still on disk read from disk; the archives fill in only
+		// this host's sessions that are gone (dedupe by session id).
+		onDisk := map[string]bool{}
+		for _, s := range sessions {
+			if id, ok := h.SessionID(s); ok {
+				onDisk[id] = true
+			}
+		}
 		// Newest first, so --limit spends the budget on recent sessions.
 		mtimes := map[string]int64{}
 		for _, s := range sessions {
@@ -276,41 +563,114 @@ func learnMap(ctx context.Context, env *archiveEnv, runner model.Runner, since s
 		}
 		sort.Slice(sessions, func(i, j int) bool { return mtimes[sessions[i]] > mtimes[sessions[j]] })
 		for _, s := range sessions {
+			if idle > 0 && time.Duration(env.clk.Now().UnixNano()-mtimes[s]) < idle {
+				continue // still going, or just ended and may be picked up again
+			}
 			evs, err := h.ReadSessionFile(s, env.settings.Host)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "recall: %s: %v (skipped)\n", s, err)
 				run.skipped++
 				continue
 			}
-			if inWindow(evs, cutoff) {
-				session := filepath.Base(s)
-				jobs = append(jobs, newJob(m, h.Name(), session[:len(session)-len(filepath.Ext(session))], evs))
+			if takeSession(evs, cutoff, allWindow, &undatedSkipped) {
+				session, _ := h.SessionID(s)
+				jobs = append(jobs, newJob(m, h.Name(), session, evs))
 			}
 		}
 		if fromArchives {
-			archived, err := archiveJobs(ctx, env, st, h, cutoffTime, cutoff, mapper)
+			archived, err := archiveJobs(ctx, env, st, h, cutoffTime, cutoff, mapper, onDisk, &undatedSkipped)
 			if err != nil {
 				return fail(err)
 			}
 			jobs = append(jobs, archived...)
 		}
 	}
+	if undatedSkipped > 0 {
+		fmt.Fprintf(os.Stderr, "recall: warning: %d session(s) whose events carry no timestamps were skipped, since a bounded window can't place them; `recall learn map --since all` reads them\n", undatedSkipped)
+	}
 	if limit > 0 && len(jobs) > limit {
 		jobs = jobs[:limit]
+	}
+	// Each harness's own memory notes are evidence too, and reading them
+	// calls no model.
+	var notes []harness.Memory
+	noteHarness := map[string]string{}
+	for _, h := range env.harnesses {
+		mems, err := h.Memories()
+		if err != nil {
+			return fail(err)
+		}
+		for _, m := range mems {
+			noteHarness[m.Path] = h.Name()
+		}
+		notes = append(notes, mems...)
 	}
 	if dryRun {
 		for _, j := range jobs {
 			run.dryRun(ctx, j)
 		}
-		fmt.Printf("map --dry-run: %d session(s) would call the model; %d are cached or have no prompts\n", run.mapped, run.cached)
+		if len(notes) > 0 {
+			fmt.Printf("map --dry-run: %d native memory note(s) would be read, with no model call\n", len(notes))
+		}
+		if srcs := env.settings.Learn.Evidence; len(srcs) > 0 {
+			fmt.Printf("map --dry-run: evidence source(s) %s would be read, with no model call\n", strings.Join(srcs, ", "))
+		}
+		fmt.Printf("map --dry-run: %d session(s) would be observed and %d judged against rules they haven't seen; %d are cached or have no prompts\n",
+			run.mapped, run.judged, run.cached)
 		return 0
 	}
 	run.runAll(ctx, jobs, env.settings.Learn.MapWorkers)
+	added := 0
+	for _, h := range env.harnesses {
+		var mine []harness.Memory
+		for _, m := range notes {
+			if noteHarness[m.Path] == h.Name() {
+				mine = append(mine, m)
+			}
+		}
+		n, err := learn.PutMemories(ctx, st, mine, h.Name(), env.settings.Host, env.home, learn.LocateCheckout(env.home), env.clk.Now())
+		if err != nil {
+			return fail(err)
+		}
+		added += n
+	}
+	if len(notes) > 0 {
+		fmt.Printf("memory: %d native note(s) read, %d new or changed\n", len(notes), added)
+	}
+	// Evidence from outside the chat: review comments and failed checks on
+	// agent-authored changes, read with no model call. A source that can't
+	// answer (gh missing, offline) is a warning, not a failed map.
+	for _, name := range env.settings.Learn.Evidence {
+		if evidenceGate != nil && !evidenceGate(name) {
+			continue
+		}
+		src, err := evidence.Open(name, evidence.Options{Repos: evidenceRepos(repos), Trailer: env.settings.Learn.EvidenceTrailer})
+		if err != nil {
+			return fail(err)
+		}
+		// A source may answer partially: items from the repos that worked,
+		// plus an error for the ones that didn't. The items still count.
+		items, err := src.Items(ctx, cutoffTime)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "recall: warning: evidence %s: %v\n", name, err)
+			if len(items) == 0 {
+				continue
+			}
+		}
+		n, err := learn.PutEvidence(ctx, st, items, src.Name(), env.clk.Now())
+		if err != nil {
+			return fail(err)
+		}
+		fmt.Printf("evidence %s: %d item(s) read, %d new or changed pull request(s)\n", name, len(items), n)
+	}
 	var usage model.Usage
 	for _, m := range mappers {
 		usage = usage.Add(m.Usage)
 	}
 	fmt.Printf("map: %d observed, %d cached", run.mapped, run.cached)
+	if run.judged > 0 {
+		fmt.Printf(", %d judged against rules they hadn't seen", run.judged)
+	}
 	if run.skipped > 0 {
 		fmt.Printf(", %d skipped", run.skipped)
 	}
@@ -320,7 +680,7 @@ func learnMap(ctx context.Context, env *archiveEnv, runner model.Runner, since s
 	if run.failed > 0 {
 		fmt.Printf(", %d failed", run.failed)
 	}
-	if usage.CostUSD > 0 || usage.InputTokens > 0 {
+	if !usage.Zero() {
 		fmt.Printf(" (%s)", usage)
 	}
 	fmt.Println()
@@ -333,11 +693,13 @@ func learnMap(ctx context.Context, env *archiveEnv, runner model.Runner, since s
 	return 0
 }
 
-// archiveJobs reads other hosts' archived sessions from the store, for
-// weeks that overlap the window. A session archived in more than one week
-// is read from its latest week, which holds the whole file.
+// archiveJobs reads archived sessions from the store, for weeks that overlap
+// the window: other hosts' sessions, and this host's own whose transcripts
+// are gone from disk (onDisk lists the session ids still there, which keep
+// reading from disk). A session archived in more than one week is read from
+// its latest week, which holds the whole file.
 func archiveJobs(ctx context.Context, env *archiveEnv, st store.Store, h harness.Harness, cutoffTime time.Time,
-	cutoff string, mapper func(host string) *learn.Mapper) ([]mapJob, error) {
+	cutoff string, mapper func(host string) *learn.Mapper, onDisk map[string]bool, undatedSkipped *int) ([]mapJob, error) {
 	keys, err := st.List(ctx, h.Name()+"/")
 	if err != nil {
 		return nil, err
@@ -345,8 +707,14 @@ func archiveJobs(ctx context.Context, env *archiveEnv, st store.Store, h harness
 	byHost := map[string][]string{}
 	var hosts []string
 	for _, key := range keys {
+		if strings.HasSuffix(key, ".age") {
+			// Written by the removed client-side encryption feature; name it,
+			// never pass it over in silence.
+			fmt.Fprintf(os.Stderr, "recall: skipping %s: encrypted by a feature recall removed; decrypt it with the age CLI and upload the plain week\n", key)
+			continue
+		}
 		_, host, w, ok := archive.ParseKey(key)
-		if !ok || host == env.settings.Host {
+		if !ok {
 			continue
 		}
 		if _, end := w.Bounds(time.UTC); end.Before(cutoffTime) {
@@ -385,7 +753,7 @@ func archiveJobs(ctx context.Context, env *archiveEnv, st store.Store, h harness
 		}
 		m := mapper(host)
 		for _, s := range order {
-			if inWindow(sessions[s], cutoff) {
+			if !onDisk[s] && takeSession(sessions[s], cutoff, cutoffTime.IsZero(), undatedSkipped) {
 				jobs = append(jobs, newJob(m, h.Name(), s, sessions[s]))
 			}
 		}
@@ -456,20 +824,28 @@ func learnObservations(ctx context.Context, env *archiveEnv, harnessName string)
 	return 0
 }
 
-func learnRulesSync(env *archiveEnv) int {
-	ledger, err := learn.LoadLedger(env.settings.Learn.Ledger)
+func learnRulesSync(ctx context.Context, env *archiveEnv) int {
+	st, _, err := openStore(ctx, env)
 	if err != nil {
 		return fail(err)
 	}
-	added, removed, err := ledger.SyncTargets(env.settings.Learn.Targets, env.clk.Now())
+	ledger, err := syncedLedger(ctx, env, st, false)
+	if err != nil {
+		return fail(err)
+	}
+	repos, err := loadRepos(ctx, env)
+	if err != nil {
+		return fail(err)
+	}
+	res, err := ledger.SyncTargets(ledgerTargets(env, repos), env.clk.Now())
 	if err != nil {
 		return fail(err)
 	}
 	if err := ledger.Save(env.settings.Learn.Ledger); err != nil {
 		return fail(err)
 	}
-	fmt.Printf("ledger %s: %d rule(s), %d added, %d removed\n",
-		tilde(env.settings.Learn.Ledger, env.home), len(ledger.Rules), added, removed)
+	fmt.Printf("ledger %s: %d rule(s), %d added, %d removed, %d reworded, %d moved\n",
+		tilde(env.settings.Learn.Ledger, env.home), len(ledger.Rules), res.Added, res.Removed, res.Reworded, res.Moved)
 	return 0
 }
 
@@ -479,7 +855,7 @@ func learnAge(env *archiveEnv) int {
 	if err != nil {
 		return fail(err)
 	}
-	ledger, err := loadLedgerAndHits(ctx, env, st)
+	ledger, window, err := loadLedgerAndHits(ctx, env, st, false)
 	if err != nil {
 		return fail(err)
 	}
@@ -489,6 +865,13 @@ func learnAge(env *archiveEnv) int {
 	}
 	for _, r := range aging.Retire {
 		fmt.Printf("retire %s (no relevance in %d days): %s\n", r.ID, env.settings.Learn.RetireDays, r.Text)
+	}
+	// Rules earned on a model no recent session runs: worth a trial
+	// without them, and never a reason to exit nonzero. The ablation picks
+	// outgrown rules with the same cutoff.
+	for _, r := range ledger.Outgrown(learn.WindowModels(window, env.clk.Now())) {
+		fmt.Printf("check %s (earned on %s, which no session in the last %d days ran): %s\n",
+			r.ID, strings.Join(r.Models, ", "), learn.RecentModelDays, r.Text)
 	}
 	if len(aging.Reword)+len(aging.Retire) > 0 {
 		return 1
@@ -502,62 +885,280 @@ func learnStateRoot(env *archiveEnv) string {
 	return filepath.Join(env.home, ".local", "state", "recall", "learn")
 }
 
-func learnReduce(ctx context.Context, env *archiveEnv, runner model.Runner, outDir string, dryRun bool) int {
-	if _, err := reduce(ctx, env, runner, outDir, dryRun); err != nil {
+// runDirRE is a reduce run directory's name: the date, with a suffix for a
+// day's second and later runs.
+var runDirRE = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}(-\d+)?$`)
+
+// freshRunDir is where today's reduce lands: the day's dated directory,
+// unless a run already sits there (it holds a proposals.md), in which case
+// the day's first free suffixed sibling (-2, -3, ...), the way review ids
+// suffix. A second reduce the same day then never overwrites an existing
+// run's proposals, applied or still waiting; a following apply picks the
+// day's newest unapplied run, so the new proposals are what it stages.
+func freshRunDir(root string, now time.Time) string {
+	date := now.Format("2006-01-02")
+	dir := filepath.Join(root, date)
+	for n := 2; ; n++ {
+		if _, err := os.Stat(filepath.Join(dir, "proposals.md")); err != nil {
+			return dir
+		}
+		dir = filepath.Join(root, fmt.Sprintf("%s-%d", date, n))
+	}
+}
+
+// runDirOrder is a run directory's place within its day: 1 for the dated
+// directory, its suffix for a rerun.
+func runDirOrder(dir string) int {
+	base := filepath.Base(dir)
+	if len(base) <= len("2006-01-02") {
+		return 1
+	}
+	n, _ := strconv.Atoi(base[len("2006-01-02-"):])
+	return n
+}
+
+// latestRun returns the newest reduce run under root that holds a
+// proposals.md: the newest day's run, and within that day the newest rerun
+// no apply has finished, since a suffixed sibling holds proposals the
+// day's earlier runs don't. An unapplied run from an older day is never
+// the answer: the owner saw it and chose not to apply it, and --from
+// reaches it explicitly. When every run of the newest day is applied, the
+// newest answers, so an apply by hand still says "already applied"
+// instead of failing.
+func latestRun(root string) (string, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return "", err
+	}
+	var runs []string
+	for _, e := range entries {
+		if !e.IsDir() || !runDirRE.MatchString(e.Name()) {
+			continue
+		}
+		dir := filepath.Join(root, e.Name())
+		if _, err := os.Stat(filepath.Join(dir, "proposals.md")); err == nil {
+			runs = append(runs, dir)
+		}
+	}
+	if len(runs) == 0 {
+		return "", fmt.Errorf("no reduce run with a proposals.md under %s; run `recall learn reduce` first", root)
+	}
+	sort.Slice(runs, func(i, j int) bool {
+		di, dj := filepath.Base(runs[i])[:len("2006-01-02")], filepath.Base(runs[j])[:len("2006-01-02")]
+		if di != dj {
+			return di < dj
+		}
+		return runDirOrder(runs[i]) < runDirOrder(runs[j])
+	})
+	day := filepath.Base(runs[len(runs)-1])[:len("2006-01-02")]
+	for i := len(runs) - 1; i >= 0 && strings.HasPrefix(filepath.Base(runs[i]), day); i-- {
+		if _, err := os.Stat(filepath.Join(runs[i], "apply.json")); err != nil {
+			return runs[i], nil
+		}
+	}
+	return runs[len(runs)-1], nil
+}
+
+// newReducer loads what a reduce reads: the ledger with its rule hits and
+// review verdicts, the candidate ledger, and every host's observations.
+// A nil runner is a listing that proposes nothing, so it skips the taken
+// names, which cost a harness start. allWindow reads every observation
+// (--window all) instead of the last learn.window_days.
+func newReducer(ctx context.Context, env *archiveEnv, st store.Store, runner model.Runner, allWindow bool) (*learn.Reducer, []learn.SessionObservations, error) {
+	// Strict: a reduce proposes against the pending reviews, so a review
+	// missed here re-proposes a change that is still open (syncedLedger).
+	ledger, window, err := loadLedgerAndHits(ctx, env, st, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	refreshReviews(ctx, env, ledger)
+	candidates, err := learn.LoadCandidates(env.settings.Learn.Candidates)
+	if err != nil {
+		return nil, nil, err
+	}
+	repos, err := loadRepos(ctx, env)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, name := range env.settings.Learn.Evidence {
+		w, err := learn.ListObservations(ctx, st, learn.EvidenceHarness(name))
+		if err != nil {
+			return nil, nil, err
+		}
+		window = append(window, w...)
+	}
+	var taken []string
+	if runner != nil {
+		if taken, err = takenList(ctx, env); err != nil {
+			return nil, nil, err
+		}
+	}
+	warnUnobservedHosts(ctx, env, st)
+	r := &learn.Reducer{
+		Gates:  learnGates(env, repos, taken, ledger),
+		Runner: runner, Model: env.settings.Learn.ReduceModel,
+		RetireDays: env.settings.Learn.RetireDays,
+		WindowDays: env.settings.Learn.WindowDays, AllWindow: allWindow,
+		Clock: env.clk, Out: os.Stdout,
+		Candidates:        candidates,
+		OwnerInstructions: extension.Read(env.settings.Extensions["learn-reduce"], os.Stderr),
+	}
+	if runner != nil && env.settings.Learn.Replay {
+		// Replays run headless with no tools on the map model, the one that
+		// reads sessions, in the run's own directory under the state root.
+		r.Replay = &learn.Replayer{Runner: runner, Model: env.settings.Learn.MapModel,
+			Load: sessionLoader(env), Out: os.Stderr}
+	}
+	return r, window, nil
+}
+
+// sessionLoader finds one session's events on this machine, for a replay.
+// A session from another host, or one whose transcript is gone, isn't here.
+func sessionLoader(env *archiveEnv) learn.SessionLoader {
+	return func(harnessName, session string) ([]events.Event, bool) {
+		for _, h := range env.harnesses {
+			if h.Name() != harnessName {
+				continue
+			}
+			sessions, err := h.Sessions()
+			if err != nil {
+				return nil, false
+			}
+			for _, s := range sessions {
+				if id, ok := h.SessionID(s); ok && id == session {
+					evs, err := h.ReadSessionFile(s, env.settings.Host)
+					if err != nil {
+						return nil, false
+					}
+					return evs, true
+				}
+			}
+		}
+		return nil, false
+	}
+}
+
+// learnCandidates prints the candidates as the reduce would read them. It
+// saves nothing, so new candidates get their ids when a reduce runs.
+func learnCandidates(ctx context.Context, env *archiveEnv) int {
+	st, _, err := openStore(ctx, env)
+	if err != nil {
+		return fail(err)
+	}
+	r, window, err := newReducer(ctx, env, st, nil, false)
+	if err != nil {
+		return fail(err)
+	}
+	fmt.Print(r.CandidatesText(window))
+	return 0
+}
+
+// learnReducer prints or moves the store's reduce claim. Without --take it
+// says which host holds the claim; --take overwrites the claim with this
+// host, for when the holder is retired, reimaged, or renamed, and this
+// host's next reduce then publishes the ledger normally.
+func learnReducer(ctx context.Context, env *archiveEnv, take bool) int {
+	st, _, err := openStore(ctx, env)
+	if err != nil {
+		return fail(err)
+	}
+	claim, err := storeReducer(ctx, st)
+	if err != nil {
+		return fail(err)
+	}
+	host := env.settings.Host
+	if !take {
+		switch claim {
+		case "":
+			fmt.Println("reducer: unclaimed; the first `recall init` or `recall learn reduce` on this store claims it")
+		case host:
+			fmt.Printf("reducer: %s (this machine)\n", claim)
+		default:
+			fmt.Printf("reducer: %s; this machine is %s\n", claim, host)
+			fmt.Printf("if %s is gone, `recall learn reducer --take` moves the claim here\n", claim)
+		}
+		return 0
+	}
+	if claim == host {
+		fmt.Printf("reducer: already %s (this machine)\n", host)
+		return 0
+	}
+	if err := st.Put(ctx, reducerKey, strings.NewReader(host+"\n")); err != nil {
+		return fail(err)
+	}
+	if claim == "" {
+		fmt.Printf("reducer: claimed this store for %s\n", host)
+	} else {
+		fmt.Printf("reducer: took the claim over from %s; %s runs the reduce and writes the store ledger now\n", claim, host)
+	}
+	return 0
+}
+
+// reducerGate refuses a reduce on a machine that isn't the store's reducer,
+// unless forced: a reduce here would assign rule ids the store ledger never
+// learns. An unclaimed store passes, and the reduce claims it; a store that
+// can't be read warns and passes, so an offline hook run never wedges.
+func reducerGate(ctx context.Context, env *archiveEnv, st store.Store, force bool) error {
+	claim, err := storeReducer(ctx, st)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "recall: warning: couldn't read the store's reducer claim (%v); running the reduce anyway\n", err)
+		return nil
+	}
+	if claim == "" || claim == env.settings.Host || force {
+		return nil
+	}
+	return fmt.Errorf("%s is this store's reducer and this machine is %s, so a reduce here would assign rule ids the store ledger never learns; "+
+		"run it there, run `recall learn reducer --take` here if %s is gone, or pass --force to run anyway (the store ledger stays unwritten)",
+		claim, env.settings.Host, claim)
+}
+
+func learnReduce(ctx context.Context, env *archiveEnv, runner model.Runner, outDir string, dryRun, allWindow, force bool) int {
+	if _, _, err := reduce(ctx, env, runner, outDir, dryRun, allWindow, force); err != nil {
 		return fail(err)
 	}
 	return 0
 }
 
 // reduce runs the reduce into outDir and returns that directory; a dry run
-// prints the input and returns "".
-func reduce(ctx context.Context, env *archiveEnv, runner model.Runner, outDir string, dryRun bool) (string, error) {
+// prints the input and returns "". read reports whether the reduce had any
+// candidates to read. The store is opened once here and threaded through
+// the gate, the reducer, and the ledger publish.
+func reduce(ctx context.Context, env *archiveEnv, runner model.Runner, outDir string, dryRun, allWindow, force bool) (dir string, read bool, err error) {
 	st, _, err := openStore(ctx, env)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	ledger, err := loadLedgerAndHits(ctx, env, st)
+	if err := reducerGate(ctx, env, st, force); err != nil {
+		return "", false, err
+	}
+	r, window, err := newReducer(ctx, env, st, runner, allWindow)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	refreshReviews(ctx, env, ledger)
-	var window []learn.SessionObservations
-	for _, h := range env.harnesses {
-		w, err := learn.ListObservations(ctx, st, h.Name())
-		if err != nil {
-			return "", err
-		}
-		window = append(window, w...)
-	}
-	taken, err := takenList(ctx, env)
-	if err != nil {
-		return "", err
-	}
-	r := &learn.Reducer{
-		Runner: runner, Model: env.settings.Learn.ReduceModel, Ledger: ledger,
-		RetireDays: env.settings.Learn.RetireDays, Clock: env.clk, Out: os.Stdout,
-		Taken: taken, Targets: env.settings.Learn.Targets, Home: env.home,
-		Skills: env.settings.Learn.Skills, Bin: env.settings.Learn.Bin, Reviews: ledger.Reviews,
-		OwnerInstructions: extension.Read(env.settings.Extensions["learn-reduce"], os.Stderr),
-	}
-	warnUnobservedHosts(ctx, env, st)
 	if dryRun {
 		fmt.Print(r.BuildInput(window))
-		return "", nil
+		return "", false, nil
 	}
 	if outDir == "" {
-		outDir = filepath.Join(learnStateRoot(env), env.clk.Now().Format("2006-01-02"))
+		outDir = freshRunDir(learnStateRoot(env), env.clk.Now())
 	}
 	proposals, usage, err := r.Run(ctx, window, outDir)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	// The ledger's relevance dates moved with the window's rule hits.
-	if err := ledger.Save(env.settings.Learn.Ledger); err != nil {
-		return "", err
+	// The ledger's relevance dates moved with the window's rule hits, and
+	// the candidates the proposals cited are now used.
+	if err := r.Ledger.Save(env.settings.Learn.Ledger); err != nil {
+		return "", false, err
+	}
+	// The store gets the result as a new ledger version, so every other
+	// host's next map judges against these rules and ids.
+	publishStoreLedger(ctx, env, st, r.Ledger)
+	if err := r.Candidates.Save(env.settings.Learn.Candidates); err != nil {
+		return "", false, err
 	}
 	fmt.Printf("proposals: %s (input beside it) (%s)\n", tilde(proposals, env.home), usage)
-	return outDir, nil
+	return outDir, r.OpenCandidates > 0, nil
 }
 
 // takenList is every skill and command name that already exists.
@@ -573,7 +1174,22 @@ func takenList(ctx context.Context, env *archiveEnv) ([]string, error) {
 	return n.taken(), nil
 }
 
-func newApplier(ctx context.Context, env *archiveEnv) (*learn.Applier, error) {
+// learnGates builds the checks the reduce and the apply share (learn.Gates)
+// in one place, from the same config, so both hold a proposal back by the
+// same rules. The ledger supplies the rules and reviews the checks read.
+func learnGates(env *archiveEnv, repos []learn.Repo, taken []string, ledger *learn.Ledger) learn.Gates {
+	l := env.settings.Learn
+	return learn.Gates{
+		Targets: l.Targets, Repos: repos, Home: env.home,
+		Skills: l.Skills, Bin: l.Bin, Settings: l.Settings,
+		Taken: taken, Budget: l.Budget,
+		Ledger:                 ledger,
+		RequireOwnerEvidence:   l.RequireOwnerEvidence,
+		RepeatEvidenceSessions: l.RepeatEvidenceSessions,
+	}
+}
+
+func newApplier(ctx context.Context, env *archiveEnv, ledger *learn.Ledger) (*learn.Applier, error) {
 	pub, err := review.New(env.settings.Learn.Review)
 	if err != nil {
 		return nil, fmt.Errorf("learn.review: %w", err)
@@ -582,44 +1198,69 @@ func newApplier(ctx context.Context, env *archiveEnv) (*learn.Applier, error) {
 	if err != nil {
 		return nil, err
 	}
+	repos, err := loadRepos(ctx, env)
+	if err != nil {
+		return nil, err
+	}
 	l := env.settings.Learn
+	editor, err := env.newEditor()
+	if err != nil {
+		return nil, err
+	}
 	return &learn.Applier{
-		Editor: &model.CLI{Command: l.Runner}, Model: l.ApplyModel, Publisher: pub,
-		Targets: l.Targets, Skills: l.Skills, Bin: l.Bin, Public: env.settings.Keep.Public,
-		Taken: taken, Home: env.home, Check: l.Check, Clock: env.clk, Out: os.Stderr,
+		Gates:  learnGates(env, repos, taken, ledger),
+		Editor: editor, Model: l.ApplyModel, Publisher: pub,
+		Public: env.settings.Keep.Public,
+		Check:  l.Check, Clock: env.clk, Out: os.Stderr,
 		OwnerInstructions: extension.Read(env.settings.Extensions["learn-apply"], os.Stderr),
 	}, nil
 }
 
 func learnApply(ctx context.Context, env *archiveEnv, dir string, dryRun bool) int {
 	if dir == "" {
-		latest, err := learn.LatestRun(learnStateRoot(env))
+		latest, err := latestRun(learnStateRoot(env))
 		if err != nil {
 			return fail(err)
 		}
 		dir = latest
 	}
-	return applyRun(ctx, env, dir, dryRun)
+	code, _ := applyRun(ctx, env, dir, dryRun)
+	return code
 }
 
-func applyRun(ctx context.Context, env *archiveEnv, dir string, dryRun bool) int {
-	a, err := newApplier(ctx, env)
+// applyRun applies one reduce run. done reports whether the run is settled:
+// it applied, or there was genuinely nothing to apply; a run an earlier
+// apply already finished is not this run's success, so a caller pacing
+// itself by the result never counts a dropped run as done.
+func applyRun(ctx context.Context, env *archiveEnv, dir string, dryRun bool) (code int, done bool) {
+	st, _, err := openStore(ctx, env)
 	if err != nil {
-		return fail(err)
+		return fail(err), false
 	}
-	ledger, err := learn.LoadLedger(env.settings.Learn.Ledger)
+	// Strict: an apply publishes proposals the pending reviews don't
+	// already cover, so a review missed here re-publishes one (syncedLedger).
+	ledger, err := syncedLedger(ctx, env, st, true)
 	if err != nil {
-		return fail(err)
+		return fail(err), false
 	}
 	refreshReviews(ctx, env, ledger)
-	a.Reviews = ledger.Reviews
+	a, err := newApplier(ctx, env, ledger)
+	if err != nil {
+		return fail(err), false
+	}
 	plan, err := a.Plan(ctx, dir)
 	if errors.Is(err, learn.ErrApplied) {
 		fmt.Printf("apply: %s is already applied\n", tilde(dir, env.home))
-		return 0
+		return 0, false
 	}
 	if err != nil {
-		return fail(err)
+		return fail(err), false
+	}
+	// A day's reruns live in suffixed directories; their branches carry the
+	// suffix too, so a rerun never collides with the branch the day's first
+	// apply left for review.
+	if base := filepath.Base(dir); runDirRE.MatchString(base) {
+		plan.Branch = "learn-" + base
 	}
 	for _, r := range plan.Routes {
 		if r.Skip != "" {
@@ -633,10 +1274,16 @@ func applyRun(ctx context.Context, env *archiveEnv, dir string, dryRun bool) int
 			fmt.Printf("would stage %s on branch %s at %s\n", tilde(repo, env.home), plan.Branch, tilde(plan.Worktrees[i], env.home))
 		}
 		fmt.Printf("\n%s", a.BuildInput(plan, learn.PlannedWorktrees(plan)))
-		return 0
+		return 0, true
 	}
 	if plan.Ready() == 0 {
 		fmt.Println("apply: nothing to apply")
+	}
+	held := map[string]bool{} // skips printed above; Run adds its own
+	for _, r := range plan.Routes {
+		if r.Skip != "" {
+			held[r.ID] = true
+		}
 	}
 	res, err := a.Run(ctx, plan)
 	if res != nil {
@@ -645,15 +1292,13 @@ func applyRun(ctx context.Context, env *archiveEnv, dir string, dryRun bool) int
 		ledger.RecordReviews(plan, res, env.settings.Learn.Review)
 		if serr := ledger.Save(env.settings.Learn.Ledger); serr != nil {
 			fmt.Fprintf(os.Stderr, "recall: saving the review ledger: %v\n", serr)
-		}
-		held := map[string]bool{} // skips the plan already printed
-		for _, r := range plan.Routes {
-			if r.Skip != "" {
-				held[r.Kind+":"+r.Title] = true
-			}
+		} else {
+			// The pending reviews ride the store ledger too, so they survive
+			// losing the local file.
+			publishStoreLedger(ctx, env, st, ledger)
 		}
 		for _, o := range res.Outcomes {
-			if !o.Applied && !held[o.Kind+":"+o.Title] {
+			if !o.Applied && !held[o.Route] {
 				fmt.Printf("not applied %s: %s: %s\n", o.Kind, o.Title, o.Detail)
 			}
 		}
@@ -669,9 +1314,9 @@ func applyRun(ctx context.Context, env *archiveEnv, dir string, dryRun bool) int
 		}
 	}
 	if err != nil {
-		return fail(err)
+		return fail(err), false
 	}
-	return 0
+	return 0, true
 }
 
 // refreshReviews updates the ledger's pending reviews from their
@@ -688,7 +1333,11 @@ func refreshReviews(ctx context.Context, env *archiveEnv, ledger *learn.Ledger) 
 }
 
 func learnReviews(ctx context.Context, env *archiveEnv) int {
-	ledger, err := learn.LoadLedger(env.settings.Learn.Ledger)
+	st, _, err := openStore(ctx, env)
+	if err != nil {
+		return fail(err)
+	}
+	ledger, err := syncedLedger(ctx, env, st, false)
 	if err != nil {
 		return fail(err)
 	}
@@ -702,7 +1351,7 @@ func learnReviews(ctx context.Context, env *archiveEnv) int {
 	}
 	for _, rv := range ledger.Reviews {
 		when := "since " + rv.Proposed
-		if rv.Verdict != "pending" {
+		if rv.Verdict != review.Pending {
 			when = rv.Decided
 		}
 		rv.Repo = tilde(rv.Repo, env.home)
@@ -712,24 +1361,29 @@ func learnReviews(ctx context.Context, env *archiveEnv) int {
 }
 
 // learnRun is the scheduled loop on one host: put new or hand-edited rules
-// on the ledger, reduce, and apply what the reduce proposed.
-func learnRun(ctx context.Context, env *archiveEnv, runner model.Runner, outDir string) int {
-	if code := learnRulesSync(env); code != 0 {
-		return code
+// on the ledger, reduce, and apply what the reduce proposed. done reports
+// whether the run settled its period: the reduce had candidates to read,
+// and what it proposed applied or there was nothing to apply. A run that
+// reduced nothing, or whose proposals were dropped on an already-applied
+// directory, shouldn't count as a period's pass.
+func learnRun(ctx context.Context, env *archiveEnv, runner model.Runner, outDir string, force bool) (code int, done bool) {
+	if code := learnRulesSync(ctx, env); code != 0 {
+		return code, false
 	}
-	dir, err := reduce(ctx, env, runner, outDir, false)
+	dir, read, err := reduce(ctx, env, runner, outDir, false, false, force)
 	if err != nil {
-		return fail(err)
+		return fail(err), false
 	}
 	md, err := os.ReadFile(filepath.Join(dir, "proposals.md"))
 	if err != nil {
-		return fail(err)
+		return fail(err), false
 	}
 	if len(learn.ParseProposals(string(md))) == 0 {
 		fmt.Println("run: no proposals this time")
-		return 0
+		return 0, read
 	}
-	return applyRun(ctx, env, dir, false)
+	code, applied := applyRun(ctx, env, dir, false)
+	return code, read && applied
 }
 
 func printJSON(v any) error {

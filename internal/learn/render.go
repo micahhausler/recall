@@ -6,6 +6,7 @@ package learn
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/micahhausler/recall/internal/events"
@@ -27,8 +28,8 @@ var codeBlockRE = regexp.MustCompile("(?s)```.*?```")
 
 // Render compresses one session's events into the text the map model reads.
 // Mechanical, not model-driven: code blocks collapse to [code block], tool
-// calls to [tool: name], failures keep a short tail of their output, and
-// owner messages stay whole.
+// calls to [tool: name], failures keep what was run and a short tail of its
+// output, and owner messages stay whole.
 func Render(evs []events.Event) string {
 	var b strings.Builder
 	for i, e := range evs {
@@ -51,12 +52,16 @@ func Render(evs []events.Event) string {
 		case events.ToolCall:
 			fmt.Fprintf(&b, "[tool: %s]\n", e.Tool)
 		case events.ToolResult:
-			if e.OK != nil && !*e.OK {
+			if e.OK != nil && !*e.OK && !benignFailure(e.Tool, e.Input, e.Text) {
 				tail := strings.TrimSpace(e.Text)
 				if len(tail) > 200 {
 					tail = "…" + tail[len(tail)-200:]
 				}
-				fmt.Fprintf(&b, "[tool %s FAILED: %s]\n", e.Tool, tail)
+				if e.Input != "" {
+					fmt.Fprintf(&b, "[tool %s FAILED on `%s`: %s]\n", e.Tool, e.Input, tail)
+				} else {
+					fmt.Fprintf(&b, "[tool %s FAILED: %s]\n", e.Tool, tail)
+				}
 			}
 		case events.SkillInvoked:
 			fmt.Fprintf(&b, "[skill: %s]\n", e.Skill)
@@ -69,6 +74,57 @@ func Render(evs []events.Event) string {
 		}
 	}
 	return b.String()
+}
+
+// Shell commands whose nonzero exit is an answer, not a mistake: grep and rg
+// exit 1 on no match, diff exits 1 when the files differ, and test (or [)
+// exits 1 for false.
+var benignExits = map[string]bool{
+	"grep": true, "egrep": true, "fgrep": true, "rg": true,
+	"diff": true, "test": true, "[": true,
+}
+
+// exitCodeRE matches the "Exit code N" line a harness puts before a failed
+// shell command's output.
+var exitCodeRE = regexp.MustCompile(`^Exit code (\d+)\n?`)
+
+// benignFailure reports whether a failed tool result is an expected nonzero
+// exit rather than something going wrong, judged from the command and its
+// output. A chain's or pipeline's status is its last command's, so that
+// command decides; exit codes above 1 are real errors (grep's bad pattern,
+// diff's unreadable file) and still render FAILED. A no-match grep and a
+// false test print nothing, so any output beyond the exit-code line means
+// something else in the chain went wrong; diff's differences are its output.
+func benignFailure(tool, command, output string) bool {
+	if tool != "Bash" || command == "" {
+		return false
+	}
+	code := -1
+	if m := exitCodeRE.FindStringSubmatch(output); m != nil {
+		code, _ = strconv.Atoi(m[1])
+		output = output[len(m[0]):]
+	}
+	if code > 1 {
+		return false
+	}
+	parts := shellSplitRE.Split(command, -1)
+	fields := strings.Fields(parts[len(parts)-1])
+	if len(fields) == 0 {
+		return false
+	}
+	cmd := fields[0]
+	if i := strings.LastIndexByte(cmd, '/'); i >= 0 {
+		cmd = cmd[i+1:] // /usr/bin/grep is grep
+	}
+	if !benignExits[cmd] {
+		return false
+	}
+	if cmd == "diff" {
+		// Differences found is exit 1 exactly; an unknown code could as well
+		// be diff's exit 2, trouble.
+		return code == 1
+	}
+	return strings.TrimSpace(output) == ""
 }
 
 // isShortCorrection reports whether the next owner message after i is a
