@@ -20,6 +20,8 @@ Usage:
   recall skills                    report which skills sessions actually invoke
   recall lint [FILES...]           find stale paths and commands in context files
   recall learn ...                 the learning loop: map, reduce, apply, run, reviews
+  recall init [--dry-run]          set a new machine up with defaults: no bucket, scheduler, or git remote
+  recall hook ...                  what the plugin's session hooks run
   recall extension NAME            print the owner's extension files for a skill
 
 Run 'recall <command> -h' for a command's flags.
@@ -56,6 +58,10 @@ func run(args []string) int {
 		return cmdLint(rest)
 	case "learn":
 		return cmdLearn(rest)
+	case "hook":
+		return cmdHook(rest)
+	case "init":
+		return cmdInit(rest)
 	case "extension":
 		return cmdExtension(rest)
 	default:

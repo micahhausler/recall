@@ -7,7 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+
+	"github.com/micahhausler/recall/internal/hook"
 )
 
 // Inventory is what a harness offers in a directory: its skills and the
@@ -31,6 +34,9 @@ func (c *Claude) Inventory(ctx context.Context, dir string) (Inventory, error) {
 		"--output-format", "stream-json", "--verbose", "--max-turns", "1",
 		"--no-session-persistence", "--disallowedTools", "*")
 	cmd.Dir = dir
+	// The same guard model calls carry (model.HookGuard): this run is
+	// recall's own, and recall's session hooks must leave it alone.
+	cmd.Env = append(os.Environ(), hook.Guard)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return Inventory{}, err

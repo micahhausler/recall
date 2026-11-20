@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -281,6 +282,53 @@ func TestTypeErrorsNameTheOrigin(t *testing.T) {
 	}
 }
 
+func TestArchiveRedactIsOffUnlessSet(t *testing.T) {
+	b := base(t)
+	c, err := Load(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.Settings("/home/you", "laptop-a")
+	if err != nil || s.Archive.Redact {
+		t.Fatalf("default redact = %v, %v; want false", s.Archive.Redact, err)
+	}
+	write(t, b, "[archive-chats]\nredact = true\n")
+	if c, err = Load(b); err != nil {
+		t.Fatal(err)
+	}
+	if s, err = c.Settings("/home/you", "laptop-a"); err != nil || !s.Archive.Redact {
+		t.Fatalf("redact = %v, %v; want true", s.Archive.Redact, err)
+	}
+	write(t, b, "[archive-chats]\nredact = \"yes\"\n")
+	if c, err = Load(b); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = c.Settings("/home/you", "laptop-a"); err == nil || !strings.Contains(err.Error(), "wants a bool") {
+		t.Fatalf("err = %v, want a type error", err)
+	}
+}
+
+// Client-side encryption of the archive was removed; a config that still
+// sets one of its keys fails with an error that says so, not "unknown key".
+// The key is spelled in two parts so no removed-feature name survives in
+// the tree.
+func TestRemovedEncryptKeysFail(t *testing.T) {
+	for _, line := range []string{
+		"recipients = [\"age1example\"]\n",
+		"identity = \"~/.config/recall/archive-identity.txt\"\n",
+	} {
+		b := base(t)
+		write(t, b, "[store."+"encrypt]\n"+line)
+		_, err := Load(b)
+		if err == nil || !strings.Contains(err.Error(), "removed") {
+			t.Fatalf("Load with %q = %v, want an error saying the feature was removed", line, err)
+		}
+		if !strings.Contains(err.Error(), b) {
+			t.Errorf("err = %v, want it to name the file that set the key", err)
+		}
+	}
+}
+
 func TestJobMissingCommand(t *testing.T) {
 	b := base(t)
 	write(t, b, "[recur.jobs.x]\nschedule = \"0 12 * * 1\"\n")
@@ -366,12 +414,14 @@ func TestApplySettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	if l := s.Learn; l.ApplyModel != "sonnet" || l.Review != "pr" || l.Skills != "/home/you/.claude/skills" ||
-		l.Bin != "/home/you/bin" || l.Check != "" || len(s.Keep.Public) != 0 {
+		l.Bin != "/home/you/bin" || l.Check != "" ||
+		l.EvidenceTrailer != "Co-Authored-By: Claude" || len(s.Keep.Public) != 0 {
 		t.Errorf("defaults = %+v, keep %+v", l, s.Keep)
 	}
 
 	write(t, b, "host = \"laptop-a\"\n[learn]\napply_model = \"opus\"\nreview = \"branch\"\nskills = \"~/kit/skills\"\n"+
-		"bin = \"~/kit/bin\"\ncheck = \"gitleaks stdin\"\n[keep]\npublic = [\"~/src/you\"]\n")
+		"bin = \"~/kit/bin\"\ncheck = \"gitleaks stdin\"\n"+
+		"evidence_trailer = \"Agent: laptop-a\"\n[keep]\npublic = [\"~/src/you\"]\n")
 	if c, err = Load(b); err != nil {
 		t.Fatal(err)
 	}
@@ -379,10 +429,261 @@ func TestApplySettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	if l := s.Learn; l.ApplyModel != "opus" || l.Review != "branch" || l.Skills != "/home/you/kit/skills" ||
-		l.Bin != "/home/you/kit/bin" || l.Check != "gitleaks stdin" {
+		l.Bin != "/home/you/kit/bin" || l.Check != "gitleaks stdin" ||
+		l.EvidenceTrailer != "Agent: laptop-a" {
 		t.Errorf("set = %+v", l)
 	}
 	if strings.Join(s.Keep.Public, ",") != "/home/you/src/you" {
 		t.Errorf("keep.public = %v", s.Keep.Public)
+	}
+}
+
+func TestFresh(t *testing.T) {
+	dir := t.TempDir()
+	base := filepath.Join(dir, "config.toml")
+	c, err := Load(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := func(plan []KV) string {
+		var out []string
+		for _, kv := range plan {
+			out = append(out, kv.Key+"="+kv.Value)
+		}
+		return strings.Join(out, " ")
+	}
+	plan, notes := Fresh(c, false, "laptop-b", nil)
+	if got := keys(plan); got != `learn.review="branch" hooks.map=true hooks.archive=true hooks.learn_every=7` {
+		t.Errorf("a new machine: %s", got)
+	}
+	if len(notes) != 0 {
+		t.Errorf("a new machine gets notes: %v", notes)
+	}
+	// What it sets is valid config, and setting it leaves nothing to set.
+	for _, kv := range plan {
+		if _, err := Set(base, kv.Key, kv.Value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c, err = Load(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.Settings("/home/you", "laptop-a")
+	if err != nil || s.Learn.Review != "branch" || !s.Hooks.Map || !s.Hooks.Archive || s.Hooks.LearnEvery != 7 {
+		t.Fatalf("settings after init = %+v, %v", s, err)
+	}
+	if plan, _ := Fresh(c, true, "laptop-b", nil); len(plan) != 0 {
+		t.Errorf("a second init would still set %s", keys(plan))
+	}
+
+}
+
+// A machine with a config file already relies on learn.review's default,
+// pull requests; init must not reroute its proposals to a local branch.
+func TestFreshKeepsExistingUsersOnPullRequests(t *testing.T) {
+	b := base(t)
+	write(t, b, "host = \"laptop-a\"\n")
+	c, err := Load(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, notes := Fresh(c, true, "laptop-b", nil)
+	for _, kv := range plan {
+		if kv.Key == "learn.review" {
+			t.Errorf("an existing machine's review was switched to %s", kv.Value)
+		}
+	}
+	// The hooks still turn on: no scheduled jobs do the same work.
+	got := map[string]bool{}
+	for _, kv := range plan {
+		got[kv.Key] = true
+	}
+	for _, key := range []string{"hooks.map", "hooks.archive", "hooks.learn_every"} {
+		if !got[key] {
+			t.Errorf("%s not set on an existing machine with no jobs", key)
+		}
+	}
+	// The owner hears what init left alone, and how to change it.
+	if len(notes) != 1 || !strings.Contains(notes[0], "learn.review") || !strings.Contains(notes[0], "branch") {
+		t.Errorf("notes = %v, want one naming learn.review and the branch alternative", notes)
+	}
+
+	// With learn.review set by hand, there is nothing to say.
+	write(t, b, "host = \"laptop-a\"\n[learn]\nreview = \"pr\"\n")
+	if c, err = Load(b); err != nil {
+		t.Fatal(err)
+	}
+	if _, notes := Fresh(c, true, "laptop-b", nil); len(notes) != 0 {
+		t.Errorf("notes = %v, want none when the key is set", notes)
+	}
+}
+
+// The removed review channel fails with the fix when a config still names
+// it, and its old key is no longer in the schema.
+func TestInboxReviewIsRemoved(t *testing.T) {
+	b := base(t)
+	write(t, b, "[learn]\nreview = \"inbox\"\n")
+	c, err := Load(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Settings("/home/you", "laptop-a")
+	if err == nil || !strings.Contains(err.Error(), "removed") || !strings.Contains(err.Error(), "\"branch\"") {
+		t.Errorf("err = %v, want the removal explained with branch as the fix", err)
+	}
+	// The old learn.inbox key is no longer in the schema.
+	write(t, b, "[learn]\ninbox = \"~/somewhere\"\n")
+	if _, err := Load(b); err == nil || !strings.Contains(err.Error(), "learn.inbox") {
+		t.Errorf("err = %v, want learn.inbox rejected as an unknown key", err)
+	}
+}
+
+func TestKiroDefaults(t *testing.T) {
+	b := base(t)
+	write(t, b, "[harness.kiro]\n\n[learn]\nrunner = \"kiro\"\n")
+	c, err := Load(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.Settings("/home/you", "laptop-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Harnesses["kiro"].Source != "/home/you/.kiro/sessions" || s.Harnesses["claude"].Source == "" {
+		t.Errorf("harnesses = %+v", s.Harnesses)
+	}
+	want := []string{"/home/you/.claude/CLAUDE.md", "/home/you/.kiro/steering/AGENTS.md"}
+	if strings.Join(s.Learn.Targets, ",") != strings.Join(want, ",") {
+		t.Errorf("targets = %v, want %v", s.Learn.Targets, want)
+	}
+	if s.Learn.MapModel != "auto" || s.Learn.ReduceModel != "auto" {
+		t.Errorf("models = %q, %q; want auto for kiro", s.Learn.MapModel, s.Learn.ReduceModel)
+	}
+}
+
+func TestKiroOnlyTargetsAndExplicitModels(t *testing.T) {
+	b := base(t)
+	write(t, b, "[harness.claude]\nenabled = false\n\n[harness.kiro]\n\n[learn]\nrunner = \"kiro\"\nmap_model = \"claude-sonnet-5.5\"\n")
+	c, err := Load(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.Settings("/home/you", "laptop-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(s.Learn.Targets, ",") != "/home/you/.kiro/steering/AGENTS.md" {
+		t.Errorf("targets = %v", s.Learn.Targets)
+	}
+	if s.Learn.MapModel != "claude-sonnet-5.5" || s.Learn.ReduceModel != "auto" {
+		t.Errorf("models = %q, %q", s.Learn.MapModel, s.Learn.ReduceModel)
+	}
+}
+
+// A hook step turns on unless an enabled recur job's command already runs
+// that very step: a part-scheduled machine gets hooks for the rest, and an
+// unrelated job blocks nothing.
+func TestFreshSkipsStepsRecurJobsRun(t *testing.T) {
+	keys := func(plan []KV) string {
+		var out []string
+		for _, kv := range plan {
+			out = append(out, kv.Key)
+		}
+		return strings.Join(out, " ")
+	}
+	job := func(command string) string {
+		return "[learn]\nreview = \"pr\"\n[recur.jobs.j]\nschedule = \"0 14 * * 1\"\ncommand = \"" + command + "\"\n"
+	}
+	for _, tc := range []struct {
+		name, toml, want string
+		notes            int
+	}{
+		{"learn job", job("recall learn run"), "hooks.map hooks.archive", 1},
+		{"map and archive job", job("recall archive-chats run; recall learn map --since 15d"), "hooks.learn_every", 2},
+		{"unrelated job", job("backup-home"), "hooks.map hooks.archive hooks.learn_every", 0},
+		{"disabled learn job", "[learn]\nreview = \"pr\"\n[recur.jobs.j]\nschedule = \"0 14 * * 1\"\ncommand = \"recall learn run\"\nenabled = false\n",
+			"hooks.map hooks.archive hooks.learn_every", 0},
+	} {
+		b := filepath.Join(t.TempDir(), "config.toml")
+		if err := os.WriteFile(b, []byte(tc.toml), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		c, err := Load(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan, notes := Fresh(c, true, "laptop-b", nil)
+		if got := keys(plan); got != tc.want {
+			t.Errorf("%s: plan = %q, want %q", tc.name, got, tc.want)
+		}
+		if len(notes) != tc.notes {
+			t.Errorf("%s: notes = %v, want %d naming the covered step(s)", tc.name, notes, tc.notes)
+		}
+	}
+}
+
+// With two machines on one store, only one runs the reduce: init on the
+// second sees the first's claim and leaves hooks.learn_every off.
+func TestFreshOneReducerPerStore(t *testing.T) {
+	b := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(b, []byte("[learn]\nreview = \"pr\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, notes := Fresh(c, true, "laptop-b", func() (string, error) { return "laptop-a", nil })
+	for _, kv := range plan {
+		if kv.Key == "hooks.learn_every" {
+			t.Errorf("a second machine on the store would also reduce: %v", plan)
+		}
+	}
+	found := false
+	for _, note := range notes {
+		found = found || strings.Contains(note, "laptop-a") && strings.Contains(note, "laptop-b") &&
+			strings.Contains(note, "recall learn reducer --take")
+	}
+	if !found {
+		t.Errorf("notes = %v, want one naming the claim holder, this machine, and the take hint", notes)
+	}
+
+	// With no claim on the store, the reduce turns on here.
+	plan, _ = Fresh(c, true, "laptop-b", func() (string, error) { return "", nil })
+	on := false
+	for _, kv := range plan {
+		on = on || kv.Key == "hooks.learn_every"
+	}
+	if !on {
+		t.Errorf("plan = %v, want the first machine on a store to reduce", plan)
+	}
+
+	// A store that can't be read leaves the reduce off, with the command
+	// that turns it on by hand.
+	plan, notes = Fresh(c, true, "laptop-b", func() (string, error) { return "", errors.New("offline") })
+	for _, kv := range plan {
+		if kv.Key == "hooks.learn_every" {
+			t.Errorf("an unreadable store still turned the reduce on: %v", plan)
+		}
+	}
+	found = false
+	for _, note := range notes {
+		found = found || strings.Contains(note, "offline") && strings.Contains(note, "hooks.learn_every")
+	}
+	if !found {
+		t.Errorf("notes = %v, want the store error and the manual command", notes)
+	}
+}
+
+func TestRecurCovers(t *testing.T) {
+	r := RecurSettings{Jobs: map[string]Job{
+		"weekly": {Command: "recall archive-chats run; recall learn map --since 15d"},
+	}}
+	if !r.Covers(StepArchive) || !r.Covers(StepMap) {
+		t.Error("a chained command should cover both its steps")
+	}
+	if r.Covers(StepLearn) {
+		t.Error("nothing runs the reduce, but the step reads as covered")
 	}
 }
