@@ -123,11 +123,11 @@ func (e *Estimate) Run() (int, error) {
 		days = 7
 	}
 	var packedBuf countWriter
-	kept, err := Build(filepath.Dir(e.Harness.SourceDir()), rels, &packedBuf)
+	built, err := Build(filepath.Dir(e.Harness.SourceDir()), rels, &packedBuf, Options{})
 	if err != nil {
 		return 1, err
 	}
-	if len(kept) == 0 {
+	if len(built.Files) == 0 {
 		return 1, fmt.Errorf("nothing to estimate: the files under %s were deleted mid-run", e.Harness.SourceDir())
 	}
 	packed := float64(packedBuf.n)

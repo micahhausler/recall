@@ -111,7 +111,7 @@ func TestParseKey(t *testing.T) {
 	if !ok || h != "claude" || host != "laptop-a" || got != w {
 		t.Errorf("ParseKey(Key) = %s %s %v %v", h, host, got, ok)
 	}
-	for _, bad := range []string{"analysis/claude/s1-abc.json", "claude/laptop-a/.write-check", "claude/laptop-a/2026/W54.tar.zst"} {
+	for _, bad := range []string{"analysis/claude/s1-abc.json", "claude/laptop-a/.write-check", "claude/laptop-a/2026/W54.tar.zst", "claude/laptop-a/2026/W45.tar.zst.age"} {
 		if _, _, _, ok := ParseKey(bad); ok {
 			t.Errorf("ParseKey(%q) ok, want not a week key", bad)
 		}

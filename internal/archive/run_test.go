@@ -100,9 +100,9 @@ func TestBuildRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := filepath.Join(t.TempDir(), "out.tar.zst")
-	kept, size, err := BuildFile(filepath.Dir(tr.source), files, out)
-	if err != nil || len(kept) != 2 {
-		t.Fatalf("build: %v, kept %v", err, kept)
+	built, size, err := BuildFile(filepath.Dir(tr.source), files, out, Options{})
+	if err != nil || len(built.Files) != 2 {
+		t.Fatalf("build: %v, kept %v", err, built.Files)
 	}
 	if size >= int64(len(body))/10 {
 		t.Errorf("compressed %d bytes, want < a tenth of %d", size, len(body))
@@ -157,14 +157,14 @@ func TestBuildDropsDeletedFiles(t *testing.T) {
 	start, _ := Week{2026, 45}.Bounds(time.Local)
 	tr.touch("p/stays.jsonl", start, "x")
 	out := filepath.Join(t.TempDir(), "out.tar.zst")
-	kept, _, err := BuildFile(filepath.Dir(tr.source), []string{"projects/p/stays.jsonl", "projects/p/gone.jsonl"}, out)
-	if err != nil || !equal(kept, []string{"projects/p/stays.jsonl"}) {
-		t.Errorf("kept = %v, %v", kept, err)
+	built, _, err := BuildFile(filepath.Dir(tr.source), []string{"projects/p/stays.jsonl", "projects/p/gone.jsonl"}, out, Options{})
+	if err != nil || !equal(built.Files, []string{"projects/p/stays.jsonl"}) {
+		t.Errorf("kept = %v, %v", built.Files, err)
 	}
 
-	kept, _, err = BuildFile(filepath.Dir(tr.source), []string{"projects/gone.jsonl"}, out+"2")
-	if err != nil || len(kept) != 0 {
-		t.Errorf("all-deleted: kept = %v, %v", kept, err)
+	built, _, err = BuildFile(filepath.Dir(tr.source), []string{"projects/gone.jsonl"}, out+"2", Options{})
+	if err != nil || len(built.Files) != 0 {
+		t.Errorf("all-deleted: kept = %v, %v", built.Files, err)
 	}
 	if _, err := os.Stat(out + "2"); !os.IsNotExist(err) {
 		t.Error("an output file was written with nothing to archive")
@@ -227,6 +227,31 @@ func TestRunUploadsOnlyMissingNonemptyWeeks(t *testing.T) {
 		if !strings.Contains(out.String(), wantLine) {
 			t.Errorf("output misses %q:\n%s", wantLine, out)
 		}
+	}
+}
+
+// A week stored encrypted by the removed client-side encryption feature is
+// named in the output and not uploaded again, never skipped silently.
+func TestRunNamesEncryptedWeeks(t *testing.T) {
+	tr := newTree(t)
+	touchWeek(tr, Week{2026, 45}, "p/a.jsonl")
+	st := store.NewMem()
+	ctx := context.Background()
+	if err := st.PutIfAbsent(ctx, "claude/box/2026/W45.tar.zst.age", strings.NewReader("sealed")); err != nil {
+		t.Fatal(err)
+	}
+	r, out, _ := runner(t, tr, st)
+	failed, err := r.Run(ctx, 1, false, false)
+	if err != nil || failed != 0 {
+		t.Fatalf("failed=%d err=%v", failed, err)
+	}
+	if !strings.Contains(out.String(), "s3://bkt/claude/box/2026/W45.tar.zst.age") ||
+		!strings.Contains(out.String(), "removed") {
+		t.Errorf("output doesn't name the encrypted week:\n%s", out)
+	}
+	keys, _ := st.List(ctx, "claude/box/")
+	if want := []string{"claude/box/2026/W45.tar.zst.age"}; !equal(keys, want) {
+		t.Errorf("keys = %v, want %v: the encrypted week must not be uploaded again", keys, want)
 	}
 }
 

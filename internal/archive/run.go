@@ -24,8 +24,11 @@ type Runner struct {
 	// Dest renders an object key as a destination for messages,
 	// e.g. s3://bucket/<key>.
 	Dest func(key string) string
-	Out  io.Writer
-	Err  io.Writer
+	// Build is how each week's tarball is built: redacted
+	// (archive-chats.redact) or as is.
+	Build Options
+	Out   io.Writer
+	Err   io.Writer
 }
 
 // Run checks the last lookback complete weeks and uploads any that are
@@ -47,6 +50,12 @@ func (r *Runner) Run(ctx context.Context, lookback int, dryRun, offline bool) (i
 		for _, w := range weeks {
 			key := Key(h.Name(), r.Host, w)
 			if have[key] {
+				continue
+			}
+			// A week encrypted by the removed client-side encryption feature
+			// is still that week: name it rather than upload it again.
+			if sealed := key + ".age"; have[sealed] {
+				fmt.Fprintf(r.Out, "%s: already in the store as %s, encrypted by a feature recall removed; the age CLI still reads it\n", w, r.Dest(sealed))
 				continue
 			}
 			n, err := r.one(ctx, h, w, key, dryRun, offline)
@@ -76,16 +85,20 @@ func (r *Runner) one(ctx context.Context, h harness.Harness, w Week, key string,
 	}
 	defer os.RemoveAll(tmp)
 	out := filepath.Join(tmp, "a.tar.zst")
-	files, size, err := BuildFile(filepath.Dir(h.SourceDir()), files, out)
+	built, size, err := BuildFile(filepath.Dir(h.SourceDir()), files, out, r.Build)
 	if err != nil {
 		return "", err
 	}
-	if len(files) == 0 {
+	if len(built.Files) == 0 {
 		return fmt.Sprintf("%s: the changed files were deleted before archiving; nothing to upload", w), nil
 	}
 	dest := r.Dest(key)
+	what := fmt.Sprintf("%d files, %d bytes to %s", len(built.Files), size, dest)
+	if r.Build.Redact {
+		what += fmt.Sprintf("; redacted %d secret-shaped token(s)", built.Redactions)
+	}
 	if dryRun {
-		return fmt.Sprintf("%s: would upload %d files, %d bytes to %s", w, len(files), size, dest), nil
+		return fmt.Sprintf("%s: would upload %s", w, what), nil
 	}
 	f, err := os.Open(out)
 	if err != nil {
@@ -99,5 +112,5 @@ func (r *Runner) one(ctx context.Context, h harness.Harness, w Week, key string,
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%s: uploaded %d files, %d bytes to %s", w, len(files), size, dest), nil
+	return fmt.Sprintf("%s: uploaded %s", w, what), nil
 }

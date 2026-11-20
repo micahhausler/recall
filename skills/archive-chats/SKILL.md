@@ -14,13 +14,14 @@ Granting AWS permissions is out of scope: show me the policies, and I attach the
 2. **AWS.** Offer the profiles from `aws configure list-profiles`, then `recall config set store.s3.profile <p>` and `store.s3.region <r>`.
 3. **Bucket.** A new bucket in my account regional namespace (recommended; `store.s3.bucket_prefix`, default `chat-archive`), or an existing bucket's name in `store.s3.bucket`.
 4. **Retention.** How long S3 keeps each week: 1 year, 3 years, or 10 years (recommended), as `store.s3.retention_days`.
-5. **Check.** `recall archive-chats check --setup`. For each FAIL, quote the fix it prints. Show `recall archive-chats policy setup` and `policy upload`, and say which one each machine needs.
-6. **Estimate.** Show `recall archive-chats estimate` as is: local size, compressed size, and the monthly S3 cost over the retention period. If it warns about `cleanupPeriodDays`, offer the edit to my Claude Code settings; don't make it unasked.
-7. **Create.** Show `recall archive-chats setup --dry-run`, ask, then run `recall archive-chats setup`. It's done only when every `verify` line says ok.
-8. **Upload access.** `recall archive-chats check` proves list and write access; it writes one empty `<harness>/<host>/.write-check` object. Ask first.
-9. **Schedule.** Use the recur skill to add a job: `recall config set recur.jobs.archive-chats.schedule '0 12 * * 1'` and `recur.jobs.archive-chats.command 'recall archive-chats run'`, then `recall recur check` and `recall recur sync`. Offer a first upload now with `recall recur run archive-chats`, then show `recall archive-chats info`.
+5. **Redaction.** Off by default. Offer `recall config set archive-chats.redact true`, and say what it trades: secret-shaped text (cloud and API keys, private key blocks, credential headers, JWTs, and passwords in URLs, command flags, and assignments) is replaced in the archive, a secret in any other shape still gets through, and the replaced text can't be recovered from the archive later.
+6. **Check.** `recall archive-chats check --setup`. For each FAIL, quote the fix it prints. Show `recall archive-chats policy setup` and `policy upload`, and say which one each machine needs.
+7. **Estimate.** Show `recall archive-chats estimate` as is: local size, compressed size, and the monthly S3 cost over the retention period. If it warns about `cleanupPeriodDays`, offer the edit to my Claude Code settings; don't make it unasked.
+8. **Create.** Show `recall archive-chats setup --dry-run`, ask, then run `recall archive-chats setup`. It's done only when every `verify` line says ok.
+9. **Upload access.** `recall archive-chats check` proves list and write access; it writes one empty `<harness>/<host>/.write-check` object. Ask first.
+10. **Schedule.** Use the recur skill to add a job: `recall config set recur.jobs.archive-chats.schedule '0 12 * * 1'` and `recur.jobs.archive-chats.command 'recall archive-chats run'`, then `recall recur check` and `recall recur sync`. Offer a first upload now with `recall recur run archive-chats`, then show `recall archive-chats info`.
 
-On another machine with the same shared config, skip 1 to 4 and 7.
+On another machine with the same shared config, skip 1 to 5 and 8.
 
 **Status.** `recall archive-chats info` lists this host's uploads; `~/.local/state/recall/recur/archive-chats.log` has the run history. A missed week is caught up by the next run, within `archive-chats.lookback` weeks.
 

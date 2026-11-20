@@ -127,6 +127,7 @@ A review comment or a failed check on an agent-authored change is a correction n
 An evidence source (`internal/evidence`) reads them, beside the harnesses, behind `learn.evidence`, which is empty by default.
 
 - The `github` source reads each `learn.repos` origin's recent pull requests through the `gh` CLI, never an API client, so existing gh auth works unchanged.
+  One batched GraphQL query per repository fetches the owner's login and the pull requests with their commits, comments, reviews, and checks, so a scan costs one `gh` call per repo.
   Only a pull request whose commits carry the agent's co-author trailer counts: those are the agent's changes, and feedback on them is feedback on the agent.
 - Issue comments, review bodies, and the comments left on the diff become observations with source `review`; failed checks and statuses become observations with source `ci`.
   A bot's comment is skipped: it is machine output wearing a login, and the failed checks already carry the CI side.
@@ -331,7 +332,11 @@ The store holds the authoritative ledger for every machine that shares it.
 After each reduce and apply, the reducer — the host recorded under `learn/reducer` in the store — writes the ledger there as a new version under `ledger/`, never overwriting an old one; the newest wins.
 Before a map, every host loads the newest store version, so the rule ids it shows the model are the reducer's, and a bullet not yet on the store ledger is not judged until the reducer syncs it.
 Only the reducer assigns rule ids: on any other host the local ledger file is a cache of the store's copy, restored when the file is missing and replaced, with a one-line note, when it diverges.
-A review such a host recorded that the store copy lacks — a forced reduce and apply there publishes a change but can't write the store — survives the replacement and stays on that host's cache until the reducer syncs it, so the published change keeps its review and isn't re-proposed while still open.
+A review such a host recorded that the store copy lacks — a forced reduce and apply there publishes a change but can't write the store ledger — survives the replacement on that host's cache, and the host also writes it to a per-host object under `analysis/reviews/<host>/`, the way hosts write their own observations and hits.
+The reducer folds every host's review objects into the ledger when it syncs, deduped by the review's key, so the reduce sees the published change as pending and doesn't re-propose it, and its verdict is tracked like any review.
+The fold is idempotent: a review already on the ledger, whatever its verdict, wins over the stored object, so an object never resurrects one.
+The ledger remembers each object it folded, so a later sync skips reading it, and once the store's newest ledger version carries everything an object held, the reducer deletes the object and forgets it.
+A store error reading the objects fails only a reduce or apply, where a missed pending review would re-propose or re-publish a change still open for review; a map or any other sync warns and continues with what it read.
 On the reducer the local file is authoritative between writes, and a missing one is restored from the store with its ids, lineage, and reviews.
 A local file older than the store's newest version — a lower highest rule number or fewer reviews, both of which only grow — is a restore from a backup: the sync adopts the store's version, with a one-line note naming both, so a reduce on a restored machine can't roll the shared ledger back.
 The reducer's first reduce uploads its local ledger as the first store version, which carries a single-machine ledger into the store unchanged.
