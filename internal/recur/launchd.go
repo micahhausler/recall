@@ -53,7 +53,7 @@ func (l *launchd) plist(j config.Job) (label string, data []byte, err error) {
 		"ProcessType":           "Background",
 	}
 	if l.ConfigEnv != "" {
-		d["EnvironmentVariables"] = map[string]any{"RECALL_CONFIG": l.ConfigEnv}
+		d["EnvironmentVariables"] = map[string]any{config.EnvVar: l.ConfigEnv}
 	}
 	return label, marshalPlist(d), nil
 }

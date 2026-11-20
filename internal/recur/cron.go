@@ -37,7 +37,7 @@ func (c *cron) line(j config.Job) string {
 	}
 	cmd := strings.Join(args, " ")
 	if c.ConfigEnv != "" {
-		cmd = fmt.Sprintf("RECALL_CONFIG=%s %s", shQuote(c.ConfigEnv), cmd)
+		cmd = fmt.Sprintf("%s=%s %s", config.EnvVar, shQuote(c.ConfigEnv), cmd)
 	}
 	return strings.ReplaceAll(j.Schedule+" "+cmd, "%", `\%`)
 }

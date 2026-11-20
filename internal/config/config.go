@@ -39,10 +39,15 @@ type Config struct {
 	origin map[string]Origin
 }
 
+// EnvVar names the base config file, overriding the default path; the
+// recur schedulers write it into every job's environment, so a renamed
+// variable would strand scheduled runs on the wrong config.
+const EnvVar = "RECALL_CONFIG"
+
 // DefaultBase is the base config path: $RECALL_CONFIG, or
 // <home>/.config/recall/config.toml.
 func DefaultBase(home string) string {
-	if p := os.Getenv("RECALL_CONFIG"); p != "" {
+	if p := os.Getenv(EnvVar); p != "" {
 		return p
 	}
 	return filepath.Join(home, ".config", "recall", "config.toml")

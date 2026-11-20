@@ -66,7 +66,7 @@ func recurMain(cmd string, rest []string, quiet bool, scheduler, self string) (i
 			return 2, err
 		}
 	}
-	setup, err := recur.LoadSetup(settings, self, os.Getenv("RECALL_CONFIG"), home)
+	setup, err := recur.LoadSetup(settings, self, os.Getenv(config.EnvVar), home)
 	if err != nil {
 		return 2, err
 	}
