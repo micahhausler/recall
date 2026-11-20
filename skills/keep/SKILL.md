@@ -10,7 +10,7 @@ You also saw what went wrong and what fixed it, so catch the lesson now while I 
 1. **Look back.** Scan this session for corrections I made, mistakes you made and then fixed, and context I had to repeat. Ignore one-off task content.
 2. **Pick at most 3.** Keep only lessons that would change what you do on a different task next week. Zero is a fine answer; say "nothing worth keeping" and stop.
    If more than 3 qualify, list the ones you dropped in chat, one line each, so I can swap one in.
-3. **Find my context files.** Run `recall config get keep.targets`. Each line is `<path>: <what belongs there>`. Skip paths that don't exist on this machine. If nothing is configured, use `recall config get learn.targets`, then fall back to `~/.claude/CLAUDE.md` and the files it `@`-imports, and read each file's opening lines for its scope.
+3. **Find my context files.** Run `recall config get keep.targets`. Each line is `<path>: <what belongs there>`. Skip paths that don't exist on this machine. If nothing is configured, use `recall config get learn.targets`, then fall back to `~/.claude/CLAUDE.md` and the files it `@`-imports, and `~/.kiro/steering/AGENTS.md` when Kiro is in use, and read each file's opening lines for its scope.
 4. **Choose the home for each.**
    - The narrowest context file whose scope fits.
    - A skill's `SKILL.md`: only for a procedure I spelled out step by step.

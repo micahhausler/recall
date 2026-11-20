@@ -1,6 +1,7 @@
 // Package model runs prompts through a harness CLI in headless mode (for
-// example `claude -p`), never an API client, so existing auth, billing, and
-// model selection work unchanged.
+// example `claude -p` or `kiro-cli chat --no-interactive`), never an API
+// client, so existing auth, billing, and model selection work unchanged.
+// Runners register under the learn.runner name config uses.
 package model
 
 import (
@@ -11,7 +12,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
+
+	"github.com/micahhausler/recall/internal/hook"
 )
 
 // Usage is what one call cost. The harness CLI reports it, so there's no
@@ -20,6 +24,9 @@ type Usage struct {
 	InputTokens  int
 	OutputTokens int
 	CostUSD      float64
+	// Credits is what a harness that bills in credits, like Kiro, reports
+	// instead of tokens and dollars.
+	Credits float64
 }
 
 // Add accumulates another call's usage.
@@ -28,11 +35,19 @@ func (u Usage) Add(o Usage) Usage {
 		InputTokens:  u.InputTokens + o.InputTokens,
 		OutputTokens: u.OutputTokens + o.OutputTokens,
 		CostUSD:      u.CostUSD + o.CostUSD,
+		Credits:      u.Credits + o.Credits,
 	}
 }
 
+// Zero reports whether the usage records nothing.
+func (u Usage) Zero() bool { return u == Usage{} }
+
 func (u Usage) String() string {
-	return fmt.Sprintf("%d in, %d out, $%.4f", u.InputTokens, u.OutputTokens, u.CostUSD)
+	s := fmt.Sprintf("%d in, %d out, $%.4f", u.InputTokens, u.OutputTokens, u.CostUSD)
+	if u.Credits > 0 {
+		s += fmt.Sprintf(", %.2f credits", u.Credits)
+	}
+	return s
 }
 
 // Runner answers one prompt with one completion.
@@ -40,6 +55,55 @@ type Runner interface {
 	// Run sends input to the model named by model and returns its text and
 	// what the call cost.
 	Run(ctx context.Context, model, input string) (string, Usage, error)
+}
+
+var registry = map[string]func() Runner{}
+
+// Register adds a runner under its learn.runner name.
+func Register(name string, f func() Runner) {
+	registry[name] = f
+}
+
+// Open returns the runner registered under name.
+func Open(name string) (Runner, error) {
+	f, ok := registry[name]
+	if !ok {
+		names := make([]string, 0, len(registry))
+		for n := range registry {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		return nil, fmt.Errorf("unknown learn.runner %q; want one of %s", name, strings.Join(names, ", "))
+	}
+	return f(), nil
+}
+
+var editors = map[string]func() Editor{}
+
+// RegisterEditor adds an editor under the learn.runner name whose harness
+// can confine file edits to the apply step's directories.
+func RegisterEditor(name string, f func() Editor) {
+	editors[name] = f
+}
+
+// OpenEditor returns the editor for the runner named name. A runner whose
+// harness can't confine edits to given directories has none, and apply
+// refuses to run rather than edit through an unconfined harness or a
+// different one.
+func OpenEditor(name string) (Editor, error) {
+	f, ok := editors[name]
+	if !ok {
+		if _, known := registry[name]; known {
+			return nil, fmt.Errorf("learn.runner %q can't confine edits to the apply worktrees, so apply needs learn.runner \"claude\"", name)
+		}
+		return nil, fmt.Errorf("unknown learn.runner %q", name)
+	}
+	return f(), nil
+}
+
+func init() {
+	Register("claude", func() Runner { return &CLI{Command: "claude"} })
+	RegisterEditor("claude", func() Editor { return &CLI{Command: "claude"} })
 }
 
 // CLI runs a harness command headless: `<command> -p --model <model>` with
@@ -118,6 +182,7 @@ func (c *CLI) run(ctx context.Context, dir, input string, args ...string) (strin
 	}
 	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), HookGuard)
 	cmd.Stdin = strings.NewReader(input)
 	var out, errOut bytes.Buffer
 	cmd.Stdout = &out
@@ -125,6 +190,13 @@ func (c *CLI) run(ctx context.Context, dir, input string, args ...string) (strin
 	runErr := cmd.Run()
 	return parseResult(command, out.Bytes(), strings.TrimSpace(errOut.String()), runErr)
 }
+
+// HookGuard is set in the environment of every harness run recall starts.
+// The harness fires its session hooks for a headless run too, and recall's
+// own hooks (internal/hook) do nothing when they see it; without it, a
+// session-end hook that maps sessions would be started by the map's own
+// model calls.
+const HookGuard = hook.Guard
 
 // ErrRefusal is a run the model or its safeguards declined; the input, not
 // the runner, is the problem, so a smaller input may still go through.

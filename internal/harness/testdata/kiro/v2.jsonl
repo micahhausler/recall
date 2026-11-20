@@ -1,0 +1,6 @@
+{"version":"v1","kind":"Prompt","data":{"message_id":"m1","content":[{"kind":"text","data":"[RUNTIME] dashboard\nignore me"}],"meta":{"timestamp":1792321660}}}
+{"version":"v1","kind":"Prompt","data":{"message_id":"m2","content":[{"kind":"text","data":"list the files in example.com's repo"}],"meta":{"timestamp":1792321700}}}
+{"version":"v1","kind":"AssistantMessage","data":{"message_id":"m3","content":[{"kind":"thinking","data":{"text":"","signature":null,"redactedContent":[],"modelId":"claude-sonnet-5.5"}},{"kind":"text","data":"Listing them."},{"kind":"toolUse","data":{"toolUseId":"t1","name":"shell","input":{"command":"ls"}}},{"kind":"toolUse","data":{"toolUseId":"t2","name":"read","input":{}}}]}}
+{"version":"v1","kind":"ToolResults","data":{"message_id":"m4","content":[{"kind":"toolResult","data":{"toolUseId":"t1","content":[{"kind":"json","data":{"exit_status":"0","stdout":"README.md","stderr":""}}],"status":"success"}},{"kind":"toolResult","data":{"toolUseId":"t2","content":[{"kind":"text","data":"no such file"}],"status":"error"}},{"kind":"text","data":"[LIVE STEERING - New message from user]\nuse ls -la instead"}],"results":{}}}
+not json
+{"version":"v1","kind":"AssistantMessage","data":{"message_id":"m5","content":[{"kind":"text","data":"  "}]}}

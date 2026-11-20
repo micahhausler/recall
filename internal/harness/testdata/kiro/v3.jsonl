@@ -1,0 +1,13 @@
+{"id":"n1","timestamp":"2026-11-01T10:00:00.000Z","payload":{"type":"agent_note","content":"<session_context>x</session_context>"}}
+{"id":"u1","timestamp":"2026-11-01T10:00:01.000Z","payload":{"type":"user","content":"[AGENT SYSTEM PROMPT]\nYou are Kiro","documents":[],"images":[]}}
+{"id":"u2","timestamp":"2026-11-01T10:00:02.000Z","payload":{"type":"user","content":"why is the build failing?","documents":[],"images":[]}}
+{"id":"a1","timestamp":"2026-11-01T10:00:03.000Z","payload":{"type":"assistant","content":"thinking it over","operationType":"Reasoning","reasoningModelId":"claude-opus-5.5"}}
+{"id":"a2","timestamp":"2026-11-01T10:00:04.000Z","payload":{"type":"assistant","content":"Let me check.","operationType":"Say"}}
+{"id":"c1","timestamp":"2026-11-01T10:00:05.000Z","payload":{"type":"tool_call","toolCallId":"tc1","toolName":"execute_bash","args":{"command":"make"},"status":"approved","kind":"execute"}}
+{"id":"c2","timestamp":"2026-11-01T10:00:06.000Z","payload":{"type":"tool_call","toolCallId":"tc1","toolName":"execute_bash","args":{"command":"make"},"status":"failed","kind":"execute"}}
+{"id":"r1","timestamp":"2026-11-01T10:00:07.000Z","payload":{"type":"tool_result","toolCallId":"tc1","content":"exit 2","success":false}}
+{"id":"c3","timestamp":"2026-11-01T10:00:08.000Z","payload":{"type":"tool_call","toolCallId":"tc2","toolName":"load_resource","args":{"id":"skill::keep"},"status":"completed","kind":"other"}}
+{"id":"r2","timestamp":"2026-11-01T10:00:09.000Z","payload":{"type":"tool_result","toolCallId":"tc2","content":"loaded","success":true}}
+{"id":"u3","timestamp":"2026-11-01T10:00:10.000Z","payload":{"type":"user","content":"The previous response was interrupted. Continue.","_meta":{"kiro":{"syntheticUserMessageReason":"interrupted"}}}}
+{"id":"u4","timestamp":"2026-11-01T10:00:11.000Z","payload":{"type":"user","content":"[LIVE STEERING - New message from user]\nstop and explain","_meta":{"kiro":{"syntheticUserMessageReason":"steering"}}}}
+{"id":"e1","timestamp":"2026-11-01T10:00:12.000Z","payload":{"type":"turn_end","stopReason":"refusal"}}
