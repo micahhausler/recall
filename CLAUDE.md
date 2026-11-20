@@ -17,14 +17,19 @@ Examples and tests use placeholders like `you`, `example.com`, and `laptop-a`.
 - `internal/store`: the archive store interface, with `fs` and `s3` backends and an in-memory fake.
 - `internal/recur`: recurring jobs reconciled into cron (Linux) or LaunchAgents (macOS).
 - `internal/archive`: the weekly transcript archive.
-- `internal/harness`: one package per coding agent's transcript format; `claude` is the only one today.
+- `internal/redact`: the token-shape redaction the archive applies when `archive-chats.redact` is on.
+- `internal/harness`: one adapter per coding agent's transcript format and native memory: `claude` and `kiro`.
+- `internal/evidence`: evidence sources outside the chat, read behind `learn.evidence`; `github` (review comments and failed checks on agent-authored pull requests, through `gh`) is the only one today.
 - `internal/events`: the normalized event schema (`docs/events.md`).
 - `internal/clock`: the injected clock; nothing calls `time.Now` directly where a week boundary matters.
 - `internal/model`: the headless harness-CLI runner model calls go through; never an API client.
   Only the apply step's `Editor` gets tools, and only file tools confined to its worktrees.
-- `internal/learn`: the learning loop (`docs/learning.md`): render, map with cache, ledger, aging, reduce, apply.
-- `internal/review`: staging an edit for review: a worktree per repo, a commit, and the publishers (`pr`, `branch`) that hand it over.
+- `internal/learn`: the learning loop (`docs/learning.md`): render, map with cache, rule hits, ledger, aging, candidates, scope, evidence checks, reduce, apply.
+  The binary, not a model, makes every check that holds a proposal back, and every edit to a harness settings file.
+- `internal/review`: staging an edit for review: a git worktree per repo, one commit per proposal, and the publishers (`pr`, `branch`) that hand it over.
 - `internal/extension`: the owner's extension files that skills and the reduce append at load time.
+- `internal/hook`: what the plugin's session hooks need: the hook input, the recursion guard, and the worker's lock and schedule.
+- `hooks/hooks.json`: the plugin's SessionEnd hook, which runs `recall hook`; nothing runs at session start.
 - `skills/<name>/SKILL.md`: one skill per subcommand, named like it, ending in the "Owner additions" block that loads `recall extension <name>` (except recall-setup, which runs before the binary exists).
 - `config.example.toml`: every config key, with a comment.
 

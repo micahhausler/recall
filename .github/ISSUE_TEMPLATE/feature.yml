@@ -1,0 +1,25 @@
+name: Feature request
+description: Something recall should do but doesn't.
+title: "[feature]: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do and where recall falls short. Include no session text, hostnames, account IDs, ARNs, internal URLs, or paths that name a person; use placeholders like `you`, `example.com`, and `~/project`.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What recall should do
+      description: The behavior you want, as concretely as you can.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you tried, or why existing subcommands and config don't cover it.
+    validations:
+      required: false

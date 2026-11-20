@@ -1,0 +1,41 @@
+name: Bug report
+description: recall did something wrong.
+title: "[bug]: "
+body:
+  - type: input
+    id: version
+    attributes:
+      label: recall version
+      description: The output of `recall version`.
+      placeholder: recall v0.2.0
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      description: Operating system and version, for example from `uname -sr`.
+      placeholder: Darwin 24.5.0
+    validations:
+      required: true
+  - type: input
+    id: harness
+    attributes:
+      label: Harness
+      description: The coding agent involved, if any.
+      placeholder: Claude Code
+    validations:
+      required: false
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: Include no session text, hostnames, account IDs, ARNs, internal URLs, or paths that name a person; use placeholders like `you`, `example.com`, and `~/project`.
+    validations:
+      required: true
+  - type: textarea
+    id: what-was-expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
