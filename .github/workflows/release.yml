@@ -27,7 +27,7 @@ jobs:
       - uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
-          version: v2.11.2  # matches the version the config was checked with
+          version: v2.20.3  # test.yml checks the config and cask against this version
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ github.token }}

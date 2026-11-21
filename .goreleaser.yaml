@@ -41,9 +41,9 @@ changelog:
 
 homebrew_casks:
   - name: recall
-    binary: recall
+    binaries: [recall]
     homepage: https://github.com/micahhausler/recall
-    description: Turn your coding agent's history into memory.
+    description: Turn your coding agent's history into memory
     license: Apache-2.0
     # The tap is this repo: Casks/recall.rb, committed to the default branch
     # after each release with the workflow's own token.
@@ -55,7 +55,7 @@ homebrew_casks:
     hooks:
       post:
         # The binary isn't notarized; without this macOS refuses to run it.
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/recall"]
+        install_steps: |
+          on_macos do
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/recall"]
           end
