@@ -423,3 +423,53 @@ func TestRuleLandedAncestryAndExactBullet(t *testing.T) {
 		t.Errorf("ancestor commit: landed=%v ok=%v, want true true", landed, ok)
 	}
 }
+
+// A proposal the owner reworded by hand, then merged by rebase or squash,
+// landed; a reword the owner rejected, leaving the old rule in place, did
+// not, though the old rule reads much like the proposal.
+func TestRuleLandedEditedByHand(t *testing.T) {
+	ctx := context.Background()
+	live := clone(t)
+	write := func(text string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(live, "CLAUDE.md"), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := "- Use SSH for remotes, and stop if SSH auth fails on a machine.\n"
+	write("# rules\n\n" + old)
+	run(t, live, "add", "-A")
+	run(t, live, "commit", "-q", "-m", "base")
+	run(t, live, "push", "-q", "origin", "HEAD:main")
+
+	// The proposal's own commit, on a branch the merge rewrites away.
+	proposed := "Use SSH for GitHub remotes. If SSH auth fails on a machine, stop and help me set up SSH there; don't switch the remote or scripts to HTTPS."
+	run(t, live, "checkout", "-q", "-b", "learn-x")
+	write("# rules\n\n- " + proposed + "\n")
+	run(t, live, "commit", "-q", "-am", "reword")
+	commit := run(t, live, "rev-parse", "HEAD")
+	run(t, live, "checkout", "-q", "main")
+	p := Published{Repo: live, Base: "origin/main", Branch: "learn-x", Commit: commit}
+
+	// Rejected: main still holds the old rule.
+	if landed, _ := RuleLanded(ctx, p, proposed); landed {
+		t.Error("rejected reword read as landed")
+	}
+
+	// Edited by hand, then merged as a new commit.
+	write("# rules\n\n- Use SSH for `origin` when it's my repo or my fork. An `upstream` remote over HTTPS is fine. " +
+		"If SSH auth fails on a machine, stop and help me set up SSH there; don't switch `origin` or scripts to HTTPS.\n")
+	run(t, live, "commit", "-q", "-am", "squashed")
+	run(t, live, "push", "-q", "origin", "HEAD:main")
+	if landed, ok := RuleLanded(ctx, p, proposed); !landed || !ok {
+		t.Errorf("hand-edited reword: landed=%v ok=%v, want true true", landed, ok)
+	}
+
+	// An unrelated new bullet is not the proposal.
+	write("# rules\n\n" + old + "- Keep PR descriptions to a few short lines.\n")
+	run(t, live, "commit", "-q", "-am", "other")
+	run(t, live, "push", "-q", "origin", "HEAD:main")
+	if landed, _ := RuleLanded(ctx, p, proposed); landed {
+		t.Error("unrelated new bullet read as the proposal")
+	}
+}

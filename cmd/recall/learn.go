@@ -261,27 +261,25 @@ func syncedLedger(ctx context.Context, env *archiveEnv, st store.Store, strict b
 // claimed is claimed first, since the host running the reduce is its
 // reducer. On any other host (a forced run), the reviews this run recorded
 // go to a per-host store object instead, which the reducer folds into the
-// shared ledger at its next sync. Failing to publish is a warning, never a
-// failed run: the local ledger holds the result, and the next reduce
-// publishes it.
-func publishStoreLedger(ctx context.Context, env *archiveEnv, st store.Store, ledger *learn.Ledger) {
-	warn := func(err error) {
-		fmt.Fprintf(os.Stderr, "recall: warning: publishing the rule ledger to the store: %v\n", err)
+// shared ledger at its next sync. Failing to claim or publish fails the
+// run, after the caller has saved and printed what it made: the local
+// ledger holds the result, and a run that exits clean while the store never
+// changes hides a missing grant for weeks.
+func publishStoreLedger(ctx context.Context, env *archiveEnv, st store.Store, ledger *learn.Ledger) error {
+	fail := func(err error) error {
+		return fmt.Errorf("publishing the rule ledger to the store: %w%s", err, grantHint(err))
 	}
 	host := env.settings.Host
 	claim, err := storeReducer(ctx, st)
 	if err != nil {
-		warn(err)
-		return
+		return fail(err)
 	}
 	if claim == "" {
 		if err := claimReducer(ctx, st, host); err != nil {
-			warn(err)
-			return
+			return fail(err)
 		}
 		if claim, err = storeReducer(ctx, st); err != nil {
-			warn(err)
-			return
+			return fail(err)
 		}
 	}
 	if claim != host {
@@ -293,11 +291,48 @@ func publishStoreLedger(ctx context.Context, env *archiveEnv, st store.Store, le
 		}
 		fmt.Fprintf(os.Stderr, "recall: note: %s is this store's reducer and this machine is %s, so this host didn't write the store ledger; %s; "+
 			"if %s is gone, `recall learn reducer --take` moves the claim here\n", claim, host, note, claim)
-		return
+		return nil
 	}
 	if _, err := learn.PutStoreLedger(ctx, st, ledger, env.clk.Now()); err != nil {
-		warn(err)
+		return fail(err)
 	}
+	return nil
+}
+
+// checkReducerWrites fails a reduce before its model call when this host
+// can't write what the reduce ends by writing: the reducer claim on an
+// unclaimed store, which it takes now rather than after, and a new ledger
+// version. A host that isn't the reducer writes neither.
+func checkReducerWrites(ctx context.Context, env *archiveEnv, st store.Store) error {
+	fail := func(err error) error {
+		return fmt.Errorf("this host reduces for the store but can't write to it: %w%s", err, grantHint(err))
+	}
+	claim, err := storeReducer(ctx, st)
+	if err != nil {
+		return nil // reducerGate already warned; the publish reports it
+	}
+	if claim == "" {
+		if err := claimReducer(ctx, st, env.settings.Host); err != nil {
+			return fail(err)
+		}
+		claim = env.settings.Host
+	}
+	if claim != env.settings.Host {
+		return nil
+	}
+	if err := learn.CheckStoreLedgerWrite(ctx, st); err != nil {
+		return fail(err)
+	}
+	return nil
+}
+
+// grantHint points a denied store write at the grants it needs.
+func grantHint(err error) string {
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "accessdenied") || strings.Contains(msg, "statuscode: 403") || strings.Contains(msg, "permission denied") {
+		return "; the reducer needs s3:PutObject on learn/reducer and ledger/* (docs/store.md lists every grant)"
+	}
+	return ""
 }
 
 // loadLedgerAndHits loads the synced ledger with every harness's rule hits
@@ -1139,6 +1174,9 @@ func reduce(ctx context.Context, env *archiveEnv, runner model.Runner, outDir st
 		fmt.Print(r.BuildInput(window))
 		return "", false, nil
 	}
+	if err := checkReducerWrites(ctx, env, st); err != nil {
+		return "", false, err
+	}
 	if outDir == "" {
 		outDir = freshRunDir(learnStateRoot(env), env.clk.Now())
 	}
@@ -1153,11 +1191,14 @@ func reduce(ctx context.Context, env *archiveEnv, runner model.Runner, outDir st
 	}
 	// The store gets the result as a new ledger version, so every other
 	// host's next map judges against these rules and ids.
-	publishStoreLedger(ctx, env, st, r.Ledger)
+	perr := publishStoreLedger(ctx, env, st, r.Ledger)
 	if err := r.Candidates.Save(env.settings.Learn.Candidates); err != nil {
 		return "", false, err
 	}
 	fmt.Printf("proposals: %s (input beside it) (%s)\n", tilde(proposals, env.home), usage)
+	if perr != nil {
+		return "", false, perr
+	}
 	return outDir, r.OpenCandidates > 0, nil
 }
 
@@ -1286,6 +1327,7 @@ func applyRun(ctx context.Context, env *archiveEnv, dir string, dryRun bool) (co
 		}
 	}
 	res, err := a.Run(ctx, plan)
+	var perr error
 	if res != nil {
 		// What went to review is pending until the owner decides; the next
 		// reduce and apply read it from the ledger.
@@ -1295,7 +1337,7 @@ func applyRun(ctx context.Context, env *archiveEnv, dir string, dryRun bool) (co
 		} else {
 			// The pending reviews ride the store ledger too, so they survive
 			// losing the local file.
-			publishStoreLedger(ctx, env, st, ledger)
+			perr = publishStoreLedger(ctx, env, st, ledger)
 		}
 		for _, o := range res.Outcomes {
 			if !o.Applied && !held[o.Route] {
@@ -1313,7 +1355,7 @@ func applyRun(ctx context.Context, env *archiveEnv, dir string, dryRun bool) (co
 			fmt.Printf("apply: %d change(s) for review (%s)\n", len(res.Changes), res.Usage)
 		}
 	}
-	if err != nil {
+	if err := errors.Join(err, perr); err != nil {
 		return fail(err), false
 	}
 	return 0, true

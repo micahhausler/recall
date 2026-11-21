@@ -38,9 +38,9 @@ Uploads that never overwrite use `If-None-Match: *`; IAM can't require that head
 A store has one reducer, so only one machine needs the reduce grants.
 Giving every machine the same reducer policy is simpler, at the cost of letting any of them claim the reducer or publish a ledger.
 
-A missing grant on the reduce path doesn't stop a run.
-The claim and the ledger write each print a warning and the run continues, so a reducer without these grants proposes and applies every week while the store's ledger and claim never change.
-After a first reduce, `recall learn reducer` should name the host, and the bucket should hold an object under `ledger/`.
+A missing grant on the reduce path fails the run.
+The reduce takes the claim on an unclaimed store and probes the ledger write before its model call, so a reducer without these grants stops before spending anything.
+The probe repeats the newest ledger version's upload with `If-None-Match`, which writes nothing; on a store with no version yet it has nothing to probe, and the first publish reports a denial instead, after the proposals are saved.
 
 ## The printed policies cover setup and archiving only
 

@@ -225,6 +225,8 @@ In `proposals.md` the binary follows each cited candidate id with the sessions b
   Each gets a fresh worktree on a `learn-<date>` branch from its origin's default branch; an existing branch of that name is an earlier apply waiting for review, and stops the run.
 - One `model.Editor` run (`learn.apply_model`) gets every worktree and the exact path each proposal may change, and reports one `Applied[...]` or `Skipped[...]` line per proposal.
   `extensions.learn-apply` files join its input as OWNER INSTRUCTIONS.
+- The harness refuses a headless edit to any file under a `.claude` directory, whatever the permission mode or allow rules, and the default targets sit under `~/.claude/`.
+  So every `.claude` directory the input names is copied to a `shadow` folder in the run directory, the model edits the copies, and the binary copies each changed or new file back into the worktree before anything is staged.
 - Each changed worktree runs `learn.check`, when set, on its staged diff, then commits and goes to the publisher; an unchanged one is removed with its branch.
   A repo under `keep.public` is marked public: its edits generalize anything personal, and its pull request carries no proposal text.
 - The run directory keeps `apply-input.md`, the model's `apply.md`, and `apply.json`, which records each change and every outcome and marks the run as applied, so a scheduled rerun doesn't open a second pull request.
@@ -242,7 +244,9 @@ A proposal the owner closes is a judgment, and the loop keeps it.
   A publisher that can't answer leaves its reviews pending, with a warning.
 - A merge says the change landed, not that every proposal in it did.
   After a merge, the binary checks each add and reword against the merged base: a proposal whose own commit is an ancestor of the base landed, whatever the wording became; a squash or rebase merge loses that commit, so the fallback is the proposal's landed rule text, matched as an exact whole bullet line so a short rule can't match text that was already in the base.
-  A proposal that passes neither is recorded as rejected: the owner dropped its commit, or took its text out, before merging.
+  A proposal the owner reworded by hand before merging landed too: a top-level bullet in a file the proposal's commit changed, new since that commit's parent, whose words mostly match the proposed rule (Jaccard similarity of 0.5 or more).
+  The bullet has to be new, so a rejected reword doesn't match the rule it would have replaced.
+  A proposal that passes none of these is recorded as rejected: the owner dropped its commit, or took its text out, before merging.
   That check fetches the remote base first, so reading a verdict can make a network call; a remote that can't be read leaves the check to local refs, and never fails the run.
   The text fallback is on the exact text the ledger keyed the review to, so rewording a bullet before merging (when its commit didn't survive the merge) is recorded as a rejection of the original proposal, while the owner's own wording joins the ledger through `rules sync` like any hand-written rule.
 - The reduce input lists pending reviews and rejections within `learn.retire_days` under REVIEWS, and a candidate a rejected proposal used returns only with evidence from sessions after the rejection, so the proposal can come back only reworded and on new evidence.

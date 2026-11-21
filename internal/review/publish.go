@@ -209,9 +209,12 @@ func (Branch) Verdict(ctx context.Context, p Published) (Verdict, string, error)
 // strongest signal and wins whatever the wording became; a squash or rebase
 // merge loses that commit, so the fallback is the ledger's record of the
 // rule text that landed, matched as an exact whole bullet line so a short
-// rule can't match text that was already in the base. ok is false when
-// there is nothing to check against: no repo, no rule text, or a remote
-// base that can't be read.
+// rule can't match text that was already in the base. Last, a proposal the
+// owner reworded by hand before merging landed too: a bullet in a file the
+// proposal's commit changed, new since that commit's parent, and close to
+// the proposed wording (see editedLanded). ok is false when there is nothing
+// to check against: no repo, no rule text, or a remote base that can't be
+// read.
 func RuleLanded(ctx context.Context, p Published, rule string) (landed, ok bool) {
 	// Rules are top-level bullets, one line each; sub-bullets under a rule
 	// are detail, so the first line identifies it.
@@ -247,8 +250,88 @@ func RuleLanded(ctx context.Context, p Published, rule string) (landed, ok bool)
 		if _, err := git(ctx, p.Repo, "", "grep", "-q", "-E", "-e", bullet, b); err == nil {
 			return true, true
 		}
+		if editedLanded(ctx, p.Repo, p.Commit, b, rule) {
+			return true, true
+		}
 	}
 	return false, checked
+}
+
+// editedMinSimilarity is how close, as word-set Jaccard similarity, a new
+// bullet must be to the proposed rule to count as the owner's rewording of
+// it. A hand edit of a rule keeps most of its words (0.6 and up in
+// practice); unrelated rules in one file share few (under 0.2).
+const editedMinSimilarity = 0.5
+
+// editedLanded reports whether the owner merged a proposal after rewording
+// it: some file the proposal's commit changed holds, in base, a top-level
+// bullet that wasn't in that file at the commit's parent and is close to
+// the proposed rule. Requiring the bullet to be new keeps a rejected reword
+// from matching the rule it would have replaced, which reads much like it.
+// It needs the proposal's commit, so it is false once that is gone.
+func editedLanded(ctx context.Context, repo, commit, base, rule string) bool {
+	if commit == "" {
+		return false
+	}
+	files, err := git(ctx, repo, "", "diff", "--name-only", commit+"^", commit)
+	if err != nil {
+		return false
+	}
+	want := words(rule)
+	for _, f := range strings.Fields(files) {
+		after, err := gitRaw(ctx, repo, "", "show", base+":"+f)
+		if err != nil {
+			continue
+		}
+		before, _ := gitRaw(ctx, repo, "", "show", commit+"^:"+f)
+		old := map[string]bool{}
+		for _, b := range bullets(before) {
+			old[b] = true
+		}
+		for _, b := range bullets(after) {
+			if !old[b] && jaccard(want, words(b)) >= editedMinSimilarity {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+var bulletLine = regexp.MustCompile(`^[-*]\s+(.*\S)\s*$`)
+
+// bullets lists a Markdown file's top-level bullet texts.
+func bullets(text string) []string {
+	var out []string
+	for _, l := range strings.Split(text, "\n") {
+		if m := bulletLine.FindStringSubmatch(l); m != nil {
+			out = append(out, m[1])
+		}
+	}
+	return out
+}
+
+var wordRE = regexp.MustCompile(`[a-z0-9$]+`)
+
+func words(s string) map[string]bool {
+	out := map[string]bool{}
+	for _, w := range wordRE.FindAllString(strings.ToLower(s), -1) {
+		out[w] = true
+	}
+	return out
+}
+
+func jaccard(a, b map[string]bool) float64 {
+	inter := 0
+	for w := range a {
+		if b[w] {
+			inter++
+		}
+	}
+	union := len(a) + len(b) - inter
+	if union == 0 {
+		return 0
+	}
+	return float64(inter) / float64(union)
 }
 
 // Fake records what it was asked to publish and answers verdicts from a

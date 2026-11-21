@@ -275,8 +275,15 @@ func TestApplyEndToEnd(t *testing.T) {
 		t.Fatalf("editor called %d times", len(f.editor.Calls))
 	}
 	call := f.editor.Calls[0]
-	if call.Model != "sonnet" || len(call.Dirs) != 2 {
+	// The two worktrees, and the shadow folder the dotfiles' .claude
+	// directory is copied to, since the harness won't edit under one.
+	if call.Model != "sonnet" || len(call.Dirs) != 3 || filepath.Base(call.Dirs[2]) != shadowDir {
 		t.Errorf("edit call = model %s, dirs %v", call.Model, call.Dirs)
+	}
+	for _, l := range strings.Split(call.Input, "\n") {
+		if strings.HasPrefix(l, "- edit: ") && strings.Contains(l, "/.claude/") {
+			t.Errorf("input names a path under .claude, which the harness won't edit: %s", l)
+		}
 	}
 	for _, want := range []string{"stands in for " + f.kit + " (public)", "stands in for " + f.dot + " (private)",
 		"- edit: " + filepath.Join(call.Dirs[1], "skills", "practice", "SKILL.md"),
