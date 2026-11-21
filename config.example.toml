@@ -106,6 +106,8 @@ targets = ["~/.claude/CLAUDE.md", "~/.kiro/steering/AGENTS.md"]
 # Checkouts whose own context files a lesson may land in when every session
 # behind it ran in that repo: its CLAUDE.md, .claude/CLAUDE.md, or AGENTS.md,
 # path-scoped rules under .claude/rules, and a directory's own CLAUDE.md.
+# Only files git tracks count, so a checkout at ~ skips the untracked and
+# ignored context files under it.
 # recall never proposes a change to a repo that isn't listed here, since a
 # pull request there may be read by other people. Default: none.
 repos = ["~/src/project"]

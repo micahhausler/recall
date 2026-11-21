@@ -16,8 +16,10 @@ import (
 )
 
 func TestDiscoverRepo(t *testing.T) {
+	isolateGit(t)
 	root := review.Resolve(t.TempDir())
-	write(t, filepath.Join(mkdir(t, root, ".git"), "config"), "[remote \"origin\"]\n\turl = https://example.com/you/project.git\n")
+	gitIn(t, root, "init", "-q")
+	gitIn(t, root, "remote", "add", "origin", "https://example.com/you/project.git")
 	write(t, filepath.Join(root, "AGENTS.md"), "- a rule\n")
 	if err := os.Symlink("AGENTS.md", filepath.Join(root, "CLAUDE.md")); err != nil {
 		t.Fatal(err)
@@ -29,6 +31,12 @@ func TestDiscoverRepo(t *testing.T) {
 	write(t, filepath.Join(mkdir(t, root, "internal", "store"), "CLAUDE.md"), "- nested\n")
 	write(t, filepath.Join(mkdir(t, root, "node_modules", "dep"), "CLAUDE.md"), "- someone else's\n")
 	write(t, filepath.Join(mkdir(t, root, "a", "b", "c", "d"), "CLAUDE.md"), "- too deep\n")
+	gitIn(t, root, "add", "-A")
+	// Files git doesn't track aren't the repo's to edit: an ignored rules
+	// file, and an untracked directory's own file.
+	write(t, filepath.Join(root, ".gitignore"), ".claude/rules/managed.md\n")
+	write(t, filepath.Join(rules, "managed.md"), "- someone else's rules\n")
+	write(t, filepath.Join(mkdir(t, root, "scratch"), "AGENTS.md"), "- untracked\n")
 
 	repo, err := DiscoverRepo(root)
 	if err != nil {
@@ -59,10 +67,21 @@ func TestDiscoverRepo(t *testing.T) {
 	// A repo with no context file offers a new one, which isn't a ledger
 	// target until it exists.
 	bare := review.Resolve(t.TempDir())
-	mkdir(t, bare, ".git")
+	gitIn(t, bare, "init", "-q")
 	empty, err := DiscoverRepo(bare)
 	if err != nil || len(empty.Files) != 1 || !empty.Files[0].New || empty.Files[0].Path != filepath.Join(bare, "CLAUDE.md") || len(empty.Paths()) != 0 {
 		t.Errorf("empty repo = %+v, %v", empty, err)
+	}
+
+	// An untracked root file is neither a target nor overwritten as a new one.
+	write(t, filepath.Join(bare, "CLAUDE.md"), "- untracked\n")
+	if untracked, err := DiscoverRepo(bare); err != nil || len(untracked.Files) != 0 {
+		t.Errorf("repo with an untracked CLAUDE.md = %+v, %v", untracked, err)
+	}
+
+	// A directory that isn't a checkout is an error, not an empty repo.
+	if _, err := DiscoverRepo(review.Resolve(t.TempDir())); err == nil {
+		t.Error("DiscoverRepo outside a checkout succeeded")
 	}
 
 	if !repo.holds("example.com/you/project", "/home/you") || repo.holds("example.com/you/other", "/home/you") || repo.holds("", "/home/you") {
@@ -198,13 +217,16 @@ func TestRepoTargetNeedsRepoEvidence(t *testing.T) {
 // graduate of a repo rule must cite only that repo's sessions; a retire
 // removes text and is never scope-checked.
 func TestScopeProblemCoversRewordSkillGraduate(t *testing.T) {
-	local := "/home/you/src/project/CLAUDE.md"
-	repo := Repo{Root: "/home/you/src/project", Remote: "example.com/you/project",
+	// A real directory, resolved: on macOS /home is a symlink, which
+	// Resolve would follow away from a literal path under it.
+	home := review.Resolve(t.TempDir())
+	local := filepath.Join(home, "src", "project", "CLAUDE.md")
+	repo := Repo{Root: filepath.Join(home, "src", "project"), Remote: "example.com/you/project",
 		Files: []RepoFile{{Path: local}}}
-	skill := "/home/you/src/project/.claude/skills/x/SKILL.md"
+	skill := filepath.Join(home, "src", "project", ".claude", "skills", "x", "SKILL.md")
 	rules := []Rule{
 		{ID: "r-0001", Target: local, Text: "x"},
-		{ID: "r-0002", Target: "/home/you/.claude/CLAUDE.md", Text: "y"},
+		{ID: "r-0002", Target: filepath.Join(home, ".claude", "CLAUDE.md"), Text: "y"},
 	}
 	e := RunEvidence{
 		"c-in":  {{Session: "s1", Day: "2026-11-01", Repo: "example.com/you/project"}},
@@ -220,8 +242,8 @@ func TestScopeProblemCoversRewordSkillGraduate(t *testing.T) {
 		{"reword on repo evidence", Proposal{Kind: "reword", Replaces: "r-0001", Candidates: []string{"c-in"}}, local, false},
 		{"skill in the repo on outside evidence", Proposal{Kind: "skill", Target: skill, Candidates: []string{"c-out"}}, skill, true},
 		{"skill in the repo on repo evidence", Proposal{Kind: "skill", Target: skill, Candidates: []string{"c-in"}}, skill, false},
-		{"skill outside any repo", Proposal{Kind: "skill", Target: "/home/you/.claude/skills/x/SKILL.md", Candidates: []string{"c-out"}},
-			"/home/you/.claude/skills/x/SKILL.md", false},
+		{"skill outside any repo", Proposal{Kind: "skill", Target: filepath.Join(home, ".claude", "skills", "x", "SKILL.md"), Candidates: []string{"c-out"}},
+			filepath.Join(home, ".claude", "skills", "x", "SKILL.md"), false},
 		{"new skill with only a name", Proposal{Kind: "skill", Name: "x", Candidates: []string{"c-out"}}, "", false},
 		{"graduate of a repo rule on outside evidence", Proposal{Kind: "graduate", Replaces: "r-0001", Candidates: []string{"c-out"}}, "", true},
 		{"graduate of a repo rule on repo evidence", Proposal{Kind: "graduate", Replaces: "r-0001", Candidates: []string{"c-in"}}, "", false},
@@ -229,7 +251,7 @@ func TestScopeProblemCoversRewordSkillGraduate(t *testing.T) {
 		{"retire is never scope-checked", Proposal{Kind: "retire", Replaces: "r-0001", Candidates: []string{"c-out"}}, local, false},
 	}
 	for _, c := range cases {
-		why := scopeProblem(c.p, c.target, []Repo{repo}, e, "/home/you", rules)
+		why := scopeProblem(c.p, c.target, []Repo{repo}, e, home, rules)
 		if (why != "") != c.heldBack {
 			t.Errorf("%s: scopeProblem = %q, want held back %v", c.name, why, c.heldBack)
 		}

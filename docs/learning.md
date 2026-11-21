@@ -142,6 +142,7 @@ A rule in a global file costs context in every session, so a lesson that holds i
 
 - **Targets.** `learn.targets` are the global files.
   `learn.repos` lists the checkouts whose own files a proposal may also target; for each, the binary finds `CLAUDE.md`, `.claude/CLAUDE.md`, or `AGENTS.md` at the root, path-scoped rules under `.claude/rules` with the paths their frontmatter names, and a directory's own `CLAUDE.md` or `AGENTS.md` up to three levels down.
+  Only files git tracks count: review stages edits in a worktree, where an untracked or ignored file doesn't exist, so a checkout at `~` doesn't pull in every context file under the home directory.
   A listed repo with no root file offers a new `CLAUDE.md`.
   `recall learn targets` prints the list, and `rules sync` puts every existing file's bullets on the ledger.
 - **Only listed repos.** Proposals land only in `learn.targets` and the checkouts listed in `learn.repos`; recall never finds a repo on its own.

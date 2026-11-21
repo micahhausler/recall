@@ -1,9 +1,12 @@
 package learn
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -41,16 +44,23 @@ var rootFiles = []string{"CLAUDE.md", filepath.Join(".claude", "CLAUDE.md"), "AG
 // AGENTS.md is looked for.
 const nestedDepth = 3
 
-// DiscoverRepo finds a checkout's context files: the root files a harness
-// loads at launch, path-scoped rules under .claude/rules, and a
-// directory's own CLAUDE.md or AGENTS.md a few levels down. Two names for
-// one file, such as a symlink, count once. A repo with no root file offers
-// a new CLAUDE.md.
+// DiscoverRepo finds a checkout's tracked context files: the root files a
+// harness loads at launch, path-scoped rules under .claude/rules, and a
+// directory's own CLAUDE.md or AGENTS.md a few levels down. Only files git
+// tracks count: review stages edits in a worktree, where an untracked or
+// ignored file doesn't exist, and a checkout at ~ would otherwise pull in
+// every context file under the home directory. Two names for one file,
+// such as a symlink, count once. A repo with no root file offers a new
+// CLAUDE.md, unless an untracked file already sits there.
 func DiscoverRepo(root string) (Repo, error) {
 	root = review.Resolve(root)
 	repo := Repo{Root: root}
 	if _, remote := LocateCheckout("")(root); remote != "" {
 		repo.Remote = remote
+	}
+	tracked, err := trackedFiles(root)
+	if err != nil {
+		return repo, err
 	}
 	seen := map[string]bool{}
 	add := func(path string, globs []string) {
@@ -61,65 +71,90 @@ func DiscoverRepo(root string) (Repo, error) {
 		seen[real] = true
 		repo.Files = append(repo.Files, RepoFile{Path: real, Globs: globs})
 	}
+	isTracked := map[string]bool{}
+	for _, rel := range tracked {
+		isTracked[rel] = true
+	}
 	for _, name := range rootFiles {
 		path := filepath.Join(root, name)
-		if st, err := os.Stat(path); err == nil && st.Mode().IsRegular() {
+		if st, err := os.Stat(path); err == nil && st.Mode().IsRegular() && isTracked[name] {
 			add(path, nil)
 		}
 	}
 	if len(repo.Files) == 0 {
-		repo.Files = append(repo.Files, RepoFile{Path: filepath.Join(root, rootFiles[0]), New: true})
+		path := filepath.Join(root, rootFiles[0])
+		if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
+			repo.Files = append(repo.Files, RepoFile{Path: path, New: true})
+		}
 	}
 
-	rules := filepath.Join(root, ".claude", "rules")
-	var scoped []string
-	err := filepath.WalkDir(rules, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			if path == rules {
-				return filepath.SkipAll // no rules directory
-			}
-			return nil
+	rules := filepath.Join(".claude", "rules") + string(filepath.Separator)
+	var scoped, nested []string
+	for _, rel := range tracked {
+		path := filepath.Join(root, rel)
+		if st, err := os.Lstat(path); err != nil || !st.Mode().IsRegular() {
+			continue
 		}
-		if d.Type().IsRegular() && strings.HasSuffix(path, ".md") {
+		switch {
+		case strings.HasPrefix(rel, rules) && strings.HasSuffix(rel, ".md"):
 			scoped = append(scoped, path)
+		case nestedContextFile(rel):
+			nested = append(nested, path)
 		}
-		return nil
-	})
-	if err != nil {
-		return repo, err
 	}
 	sort.Strings(scoped)
 	for _, path := range scoped {
 		add(path, ruleGlobs(path))
-	}
-
-	var nested []string
-	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		rel, _ := filepath.Rel(root, path)
-		if d.IsDir() {
-			name := d.Name()
-			deep := strings.Count(rel, string(filepath.Separator)) >= nestedDepth
-			if path != root && (strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor" || deep) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if d.Type().IsRegular() && (d.Name() == "CLAUDE.md" || d.Name() == "AGENTS.md") && filepath.Dir(path) != root {
-			nested = append(nested, path)
-		}
-		return nil
-	})
-	if err != nil {
-		return repo, err
 	}
 	sort.Strings(nested)
 	for _, path := range nested {
 		add(path, nil)
 	}
 	return repo, nil
+}
+
+// nestedContextFile says whether rel, a tracked path, is a directory's own
+// CLAUDE.md or AGENTS.md below the root: no deeper than nestedDepth
+// directories, and outside hidden, node_modules, and vendor directories.
+func nestedContextFile(rel string) bool {
+	name := filepath.Base(rel)
+	if name != "CLAUDE.md" && name != "AGENTS.md" {
+		return false
+	}
+	dirs := strings.Split(filepath.Dir(rel), string(filepath.Separator))
+	if dirs[0] == "." || len(dirs) > nestedDepth {
+		return false
+	}
+	for _, d := range dirs {
+		if strings.HasPrefix(d, ".") || d == "node_modules" || d == "vendor" {
+			return false
+		}
+	}
+	return true
+}
+
+// trackedFiles lists the files git tracks in the checkout at root, relative
+// to it, in the platform's separator.
+func trackedFiles(root string) ([]string, error) {
+	cmd := exec.Command("git", "ls-files", "-z")
+	cmd.Dir = root
+	var out, errOut bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errOut
+	if err := cmd.Run(); err != nil {
+		detail := strings.TrimSpace(errOut.String())
+		if detail == "" {
+			detail = err.Error()
+		}
+		return nil, fmt.Errorf("git ls-files: %s", detail)
+	}
+	var files []string
+	for _, rel := range strings.Split(out.String(), "\x00") {
+		if rel != "" {
+			files = append(files, filepath.FromSlash(rel))
+		}
+	}
+	return files, nil
 }
 
 // ruleGlobs reads the paths a rules file's frontmatter scopes it to: an
