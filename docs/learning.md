@@ -21,6 +21,7 @@ Three interfaces carry it:
   No API client lives in the binary, so existing auth, billing, and model selection work unchanged.
 - **`model.Editor`** (`internal/model`): the same CLI with file tools only (`Read Edit Write Glob Grep`), confined to the apply step's worktrees.
 - **`review.Publisher`** (`internal/review`): hands a staged change to the owner, keyed by `learn.review`: `pr` pushes and opens a pull request with `gh`, and `branch` leaves the branch in place, which works with any git host or none.
+  With `review.credentials.command` set, `pr` and the `github` evidence source act as the credential that command prints per repository, in place of the machine's own login ([credentials.md](credentials.md)).
 
 
 Borrowed from muse (github.com/ellistarn/muse), which runs the same observe-then-fold shape over conversation history:
@@ -128,6 +129,7 @@ An evidence source (`internal/evidence`) reads them, beside the harnesses, behin
 
 - The `github` source reads each `learn.repos` origin's recent pull requests through the `gh` CLI, never an API client, so existing gh auth works unchanged.
   One batched GraphQL query per repository fetches the owner's login and the pull requests with their commits, comments, reviews, and checks, so a scan costs one `gh` call per repo.
+  With a credential command, `gh` runs with its token, and the owner is the login the credential names, since the token's own login is the bot's.
   Only a pull request whose commits carry the agent's co-author trailer counts: those are the agent's changes, and feedback on them is feedback on the agent.
 - Issue comments, review bodies, and the comments left on the diff become observations with source `review`; failed checks and statuses become observations with source `ci`.
   A bot's comment is skipped: it is machine output wearing a login, and the failed checks already carry the CI side.

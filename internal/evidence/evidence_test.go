@@ -2,10 +2,15 @@ package evidence
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/micahhausler/recall/internal/credential"
 )
 
 // fakeGH answers the one batched GraphQL call per repo from a map keyed by
@@ -368,5 +373,102 @@ func TestFake(t *testing.T) {
 	}
 	if len(f.Since) != 1 || !f.Since[0].Equal(since) {
 		t.Errorf("fake recorded %v", f.Since)
+	}
+}
+
+// With credentials, gh runs with their token for each repo, and the owner
+// is whoever the credentials act for: gh's viewer is the bot, whose login
+// must never make a comment owner-typed.
+func TestGitHubWithCredentials(t *testing.T) {
+	const repo = "github.com/you/example"
+	dir := t.TempDir()
+	gh, log := filepath.Join(dir, "gh"), filepath.Join(dir, "calls")
+	resp := `{"data": {"viewer": {"login": "recall-you[bot]"}, "repository": {"pullRequests": {"nodes": [
+		{
+			"number": 4, "title": "Fix", "author": {"login": "you"},
+			"updatedAt": "2026-11-10T10:00:00Z",
+			"commits": {"nodes": [{"commit": {"messageBody": "x\n\nCo-Authored-By: Claude <noreply@example.com>"}}]},
+			"comments": {"nodes": [
+				{"author": {"login": "you"}, "body": "mine", "createdAt": "2026-11-10T09:00:00Z"},
+				{"author": {"login": "reviewer"}, "body": "theirs", "createdAt": "2026-11-10T09:30:00Z"}
+			]},
+			"reviews": {"nodes": []},
+			"reviewThreads": {"nodes": []},
+			"head": {"nodes": []}
+		}
+	]}}}}`
+	if err := os.WriteFile(filepath.Join(dir, "resp.json"), []byte(resp), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\nprintf '%s|%s\\n' \"$GH_TOKEN\" \"$1 $2\" >> '" + log + "'\ncat '" + filepath.Join(dir, "resp.json") + "'\n"
+	if err := os.WriteFile(gh, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	creds := &credential.Fake{Credential: credential.Credential{Token: "ghs_faketoken", Owner: "you"}}
+	g := &GitHub{Repos: []string{repo}, GH: gh, Credentials: creds}
+	items, err := g.Items(context.Background(), time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC))
+	if err != nil || len(items) != 2 {
+		t.Fatalf("items = %+v, %v", items, err)
+	}
+	if !items[0].Owner || items[0].Author != "you" {
+		t.Errorf("the owner's comment = %+v, want it owner-typed by the credentials' owner", items[0])
+	}
+	if items[1].Owner {
+		t.Errorf("a reviewer's comment counted as the owner's: %+v", items[1])
+	}
+	if len(creds.Asked) != 1 || creds.Asked[0] != repo {
+		t.Errorf("token asked for %v", creds.Asked)
+	}
+	calls, _ := os.ReadFile(log)
+	if got := strings.TrimSpace(string(calls)); got != "ghs_faketoken|api graphql" {
+		t.Errorf("gh call = %q, want the token in the environment and not in argv", got)
+	}
+}
+
+// Credentials that don't cover a repo fail that repo's scan, named, and gh
+// never runs for it as the machine's own login.
+func TestGitHubWithCredentialsSkipsUncoveredRepo(t *testing.T) {
+	gh := filepath.Join(t.TempDir(), "gh")
+	if err := os.WriteFile(gh, []byte("#!/bin/sh\necho ran > '"+gh+".ran'\necho '{}'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	g := &GitHub{Repos: []string{"github.com/you/elsewhere"}, GH: gh,
+		Credentials: &credential.Fake{Err: errors.New("the app isn't installed")}}
+	items, err := g.Items(context.Background(), time.Time{})
+	if len(items) != 0 || err == nil || !strings.Contains(err.Error(), "github.com/you/elsewhere") || !strings.Contains(err.Error(), "isn't installed") {
+		t.Fatalf("items = %v, err = %v", items, err)
+	}
+	if _, serr := os.Stat(gh + ".ran"); serr == nil {
+		t.Error("gh ran for a repo the credentials don't cover")
+	}
+}
+
+// A credential that names no owner makes no comment owner-typed: not even
+// one by the login the token belongs to.
+func TestGitHubWithCredentialsAndNoOwner(t *testing.T) {
+	dir := t.TempDir()
+	gh := filepath.Join(dir, "gh")
+	resp := `{"data": {"viewer": {"login": "you"}, "repository": {"pullRequests": {"nodes": [
+		{
+			"number": 4, "title": "Fix", "author": {"login": "you"},
+			"updatedAt": "2026-11-10T10:00:00Z",
+			"commits": {"nodes": [{"commit": {"messageBody": "x\n\nCo-Authored-By: Claude <noreply@example.com>"}}]},
+			"comments": {"nodes": [{"author": {"login": "you"}, "body": "mine", "createdAt": "2026-11-10T09:00:00Z"}]},
+			"reviews": {"nodes": []},
+			"reviewThreads": {"nodes": []},
+			"head": {"nodes": []}
+		}
+	]}}}}`
+	if err := os.WriteFile(filepath.Join(dir, "resp.json"), []byte(resp), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gh, []byte("#!/bin/sh\ncat '"+filepath.Join(dir, "resp.json")+"'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	g := &GitHub{Repos: []string{"github.com/you/example"}, GH: gh,
+		Credentials: &credential.Fake{Credential: credential.Credential{Token: "ghs_faketoken"}}}
+	items, err := g.Items(context.Background(), time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC))
+	if err != nil || len(items) != 1 || items[0].Owner {
+		t.Fatalf("items = %+v, %v; want one comment that isn't owner-typed", items, err)
 	}
 }

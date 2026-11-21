@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -25,8 +26,17 @@ func git(ctx context.Context, dir, stdin string, args ...string) (string, error)
 // gitRaw is git with stdout as written, for output where leading
 // whitespace means something.
 func gitRaw(ctx context.Context, dir, stdin string, args ...string) (string, error) {
+	return gitEnv(ctx, dir, stdin, nil, args...)
+}
+
+// gitEnv is gitRaw with env added to the process's own environment: where
+// a key repeats, env wins.
+func gitEnv(ctx context.Context, dir, stdin string, env []string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
 	}
@@ -41,6 +51,23 @@ func gitRaw(ctx context.Context, dir, stdin string, args ...string) (string, err
 		return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), detail)
 	}
 	return out.String(), nil
+}
+
+// configEnv returns env that hands git the given config pairs for one
+// process, the way -c does but out of argv: GIT_CONFIG_COUNT and its
+// numbered keys and values, after any the environment already carries.
+// Later pairs win, and these outrank every config file.
+func configEnv(pairs ...[2]string) []string {
+	n := 0
+	if v, err := strconv.Atoi(os.Getenv("GIT_CONFIG_COUNT")); err == nil && v > 0 {
+		n = v
+	}
+	env := make([]string, 0, 2*len(pairs)+1)
+	for _, kv := range pairs {
+		env = append(env, fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", n, kv[0]), fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", n, kv[1]))
+		n++
+	}
+	return append(env, fmt.Sprintf("GIT_CONFIG_COUNT=%d", n))
 }
 
 // Resolve returns path with symlinks evaluated, for a path that need not
@@ -107,8 +134,26 @@ type Worktree struct {
 	// Remote is "origin" when the repo has one, else empty; Base is the ref
 	// the branch starts from, like origin/main.
 	Remote, Base string
+	// AuthorName and AuthorEmail, when both are set, author and commit
+	// the worktree's commits in place of the machine's git identity: the
+	// bot a publisher opens the pull request as, so the commits match it.
+	AuthorName, AuthorEmail string
 	// start is the commit the branch started from, for Committed.
 	start string
+}
+
+// commitEnv is the environment a commit runs with: nothing, or the
+// worktree's own author. A commit made as someone else is never signed
+// with the machine owner's key, which would vouch for an author it isn't.
+func (w *Worktree) commitEnv() []string {
+	if w.AuthorName == "" || w.AuthorEmail == "" {
+		return nil
+	}
+	env := []string{
+		"GIT_AUTHOR_NAME=" + w.AuthorName, "GIT_AUTHOR_EMAIL=" + w.AuthorEmail,
+		"GIT_COMMITTER_NAME=" + w.AuthorName, "GIT_COMMITTER_EMAIL=" + w.AuthorEmail,
+	}
+	return append(env, configEnv([2]string{"commit.gpgsign", "false"})...)
 }
 
 // AddWorktree fetches root's origin, when it has one, and checks out a new
@@ -284,7 +329,7 @@ func (w *Worktree) Commit(ctx context.Context, title, body string) error {
 	if strings.TrimSpace(body) != "" {
 		msg += "\n\n" + strings.TrimRight(body, "\n")
 	}
-	_, err := git(ctx, w.Dir, msg+"\n", "commit", "-q", "-F", "-")
+	_, err := gitEnv(ctx, w.Dir, msg+"\n", w.commitEnv(), "commit", "-q", "-F", "-")
 	return err
 }
 
@@ -303,7 +348,7 @@ func (w *Worktree) CommitPaths(ctx context.Context, msg string, rels, rest []str
 	if _, err := git(ctx, w.Dir, "", "diff", "--cached", "--quiet"); err == nil {
 		return "", nil // nothing staged
 	}
-	if _, err := git(ctx, w.Dir, msg+"\n", "commit", "-q", "-F", "-"); err != nil {
+	if _, err := gitEnv(ctx, w.Dir, msg+"\n", w.commitEnv(), "commit", "-q", "-F", "-"); err != nil {
 		return "", err
 	}
 	return git(ctx, w.Dir, "", "rev-parse", "HEAD")

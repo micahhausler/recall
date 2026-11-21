@@ -4,13 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"regexp"
 	"sort"
 	"strings"
 	"unicode"
+
+	"github.com/micahhausler/recall/internal/credential"
 )
 
 // Change is one repo's committed edits, waiting for the owner's review.
@@ -78,6 +82,56 @@ func Names() []string {
 type PR struct {
 	// GH is the gh binary, default "gh".
 	GH string
+	// Credentials, when set, are who the publisher acts as, in place of
+	// the machine's own login: the push goes to origin's HTTPS URL with
+	// their token, since a token can't authenticate an SSH remote, and gh
+	// runs with the same token. A repo they don't cover fails the publish;
+	// nothing falls back to the machine's login. When the credential names
+	// its owner, the pull request asks them for review, so a change a bot
+	// opened reaches the owner as a review request.
+	Credentials credential.Source
+	// Log gets a warning that doesn't fail a publish; nil is os.Stderr.
+	Log io.Writer
+	// base overrides the scheme and host a credentialed push goes to, so a
+	// test can stand in for the forge.
+	base string
+}
+
+func (p *PR) gh() string {
+	if p.GH == "" {
+		return "gh"
+	}
+	return p.GH
+}
+
+// originSlug is the worktree's origin as host/owner/name, or "" when the
+// origin isn't a hosted URL.
+func originSlug(ctx context.Context, w *Worktree) string {
+	if w.Remote == "" {
+		return ""
+	}
+	url, err := git(ctx, w.Dir, "", "remote", "get-url", w.Remote)
+	if err != nil {
+		return ""
+	}
+	return RemoteSlug(url)
+}
+
+// Committer is the credentials' commit identity for the worktree's origin,
+// or nothing without credentials.
+func (p *PR) Committer(ctx context.Context, w *Worktree) (name, email string, err error) {
+	if p.Credentials == nil {
+		return "", "", nil
+	}
+	slug := originSlug(ctx, w)
+	if slug == "" {
+		return "", "", fmt.Errorf("%s has no hosted origin to open a pull request on", w.Repo)
+	}
+	cred, err := p.Credentials.For(ctx, slug)
+	if err != nil {
+		return "", "", err
+	}
+	return cred.Name, cred.Email, nil
 }
 
 func (p *PR) Publish(ctx context.Context, c Change) (string, error) {
@@ -85,24 +139,37 @@ func (p *PR) Publish(ctx context.Context, c Change) (string, error) {
 	if w.Remote == "" {
 		return "", fmt.Errorf("%s has no origin remote to open a pull request on; set learn.review = \"branch\"", w.Repo)
 	}
-	if _, err := git(ctx, w.Dir, "", "push", "-q", "-u", w.Remote, w.Branch); err != nil {
-		return "", err
+	slug := originSlug(ctx, w)
+	// Without credentials the push goes to origin as the machine's own
+	// login. With them it goes to origin's HTTPS URL, named outright so the
+	// token is used whatever protocol the checkout was cloned over.
+	target := w.Remote
+	push := []string{"push", "-q", "-u", target, w.Branch}
+	var gitEnvs, ghEnvs []string
+	reviewer := ""
+	if p.Credentials != nil {
+		a, err := auth(ctx, p.Credentials, slug, p.base)
+		if err != nil {
+			return "", fmt.Errorf("%s: %w", w.Repo, err)
+		}
+		target, gitEnvs, ghEnvs, reviewer = a.url, a.git, a.gh, a.owner
+		push = []string{"push", "-q", target, "refs/heads/" + w.Branch + ":refs/heads/" + w.Branch}
 	}
-	gh := p.GH
-	if gh == "" {
-		gh = "gh"
+	if _, err := gitEnv(ctx, w.Dir, "", gitEnvs, push...); err != nil {
+		return "", err
 	}
 	args := []string{"pr", "create", "--base", w.BaseBranch(), "--head", w.Branch, "--title", c.Title, "--body-file", "-"}
 	// Name origin as the repo the pull request opens on. In a fork, gh
 	// would otherwise aim it at the repo the fork came from, and a change
 	// learned from private sessions would land in front of other people.
-	if url, err := git(ctx, w.Dir, "", "remote", "get-url", w.Remote); err == nil {
-		if slug := RemoteSlug(url); slug != "" {
-			args = append(args, "--repo", strings.TrimPrefix(slug, "github.com/"))
-		}
+	if slug != "" {
+		args = append(args, "--repo", strings.TrimPrefix(slug, "github.com/"))
 	}
-	cmd := exec.CommandContext(ctx, gh, args...)
+	cmd := exec.CommandContext(ctx, p.gh(), args...)
 	cmd.Dir = w.Dir
+	if len(ghEnvs) > 0 {
+		cmd.Env = append(os.Environ(), ghEnvs...)
+	}
 	cmd.Stdin = strings.NewReader(c.Body)
 	var out, errOut bytes.Buffer
 	cmd.Stdout = &out
@@ -117,23 +184,82 @@ func (p *PR) Publish(ctx context.Context, c Change) (string, error) {
 		// existed on origin before the apply never gets here: AddWorktree
 		// already refused it.
 		cleanup := fmt.Sprintf("the pushed branch %s was deleted from %s", w.Branch, w.Remote)
-		if _, derr := git(ctx, w.Dir, "", "push", "-q", w.Remote, "--delete", w.Branch); derr != nil {
+		if _, derr := gitEnv(ctx, w.Dir, "", gitEnvs, "push", "-q", target, "--delete", w.Branch); derr != nil {
 			cleanup = fmt.Sprintf("deleting the pushed branch %s from %s also failed: %v", w.Branch, w.Remote, derr)
 		}
 		return "", fmt.Errorf("gh pr create in %s: %s (%s)", w.Repo, detail, cleanup)
 	}
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-	return strings.TrimSpace(lines[len(lines)-1]), nil
+	where := strings.TrimSpace(lines[len(lines)-1])
+	if reviewer != "" {
+		// The pull request is open either way; a review request that
+		// didn't take costs the owner a notification, not the change.
+		if err := p.requestReview(ctx, where, reviewer, ghEnvs); err != nil {
+			log := p.Log
+			if log == nil {
+				log = os.Stderr
+			}
+			fmt.Fprintf(log, "recall: warning: %s is open, but asking %s to review it failed: %v\n", where, reviewer, err)
+		}
+	}
+	return where, nil
+}
+
+// requestReview asks login to review the pull request at where. It is its
+// own call, after the pull request exists, so a refusal can't undo the
+// publish the way a failed gh pr create --reviewer would.
+func (p *PR) requestReview(ctx context.Context, where, login string, env []string) error {
+	slug, number, ok := pullRequestRef(where)
+	if !ok {
+		return fmt.Errorf("%q isn't a pull request URL", where)
+	}
+	_, owner, name, _ := splitSlug(slug)
+	cmd := exec.CommandContext(ctx, p.gh(), "api", "--method", "POST", "--silent",
+		"repos/"+owner+"/"+name+"/pulls/"+number+"/requested_reviewers", "-f", "reviewers[]="+login)
+	cmd.Env = append(os.Environ(), env...)
+	var errOut bytes.Buffer
+	cmd.Stderr = &errOut
+	if err := cmd.Run(); err != nil {
+		if detail := strings.TrimSpace(errOut.String()); detail != "" {
+			return errors.New(detail)
+		}
+		return err
+	}
+	return nil
+}
+
+// view runs gh pr view on a published pull request, as the credentials
+// when there are any.
+func (p *PR) view(ctx context.Context, where, fields string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, p.gh(), "pr", "view", where, "--json", fields)
+	if p.Credentials != nil {
+		slug, ok := pullRequestSlug(where)
+		if !ok {
+			return nil, fmt.Errorf("gh pr view %s: not a pull request URL", where)
+		}
+		a, err := auth(ctx, p.Credentials, slug, p.base)
+		if err != nil {
+			return nil, fmt.Errorf("gh pr view %s: %w", where, err)
+		}
+		cmd.Env = append(os.Environ(), a.gh...)
+	}
+	var out, errOut bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errOut
+	if err := cmd.Run(); err != nil {
+		detail := strings.TrimSpace(errOut.String())
+		if detail == "" {
+			detail = err.Error()
+		}
+		return nil, fmt.Errorf("gh pr view %s: %s", where, detail)
+	}
+	return out.Bytes(), nil
 }
 
 // Range asks gh for a merged pull request's merge commit and commit count,
 // so a hand-edited proposal is judged by what that merge alone added.
 func (p *PR) Range(ctx context.Context, pub Published) (MergeRange, bool) {
-	gh := p.GH
-	if gh == "" {
-		gh = "gh"
-	}
-	out, err := exec.CommandContext(ctx, gh, "pr", "view", pub.Where, "--json", "mergeCommit,commits").Output()
+	out, err := p.view(ctx, pub.Where, "mergeCommit,commits")
 	if err != nil {
 		return MergeRange{}, false
 	}
@@ -152,27 +278,16 @@ func (p *PR) Range(ctx context.Context, pub Published) (MergeRange, bool) {
 // Verdict asks gh for the pull request's state; squash and rebase merges
 // count as merged, which a branch's history alone can't tell.
 func (p *PR) Verdict(ctx context.Context, pub Published) (Verdict, string, error) {
-	gh := p.GH
-	if gh == "" {
-		gh = "gh"
-	}
-	cmd := exec.CommandContext(ctx, gh, "pr", "view", pub.Where, "--json", "state,mergedAt,closedAt")
-	var out, errOut bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &errOut
-	if err := cmd.Run(); err != nil {
-		detail := strings.TrimSpace(errOut.String())
-		if detail == "" {
-			detail = err.Error()
-		}
-		return "", "", fmt.Errorf("gh pr view %s: %s", pub.Where, detail)
+	out, err := p.view(ctx, pub.Where, "state,mergedAt,closedAt")
+	if err != nil {
+		return "", "", err
 	}
 	var v struct {
 		State    string `json:"state"`
 		MergedAt string `json:"mergedAt"`
 		ClosedAt string `json:"closedAt"`
 	}
-	if err := json.Unmarshal(out.Bytes(), &v); err != nil {
+	if err := json.Unmarshal(out, &v); err != nil {
 		return "", "", fmt.Errorf("gh pr view %s: %w", pub.Where, err)
 	}
 	switch v.State {
@@ -458,6 +573,12 @@ type Fake struct {
 	Decided  string
 	// Asked counts Verdict calls.
 	Asked int
+	// Name and Email, when set, are the Committer the fake answers with.
+	Name, Email string
+}
+
+func (f *Fake) Committer(ctx context.Context, w *Worktree) (string, string, error) {
+	return f.Name, f.Email, nil
 }
 
 func (f *Fake) Verdict(ctx context.Context, p Published) (Verdict, string, error) {

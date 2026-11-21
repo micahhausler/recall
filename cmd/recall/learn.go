@@ -679,7 +679,7 @@ func learnMap(ctx context.Context, env *archiveEnv, runner model.Runner, since s
 		if evidenceGate != nil && !evidenceGate(name) {
 			continue
 		}
-		src, err := evidence.Open(name, evidence.Options{Repos: evidenceRepos(repos), Trailer: env.settings.Learn.EvidenceTrailer})
+		src, err := evidence.Open(name, evidence.Options{Repos: evidenceRepos(repos), Trailer: env.settings.Learn.EvidenceTrailer, Credentials: env.credentials()})
 		if err != nil {
 			return fail(err)
 		}
@@ -1231,7 +1231,7 @@ func learnGates(env *archiveEnv, repos []learn.Repo, taken []string, ledger *lea
 }
 
 func newApplier(ctx context.Context, env *archiveEnv, ledger *learn.Ledger) (*learn.Applier, error) {
-	pub, err := review.New(env.settings.Learn.Review)
+	pub, err := env.publisher(env.settings.Learn.Review)
 	if err != nil {
 		return nil, fmt.Errorf("learn.review: %w", err)
 	}
@@ -1365,7 +1365,7 @@ func applyRun(ctx context.Context, env *archiveEnv, dir string, dryRun bool) (co
 // publishers. A publisher that can't answer is a warning, not a stop: its
 // reviews stay pending and hold their proposals back.
 func refreshReviews(ctx context.Context, env *archiveEnv, ledger *learn.Ledger) {
-	n, err := ledger.RefreshReviews(ctx, review.New, env.clk.Now())
+	n, err := ledger.RefreshReviews(ctx, env.publisher, env.clk.Now())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "recall: warning: checking reviews: %v\n", err)
 	}

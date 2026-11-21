@@ -6,14 +6,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/micahhausler/recall/internal/credential"
 )
 
 func init() {
 	Register("github", func(o Options) (Source, error) {
-		return &GitHub{Repos: o.Repos, Trailer: o.Trailer}, nil
+		return &GitHub{Repos: o.Repos, Trailer: o.Trailer, Credentials: o.Credentials}, nil
 	})
 }
 
@@ -66,13 +69,17 @@ var prQuery = fmt.Sprintf(`query($owner: String!, $name: String!) {
 // GitHub reads review comments and failed checks on pull requests whose
 // commits carry the agent's co-author trailer, in one batched GraphQL query
 // per repo through the gh CLI. Like the model runner, it execs the CLI and
-// never holds an API client, so existing gh auth works unchanged.
+// never holds an API client, so existing gh auth works unchanged; with
+// Credentials, gh runs with their token instead.
 type GitHub struct {
 	// Repos are the repositories to scan, as host/owner/name slugs, the
 	// form a checkout's origin has.
 	Repos []string
 	// Trailer overrides the default agent trailer.
 	Trailer string
+	// Credentials, when set, supply a token per repo for gh to run with,
+	// and name the owner, whom gh's own sign-in would otherwise name.
+	Credentials credential.Source
 	// GH is the gh binary, default "gh".
 	GH string
 	// run executes gh and returns its stdout; tests inject a fake.
@@ -88,7 +95,8 @@ func (g *GitHub) trailer() string {
 	return g.Trailer
 }
 
-func (g *GitHub) gh(ctx context.Context, args ...string) ([]byte, error) {
+// gh runs the gh CLI with env added to the process's own environment.
+func (g *GitHub) gh(ctx context.Context, env []string, args ...string) ([]byte, error) {
 	if g.run != nil {
 		return g.run(ctx, args...)
 	}
@@ -97,6 +105,9 @@ func (g *GitHub) gh(ctx context.Context, args ...string) ([]byte, error) {
 		bin = "gh"
 	}
 	cmd := exec.CommandContext(ctx, bin, args...)
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	var out, errOut bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errOut
 	if err := cmd.Run(); err != nil {
@@ -227,12 +238,29 @@ type checkContext struct {
 func (g *GitHub) scan(ctx context.Context, repo string, since time.Time) ([]Item, error) {
 	host, path, _ := strings.Cut(repo, "/")
 	repoOwner, name, _ := strings.Cut(path, "/")
+	// With credentials, gh reads as them, and they say who the owner is:
+	// the query's viewer is whoever the token belongs to, often a bot. A
+	// credential that names no owner leaves every comment someone else's,
+	// never owner-typed.
+	var env []string
+	credOwner := ""
+	if g.Credentials != nil {
+		cred, err := g.Credentials.For(ctx, repo)
+		if err != nil {
+			return nil, err
+		}
+		if cred.Token == "" {
+			return nil, errors.New("the credentials returned an empty token")
+		}
+		credOwner = cred.Owner
+		env = []string{"GH_TOKEN=" + cred.Token}
+	}
 	args := []string{"api"}
 	if host != "" && host != "github.com" {
 		args = append(args, "--hostname", host)
 	}
 	args = append(args, "graphql", "-f", "query="+prQuery, "-F", "owner="+repoOwner, "-F", "name="+name)
-	out, err := g.gh(ctx, args...)
+	out, err := g.gh(ctx, env, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -253,6 +281,9 @@ func (g *GitHub) scan(ctx context.Context, repo string, since time.Time) ([]Item
 		return nil, fmt.Errorf("gh api graphql on %s: %w", repo, err)
 	}
 	owner := v.Data.Viewer.Login
+	if g.Credentials != nil {
+		owner = credOwner
+	}
 	trailer := strings.ToLower(g.trailer())
 	var items []Item
 	for _, p := range v.Data.Repository.PullRequests.Nodes {

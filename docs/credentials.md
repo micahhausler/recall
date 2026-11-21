@@ -1,0 +1,83 @@
+# Credentials: acting as someone other than the machine's login
+
+By default recall reaches a hosted repository as whatever `gh` and `git` are signed in as on the machine.
+That makes you the author of the pull requests recall opens, and a pull request's author can't approve it.
+`review.credentials.command` names a command that supplies a credential instead, so a bot can open the pull request and you can review and approve it as yourself.
+
+recall knows nothing about where the credential comes from.
+It runs the command and uses what comes back, the way a Kubernetes client runs an exec credential plugin.
+A GitHub App that mints one-hour installation tokens, a bot user's token read from a password manager, and anything else that prints the same JSON all work.
+
+```toml
+[review.credentials]
+command = ["recall-credential", "token"]
+timeout = "30s"
+```
+
+## The contract
+
+recall runs the command once per repository per run, without a shell.
+It writes one JSON object to the command's stdin and reads one from its stdout.
+Both are the same object, shaped like a Kubernetes `TokenRequest`: recall fills in `spec` with what it asks for, and the command answers with `status`, what it grants.
+
+What recall writes:
+
+```json
+{
+  "apiVersion": "recall.credentials/v1",
+  "kind": "Credential",
+  "spec": {"repo": "github.com/you/example"}
+}
+```
+
+What the command prints:
+
+```json
+{
+  "apiVersion": "recall.credentials/v1",
+  "kind": "Credential",
+  "spec": {"repo": "github.com/you/example"},
+  "status": {
+    "token": "ghs_...",
+    "expirationTimestamp": "2026-03-02T13:00:00Z",
+    "commitIdentity": {"name": "recall-you[bot]", "email": "4242+recall-you[bot]@users.noreply.github.com"},
+    "owner": "you"
+  }
+}
+```
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `apiVersion`, `kind` | yes | `recall.credentials/v1` and `Credential`, in both directions; anything else is refused. |
+| `spec.repo` | yes, from recall | The repository to act on, as `host/owner/name`: the origin's slug, the same whatever protocol the checkout was cloned over. |
+| `status.token` | yes | Authenticates `gh` and `git push` on the requested repository. |
+| `status.expirationTimestamp` | no | When the token stops working, in RFC 3339. |
+| `status.commitIdentity` | no | The git author and committer of recall's commits, so they match the pull request's author. Both `name` and `email` are needed. |
+| `status.owner` | no | Your login. recall asks you to review each pull request it opens, and counts your review comments as yours; a bot's token names the bot, so recall can't learn who you are from GitHub. |
+
+- The command may echo `spec` back or leave it out; recall reads only `status`.
+- A command should ignore fields it doesn't know, and recall does the same, so `spec` and `status` can each grow.
+- A non-zero exit fails that repository's publish or evidence scan, and recall shows the command's stderr.
+  It never shows the command's stdout, which may hold a token.
+- The command gets `timeout` to answer; the default is 30 seconds.
+
+## What recall does with it
+
+- **Caching.** recall keeps each credential in memory until one minute before `expirationTimestamp`, or for the run when there is none.
+  The publisher, the review check, and the evidence scan share it.
+- **The token stays in the environment.** `gh` gets it as `GH_TOKEN`.
+  `git push` gets it through a credential helper set for that one process, which reads the token from the environment.
+  The token is never written to disk, an argument list, a remote URL, or `.git/config`.
+- **The push goes over HTTPS.** A token can't authenticate an SSH remote, so the push names `https://<host>/<owner>/<repo>.git` outright, whatever the checkout's origin is.
+  The machine's own credential helpers are turned off for that push, so none is offered your login or told to store the token, and the URL is pinned so a rewrite rule in your git config can't send it elsewhere.
+  Fetches still use origin as the checkout has it.
+- **Commits.** With a `commitIdentity`, each proposal's commit is authored and committed as it, and isn't signed: your signing key would vouch for an author it isn't.
+- **Review request.** With an `owner`, recall asks them to review each pull request it opens, so the change lands in your review queue with a notification.
+  A request GitHub refuses is a warning; the pull request stays open.
+- **Evidence.** The `github` evidence source runs `gh` with the token too.
+  A review comment counts as yours only when its author is `owner`; without `owner`, none does.
+- **No fallback.** With a command configured, a repository it can't cover fails, named.
+  recall never falls back to the machine's own login, which would open the pull request as the wrong author without saying so.
+
+The token needs to push a branch and open and read pull requests.
+For the `github` evidence source it also needs to read check runs and commit statuses.

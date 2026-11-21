@@ -1085,3 +1085,36 @@ func TestApplyShadowStagesOnlyRoutedPaths(t *testing.T) {
 		t.Errorf("an unrouted file was committed:\n%s", files)
 	}
 }
+
+// A publisher that opens the change as someone else, like a GitHub App's
+// bot, has every proposal's commit authored by them, so the commits match
+// the pull request; any other publisher keeps the machine's git identity.
+func TestApplyCommitsAsThePublishersCommitter(t *testing.T) {
+	ctx := context.Background()
+	authors := func(pub *review.Fake) string {
+		f := newApplyFixture(t, mixedProposals)
+		f.pub, f.applier.Publisher = pub, pub
+		plan, err := f.applier.Plan(ctx, f.run)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.applier.Run(ctx, plan); err != nil {
+			t.Fatal(err)
+		}
+		if len(pub.Changes) != 2 {
+			t.Fatalf("published %d changes", len(pub.Changes))
+		}
+		return gitIn(t, f.dot, "log", "--format=%an <%ae> / %cn <%ce>", "main.."+plan.Branch) + "\n" +
+			gitIn(t, f.kit, "log", "--format=%an <%ae> / %cn <%ce>", "main.."+plan.Branch)
+	}
+	bot := "recall-you[bot] <4242+recall-you[bot]@users.noreply.github.com>"
+	got := authors(&review.Fake{Name: "recall-you[bot]", Email: "4242+recall-you[bot]@users.noreply.github.com"})
+	for _, line := range strings.Split(got, "\n") {
+		if line != bot+" / "+bot {
+			t.Errorf("commit by %s, want author and committer %s", line, bot)
+		}
+	}
+	if got := authors(&review.Fake{}); strings.Contains(got, "[bot]") || strings.TrimSpace(got) == "" {
+		t.Errorf("without a committer, commits are by:\n%s", got)
+	}
+}

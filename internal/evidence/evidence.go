@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/micahhausler/recall/internal/credential"
 )
 
 const (
@@ -62,6 +64,9 @@ type Options struct {
 	// Trailer is the commit trailer that marks an agent-authored change
 	// (learn.evidence_trailer); empty keeps the source's default.
 	Trailer string
+	// Credentials, when set, are who the source reads as, in place of
+	// whatever its CLI is signed in as.
+	Credentials credential.Source
 }
 
 // Factory opens a source from its options.
