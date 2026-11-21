@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // schema lists every allowed leaf key; * matches one name segment.
@@ -60,6 +61,8 @@ var schema = []string{
 	"keep.targets",
 	"keep.bin",
 	"keep.public",
+	"review.credentials.command",
+	"review.credentials.timeout",
 	"extensions.*",
 }
 
@@ -116,6 +119,7 @@ type Settings struct {
 	Lint      LintSettings
 	Keep      KeepSettings
 	Hooks     HookSettings
+	Review    ReviewSettings
 	// Extensions are the owner's instruction files per extension point (a
 	// skill name, or learn-reduce), home-expanded, in order.
 	Extensions map[string][]string
@@ -132,6 +136,23 @@ type HookSettings struct {
 	Archive bool
 	// LearnEvery is how many days apart the reduce and apply run; 0 never.
 	LearnEvery int
+}
+
+// ReviewSettings say how recall reaches the repositories it sends changes
+// to for review.
+type ReviewSettings struct {
+	Credentials CredentialSettings
+}
+
+// CredentialSettings name a command that supplies a credential per
+// repository (docs/credentials.md), for the pr publisher and the github
+// evidence source to act as in place of whatever gh is signed in as. With
+// no command, both use the machine's own gh login and git identity.
+type CredentialSettings struct {
+	// Command is the program and its arguments, run without a shell.
+	Command []string
+	// Timeout bounds one run of the command.
+	Timeout time.Duration
 }
 
 // LintSettings configure the staleness lint.
@@ -272,6 +293,8 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 		Archive:   ArchiveSettings{Lookback: 4, PricePerGB: 0.023},
 		Harnesses: map[string]HarnessSettings{},
 		Recur:     RecurSettings{Prefix: "recall.recur", Jobs: map[string]Job{}},
+		// The credential package's DefaultTimeout.
+		Review: ReviewSettings{Credentials: CredentialSettings{Timeout: 30 * time.Second}},
 		Learn: LearnSettings{
 			Runner:      "claude",
 			MapModel:    "sonnet",
@@ -398,6 +421,39 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 				}
 				s.Learn.Evidence = append(s.Learn.Evidence, ev)
 			}
+		}
+	}
+	if v, ok := c.Get("review.credentials.command"); ok && err == nil {
+		list, lok := v.([]any)
+		if !lok {
+			err = c.typeErr("review.credentials.command", "an array of strings: the program, then its arguments", v)
+		} else {
+			for i, e := range list {
+				ev, sok := e.(string)
+				if !sok {
+					err = c.typeErr("review.credentials.command", "an array of strings", e)
+					break
+				}
+				if i == 0 {
+					ev = ExpandHome(ev, home)
+				}
+				s.Review.Credentials.Command = append(s.Review.Credentials.Command, ev)
+			}
+			if err == nil && (len(s.Review.Credentials.Command) == 0 || s.Review.Credentials.Command[0] == "") {
+				o, _ := c.Origin("review.credentials.command")
+				err = fmt.Errorf("%s: review.credentials.command names no program; delete the key to use the machine's own gh login", o)
+			}
+		}
+	}
+	if v, ok := c.Get("review.credentials.timeout"); ok && err == nil {
+		o, _ := c.Origin("review.credentials.timeout")
+		tv, sok := v.(string)
+		if !sok {
+			err = c.typeErr("review.credentials.timeout", "a duration string like \"30s\"", v)
+		} else if d, perr := time.ParseDuration(tv); perr != nil || d <= 0 {
+			err = fmt.Errorf("%s: review.credentials.timeout %q isn't a positive duration like \"30s\"", o, tv)
+		} else {
+			s.Review.Credentials.Timeout = d
 		}
 	}
 	if v, ok := c.Get("keep.public"); ok && err == nil {

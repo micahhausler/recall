@@ -1038,6 +1038,15 @@ func (a *Applier) Run(ctx context.Context, plan *Plan) (*ApplyResult, error) {
 			return nil, err
 		}
 		wts = append(wts, w)
+		// A publisher that opens the change as someone else, like a bot,
+		// says so before the first commit, so the commits are theirs too.
+		if c, ok := a.Publisher.(review.Committer); ok {
+			w.AuthorName, w.AuthorEmail, err = c.Committer(ctx, w)
+			if err != nil {
+				cleanup()
+				return nil, fmt.Errorf("%s: %w", repo, err)
+			}
+		}
 	}
 
 	m := a.mapping(wts)

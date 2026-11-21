@@ -222,6 +222,21 @@ archive = true
 # store gets one reducer and no duplicate proposals.
 learn_every = 7
 
+[review.credentials]
+# A command that supplies a credential for each repository the pr publisher
+# and the github evidence source touch, in place of whatever gh is signed in
+# as: a bot opens the pull request, and you review and approve it as
+# yourself. recall writes the repository it wants to its stdin and reads a
+# token, and optionally an expiry, a commit identity, and your login, from
+# its stdout (docs/credentials.md). When it names your login, each pull request asks
+# you for review. The program and its arguments, run without a shell.
+# With a command set, a repository it can't cover fails; recall never falls
+# back to the machine's own login. Unset: the machine's gh login and git
+# identity, as before.
+command = ["recall-credential", "token"]
+# How long one run of the command may take.
+timeout = "30s"
+
 [lint]
 # Paths recall lint never reports. A side drop-in ignores the other side's
 # context file, which sparse checkout deliberately keeps off this machine.

@@ -15,6 +15,7 @@ import (
 	"github.com/micahhausler/recall/internal/archive"
 	"github.com/micahhausler/recall/internal/clock"
 	"github.com/micahhausler/recall/internal/config"
+	"github.com/micahhausler/recall/internal/credential"
 	"github.com/micahhausler/recall/internal/harness"
 	"github.com/micahhausler/recall/internal/model"
 	"github.com/micahhausler/recall/internal/store"
@@ -39,6 +40,9 @@ type archiveEnv struct {
 	// steps call through; tests inject fakes here.
 	runner model.Runner
 	editor model.Editor
+	// creds is the credential source, once credentials opened it; tests
+	// set it to stand in for the command.
+	creds credential.Source
 }
 
 // newRunner is the model runner the map and reduce steps call through,

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func write(t *testing.T, path, text string) {
@@ -685,5 +686,52 @@ func TestRecurCovers(t *testing.T) {
 	}
 	if r.Covers(StepLearn) {
 		t.Error("nothing runs the reduce, but the step reads as covered")
+	}
+}
+
+// The credential command is a program and its arguments, with a timeout;
+// unset, recall uses the machine's own gh login.
+func TestReviewCredentials(t *testing.T) {
+	b := base(t)
+	write(t, b, "host = \"laptop-a\"\n")
+	settings := func() *Settings {
+		t.Helper()
+		c, err := Load(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := c.Settings("/home/you", "laptop-a")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	if cred := settings().Review.Credentials; cred.Command != nil || cred.Timeout != 30*time.Second {
+		t.Errorf("unset: %+v, want no command and the 30s default", cred)
+	}
+	write(t, b, "[review.credentials]\ncommand = [\"~/bin/recall-credential\", \"token\", \"~\"]\ntimeout = \"5s\"\n")
+	cred := settings().Review.Credentials
+	if strings.Join(cred.Command, " ") != "/home/you/bin/recall-credential token ~" || cred.Timeout != 5*time.Second {
+		t.Errorf("set: %+v, want the program's ~ expanded, the arguments as written, and 5s", cred)
+	}
+
+	for body, want := range map[string]string{
+		"[review.credentials]\ncommand = \"recall-credential token\"\n": "wants an array of strings",
+		"[review.credentials]\ncommand = []\n":                          "names no program",
+		"[review.credentials]\ncommand = [\"x\", 7]\n":                  "wants an array of strings",
+		"[review.credentials]\ncommand = [\"x\"]\ntimeout = 30\n":       "wants a duration string",
+		"[review.credentials]\ncommand = [\"x\"]\ntimeout = \"soon\"\n": "isn't a positive duration",
+		"[review.credentials]\ncommand = [\"x\"]\ntimeout = \"-1s\"\n":  "isn't a positive duration",
+		"[review.credentials]\ncommand = [\"x\"]\nshell = \"sh\"\n":     "unknown key",
+	} {
+		b := base(t)
+		write(t, b, body)
+		c, err := Load(b)
+		if err == nil {
+			_, err = c.Settings("/home/you", "laptop-a")
+		}
+		if err == nil || !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), "config.toml") {
+			t.Errorf("%q: err = %v, want %q naming the file", body, err, want)
+		}
 	}
 }

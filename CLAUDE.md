@@ -27,6 +27,7 @@ Examples and tests use placeholders like `you`, `example.com`, and `laptop-a`.
 - `internal/learn`: the learning loop (`docs/learning.md`): render, map with cache, rule hits, ledger, aging, candidates, scope, evidence checks, reduce, apply.
   The binary, not a model, makes every check that holds a proposal back, and every edit to a harness settings file.
 - `internal/review`: staging an edit for review: a git worktree per repo, one commit per proposal, and the publishers (`pr`, `branch`) that hand it over.
+- `internal/credential`: the credential a configured command supplies per repository (`docs/credentials.md`), for the `pr` publisher and the `github` evidence source to act as; recall never knows where a token comes from.
 - `internal/extension`: the owner's extension files that skills and the reduce append at load time.
 - `internal/hook`: what the plugin's session hooks need: the hook input, the recursion guard, and the worker's lock and schedule.
 - `hooks/hooks.json`: the plugin's SessionEnd hook, which runs `recall hook`; nothing runs at session start.
