@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -214,12 +215,12 @@ func TestSetupDryRunChangesNothing(t *testing.T) {
 
 func TestPolicySetupCoversEverySetupCall(t *testing.T) {
 	p := Policy("setup", "bkt", []string{"claude"})
-	stmt := p["Statement"].([]map[string]any)[0]
-	if stmt["Resource"] != "arn:aws:s3:::bkt" {
-		t.Errorf("resource = %v", stmt["Resource"])
+	stmt := p.Statements.Values()[0]
+	if got := stmt.Resource.Values(); !equal(got, []string{"arn:aws:s3:::bkt"}) {
+		t.Errorf("resource = %v", got)
 	}
 	actions := map[string]bool{}
-	for _, a := range stmt["Action"].([]string) {
+	for _, a := range stmt.Action.Values() {
 		actions[a] = true
 	}
 	// Every call setup makes maps to an action the policy allows.
@@ -249,20 +250,48 @@ func TestPolicySetupCoversEverySetupCall(t *testing.T) {
 
 func TestPolicyUploadIsWriteOnlyAndScoped(t *testing.T) {
 	p := Policy("upload", "bkt", []string{"claude"})
-	stmts := p["Statement"].([]map[string]any)
+	stmts := p.Statements.Values()
 	if len(stmts) != 2 {
 		t.Fatalf("statements = %v", stmts)
 	}
 	ls, put := stmts[0], stmts[1]
-	if ls["Action"] != "s3:ListBucket" || put["Action"] != "s3:PutObject" {
-		t.Errorf("actions = %v, %v", ls["Action"], put["Action"])
+	if !equal(ls.Action.Values(), []string{"s3:ListBucket"}) || !equal(put.Action.Values(), []string{"s3:PutObject"}) {
+		t.Errorf("actions = %v, %v", ls.Action.Values(), put.Action.Values())
 	}
-	if got := put["Resource"].([]string); !equal(got, []string{"arn:aws:s3:::bkt/claude/*"}) {
+	if got := put.Resource.Values(); !equal(got, []string{"arn:aws:s3:::bkt/claude/*"}) {
 		t.Errorf("put resource = %v", got)
 	}
-	cond := ls["Condition"].(map[string]any)["StringLike"].(map[string]any)["s3:prefix"].([]string)
+	cond, _, _ := ls.Condition["StringLike"]["s3:prefix"].Values()
 	if !equal(cond, []string{"claude/*"}) {
 		t.Errorf("list condition = %v", cond)
+	}
+}
+
+// TestPolicyJSON pins the documents' wire form. The TLS-only policy matters
+// most: verify compares a bucket's stored policy against it, so a change in
+// shape would fail verify on every bucket set up before it.
+func TestPolicyJSON(t *testing.T) {
+	for name, tc := range map[string]struct {
+		got  any
+		want string
+	}{
+		"setup": {Policy("setup", "bkt", []string{"claude"}),
+			`{"Statement":[{"Action":["s3:CreateBucket","s3:PutBucketOwnershipControls","s3:GetBucketOwnershipControls","s3:PutBucketPublicAccessBlock","s3:GetBucketPublicAccessBlock","s3:PutEncryptionConfiguration","s3:GetEncryptionConfiguration","s3:PutBucketPolicy","s3:GetBucketPolicy","s3:PutLifecycleConfiguration","s3:GetLifecycleConfiguration","s3:ListBucket"],"Effect":"Allow","Resource":"arn:aws:s3:::bkt","Sid":"ChatArchiveSetup"}],"Version":"2012-10-17"}`},
+		"upload": {Policy("upload", "bkt", []string{"claude", "kiro"}),
+			`{"Statement":[{"Action":"s3:ListBucket","Condition":{"StringLike":{"s3:prefix":["claude/*","kiro/*"]}},"Effect":"Allow","Resource":"arn:aws:s3:::bkt","Sid":"ListOwnUploads"},{"Action":"s3:PutObject","Effect":"Allow","Resource":["arn:aws:s3:::bkt/claude/*","arn:aws:s3:::bkt/kiro/*"],"Sid":"PutWeeklyArchives"}],"Version":"2012-10-17"}`},
+		"tls-only": {tlsOnlyPolicy("bkt"),
+			`{"Statement":[{"Action":"s3:*","Condition":{"Bool":{"aws:SecureTransport":"false"}},"Effect":"Deny","Principal":"*","Resource":["arn:aws:s3:::bkt","arn:aws:s3:::bkt/*"],"Sid":"DenyInsecureTransport"}],"Version":"2012-10-17"}`},
+	} {
+		b, err := json.Marshal(tc.got)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		var got, want any
+		json.Unmarshal(b, &got)
+		json.Unmarshal([]byte(tc.want), &want)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s:\n got %s\nwant %s", name, b, tc.want)
+		}
 	}
 }
 

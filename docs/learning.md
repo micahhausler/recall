@@ -331,6 +331,7 @@ Hits are stored per host, and every run folds every host's hits, so a hit mapped
 
 The store holds the authoritative ledger for every machine that shares it.
 After each reduce and apply, the reducer — the host recorded under `learn/reducer` in the store — writes the ledger there as a new version under `ledger/`, never overwriting an old one; the newest wins.
+On S3, that write and the claim need grants a machine that only archives doesn't have; [store.md](store.md) lists every key and the IAM actions it needs.
 Before a map, every host loads the newest store version, so the rule ids it shows the model are the reducer's, and a bullet not yet on the store ledger is not judged until the reducer syncs it.
 Only the reducer assigns rule ids: on any other host the local ledger file is a cache of the store's copy, restored when the file is missing and replaced, with a one-line note, when it diverges.
 A review such a host recorded that the store copy lacks — a forced reduce and apply there publishes a change but can't write the store ledger — survives the replacement on that host's cache, and the host also writes it to a per-host object under `analysis/reviews/<host>/`, the way hosts write their own observations and hits.

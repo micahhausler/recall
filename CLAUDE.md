@@ -36,7 +36,7 @@ Examples and tests use placeholders like `you`, `example.com`, and `laptop-a`.
 ## Rules
 
 - Standard library first.
-  Allowed dependencies: `pelletier/go-toml/v2`, AWS SDK for Go v2 (config, sts, s3), `klauspost/compress/zstd`.
+  Allowed dependencies: `pelletier/go-toml/v2`, AWS SDK for Go v2 (config, sts, s3), `klauspost/compress/zstd`, `micahhausler/aws-iam-policy` (typed IAM policy documents, for the policies recall prints and the bucket policy it sets and verifies).
   Anything else needs a written reason.
 - Every pluggable part is a Go interface with a small registry keyed by the config name, and an in-memory fake in its package.
   Don't add an interface with only one plausible implementation.

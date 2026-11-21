@@ -77,6 +77,7 @@ Kiro saves every headless run as a session, so recall deletes each one it starts
 - `recall archive-chats` uploads each week's transcripts as one zstd tarball per machine per ISO week, at `<harness>/<host>/<year>/W<week>.tar.zst`.
   With `archive-chats.redact = true`, secret-shaped tokens in the transcripts are replaced with `[REDACTED:<kind>]` as the tarball is built, and each week's line says how many.
   Redaction is pattern-based and lossy: it catches token shapes (cloud and API keys, private key blocks, bearer headers, JWTs), not every secret, and the archive no longer holds what it replaced.
+  An S3 store needs IAM grants per key prefix, and learning and reducing need more than archiving; [docs/store.md](docs/store.md) lists them.
   That is why it is off by default.
 - `recall events` reads harness transcripts (on disk or inside an archive tarball) and prints them as normalized JSONL events.
 - `recall skills` reports which skills your sessions actually invoke, so unused ones can retire.
@@ -176,7 +177,7 @@ For tools of your own, keep a separate private repo or plugin and point these fi
 - `cmd/recall/`: the single binary.
 - `internal/`: the packages behind each subcommand.
 - `skills/`: Claude Code skills that drive the subcommands.
-- `docs/`: design docs, including the [events schema](docs/events.md) and the [learning loop design](docs/learning.md).
+- `docs/`: design docs, including the [events schema](docs/events.md) the [learning loop design](docs/learning.md), and the [store's keys and IAM permissions](docs/store.md).
 
 ## Inspirations
 
