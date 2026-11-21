@@ -1,9 +1,11 @@
 // Package credential gets recall a credential for a hosted repository from
 // outside itself, the way a Kubernetes client runs an exec credential
-// plugin: recall runs a configured command, hands it a request on stdin,
-// and uses the token it prints. recall knows nothing about where the token
+// plugin: recall runs a configured command, hands it a request in its
+// environment, and uses the token it prints. recall knows nothing about where the token
 // comes from, so a GitHub App, a bot user's token in a password manager,
 // or anything else that speaks the contract (docs/credentials.md) works.
+// The contract's object is api/credentials/v1, which such a command can
+// import.
 //
 // A token is held in memory until it is close to expiring and is never
 // written anywhere.
@@ -15,20 +17,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
 	"time"
 
+	credentialsv1 "github.com/micahhausler/recall/api/credentials/v1"
 	"github.com/micahhausler/recall/internal/clock"
-)
-
-// The contract's version and kind. One object carries both halves, the way
-// a Kubernetes TokenRequest does: recall fills in spec, and the command
-// answers with status.
-const (
-	APIVersion = "recall.credentials/v1"
-	Kind       = "Credential"
 )
 
 // DefaultTimeout is how long the command gets to answer.
@@ -82,32 +78,6 @@ type Source interface {
 	For(ctx context.Context, repo string) (Credential, error)
 }
 
-// object is the contract's one object. The command reads it on stdin with
-// spec set, and prints it on stdout with status set.
-type object struct {
-	APIVersion string  `json:"apiVersion"`
-	Kind       string  `json:"kind"`
-	Spec       spec    `json:"spec"`
-	Status     *status `json:"status,omitempty"`
-}
-
-// spec is what recall asks for.
-type spec struct {
-	// Repo is the repository to act on, as host/owner/name.
-	Repo string `json:"repo"`
-}
-
-// status is what the command grants.
-type status struct {
-	Token               string     `json:"token"`
-	ExpirationTimestamp *time.Time `json:"expirationTimestamp"`
-	CommitIdentity      *struct {
-		Name  string `json:"name"`
-		Email string `json:"email"`
-	} `json:"commitIdentity"`
-	Owner string `json:"owner"`
-}
-
 // Exec is the Source that runs a command (review.credentials.command). It
 // runs the command once per repository and reuses the answer until a
 // minute before it expires, or for as long as the process lives when the
@@ -157,7 +127,10 @@ func (e *Exec) run(ctx context.Context, repo string) (Credential, error) {
 	fail := func(format string, args ...any) (Credential, error) {
 		return Credential{}, fmt.Errorf("credential command %s for %s: %s", name, repo, fmt.Sprintf(format, args...))
 	}
-	in, err := json.Marshal(object{APIVersion: APIVersion, Kind: Kind, Spec: spec{Repo: repo}})
+	in, err := json.Marshal(credentialsv1.Credential{
+		APIVersion: credentialsv1.APIVersion, Kind: credentialsv1.Kind,
+		Spec: credentialsv1.Spec{Repo: repo},
+	})
 	if err != nil {
 		return Credential{}, err
 	}
@@ -168,7 +141,10 @@ func (e *Exec) run(ctx context.Context, repo string) (Credential, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, e.Command[1:]...)
-	cmd.Stdin = bytes.NewReader(append(in, '\n'))
+	// The request goes in the environment, the way a Kubernetes client
+	// sets KUBERNETES_EXEC_INFO, and nowhere else. The command's stdin is
+	// empty: recall runs unattended, so there is no one to answer a prompt.
+	cmd.Env = append(os.Environ(), credentialsv1.ExecInfoEnv+"="+string(in))
 	var out, errOut bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errOut
 	// A command that leaves a child holding its output open would
@@ -185,12 +161,12 @@ func (e *Exec) run(ctx context.Context, repo string) (Credential, error) {
 		}
 		return fail("%v", err)
 	}
-	var o object
+	var o credentialsv1.Credential
 	if err := json.Unmarshal(out.Bytes(), &o); err != nil {
 		return fail("its output isn't one JSON object: %v", err)
 	}
-	if o.APIVersion != APIVersion || o.Kind != Kind {
-		return fail("answered %q %q, want %q %q", o.APIVersion, o.Kind, APIVersion, Kind)
+	if o.APIVersion != credentialsv1.APIVersion || o.Kind != credentialsv1.Kind {
+		return fail("answered %q %q, want %q %q", o.APIVersion, o.Kind, credentialsv1.APIVersion, credentialsv1.Kind)
 	}
 	if o.Status == nil || o.Status.Token == "" {
 		return fail("answered with no status.token")

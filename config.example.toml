@@ -226,7 +226,7 @@ learn_every = 7
 # A command that supplies a credential for each repository the pr publisher
 # and the github evidence source touch, in place of whatever gh is signed in
 # as: a bot opens the pull request, and you review and approve it as
-# yourself. recall writes the repository it wants to its stdin and reads a
+# yourself. recall names the repository it wants in RECALL_EXEC_INFO and reads a
 # token, and optionally an expiry, a commit identity, and your login, from
 # its stdout (docs/credentials.md). When it names your login, each pull request asks
 # you for review. The program and its arguments, run without a shell.

@@ -17,10 +17,11 @@ timeout = "30s"
 ## The contract
 
 recall runs the command once per repository per run, without a shell.
-It writes one JSON object to the command's stdin and reads one from its stdout.
+It sets `RECALL_EXEC_INFO` in the command's environment to one JSON object, the way a Kubernetes client sets `KUBERNETES_EXEC_INFO`, and reads one from the command's stdout.
+The command's stdin is empty: recall runs unattended, so a command can't prompt there.
 Both are the same object, shaped like a Kubernetes `TokenRequest`: recall fills in `spec` with what it asks for, and the command answers with `status`, what it grants.
 
-What recall writes:
+What recall sets `RECALL_EXEC_INFO` to:
 
 ```json
 {
@@ -60,6 +61,18 @@ What the command prints:
 - A non-zero exit fails that repository's publish or evidence scan, and recall shows the command's stderr.
   It never shows the command's stdout, which may hold a token.
 - The command gets `timeout` to answer; the default is 30 seconds.
+
+## The contract as Go types
+
+A command written in Go can import the object instead of copying its shape:
+
+```go
+import credentialsv1 "github.com/micahhausler/recall/api/credentials/v1"
+```
+
+`credentialsv1.Credential` is the object above, with `Spec`, `Status`, and `CommitIdentity` beside it; `APIVersion` and `Kind` are the two strings to check and send, and `ExecInfoEnv` is the variable's name.
+The package imports only the standard library, and recall's own side of the contract is built on it, so the two can't spell a field differently.
+A `Status` prints without its token under `%v`, `%+v`, `%s`, and `%#v`; only `encoding/json` writes it.
 
 ## What recall does with it
 

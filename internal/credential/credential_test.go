@@ -10,31 +10,33 @@ import (
 	"testing"
 	"time"
 
+	credentialsv1 "github.com/micahhausler/recall/api/credentials/v1"
 	"github.com/micahhausler/recall/internal/clock"
 )
 
-// command writes a shell script that records each request it reads and
-// then runs body, and returns the script and the path of its request log.
+// command writes a shell script that records each request it is handed
+// and then runs body, and returns the script and the path of its request
+// log. Whatever arrives on its stdin goes to the log's ".stdin" file.
 func command(t *testing.T, body string) (cmd []string, log string) {
 	t.Helper()
 	dir := t.TempDir()
 	script, log := filepath.Join(dir, "cred"), filepath.Join(dir, "requests")
-	text := "#!/bin/sh\ncat >> '" + log + "'\n" + body + "\n"
+	text := "#!/bin/sh\nprintf '%s\\n' \"$RECALL_EXEC_INFO\" >> '" + log + "'\ncat >> '" + log + ".stdin'\n" + body + "\n"
 	if err := os.WriteFile(script, []byte(text), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return []string{script, "token"}, log
 }
 
-func requests(t *testing.T, log string) []object {
+func requests(t *testing.T, log string) []credentialsv1.Credential {
 	t.Helper()
 	data, _ := os.ReadFile(log)
-	var out []object
+	var out []credentialsv1.Credential
 	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
 		if line == "" {
 			continue
 		}
-		var r object
+		var r credentialsv1.Credential
 		if err := json.Unmarshal([]byte(line), &r); err != nil {
 			t.Fatalf("request %q: %v", line, err)
 		}
@@ -73,8 +75,30 @@ func TestExecRunsTheContract(t *testing.T) {
 		t.Errorf("credential = %+v, want %+v", c, want)
 	}
 	reqs := requests(t, log)
-	if len(reqs) != 1 || reqs[0] != (object{APIVersion: "recall.credentials/v1", Kind: "Credential", Spec: spec{Repo: "github.com/you/dotfiles"}}) {
+	if len(reqs) != 1 || reqs[0] != (credentialsv1.Credential{APIVersion: "recall.credentials/v1", Kind: "Credential", Spec: credentialsv1.Spec{Repo: "github.com/you/dotfiles"}}) {
 		t.Errorf("requests = %+v, want the object with only spec set", reqs)
+	}
+}
+
+// The request reaches the command in RECALL_EXEC_INFO and nowhere else:
+// a value left over from a parent process is replaced, and stdin is empty.
+func TestExecSendsTheRequestInTheEnvironmentOnly(t *testing.T) {
+	cmd, log := command(t, full)
+	t.Setenv(credentialsv1.ExecInfoEnv, `{"apiVersion":"left over from a parent process"}`)
+	clk := &clock.Fake{T: time.Date(2026, 3, 2, 12, 0, 0, 0, time.UTC)}
+	if _, err := (&Exec{Command: cmd, Clock: clk}).For(context.Background(), "github.com/you/dotfiles"); err != nil {
+		t.Fatal(err)
+	}
+	env, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `{"apiVersion":"recall.credentials/v1","kind":"Credential","spec":{"repo":"github.com/you/dotfiles"}}` + "\n"
+	if string(env) != want {
+		t.Errorf("RECALL_EXEC_INFO = %swant               %s", env, want)
+	}
+	if stdin, err := os.ReadFile(log + ".stdin"); err != nil || len(stdin) != 0 {
+		t.Errorf("the command read %q on stdin, %v; want nothing", stdin, err)
 	}
 }
 
