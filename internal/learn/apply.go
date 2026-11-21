@@ -1053,13 +1053,24 @@ func (a *Applier) Run(ctx context.Context, plan *Plan) (*ApplyResult, error) {
 	}
 
 	input := a.BuildInput(plan, wts)
-	if err := os.WriteFile(filepath.Join(plan.Dir, "apply-input.md"), []byte(input), 0o644); err != nil {
-		cleanup()
-		return nil, err
-	}
 	dirs := make([]string, len(wts))
 	for i, w := range wts {
 		dirs[i] = w.Dir
+	}
+	// The harness won't let the model edit under a .claude directory, so it
+	// edits copies (shadow.go).
+	input, shadowRoot, shadows, err := shadowClaudeDirs(input, plan.Dir, dirs)
+	if err != nil {
+		cleanup()
+		return nil, err
+	}
+	if shadowRoot != "" {
+		dirs = append(dirs, shadowRoot)
+		defer os.RemoveAll(shadowRoot)
+	}
+	if err := os.WriteFile(filepath.Join(plan.Dir, "apply-input.md"), []byte(input), 0o644); err != nil {
+		cleanup()
+		return nil, err
 	}
 	out, usage, err := a.Editor.Edit(ctx, a.Model, input, dirs)
 	res.Usage = usage
@@ -1067,6 +1078,11 @@ func (a *Applier) Run(ctx context.Context, plan *Plan) (*ApplyResult, error) {
 		cleanup()
 		return nil, fmt.Errorf("apply model: %w", err)
 	}
+	if err := syncBack(shadows); err != nil {
+		cleanup()
+		return nil, err
+	}
+	out = unshadow(out, shadows)
 	if err := os.WriteFile(filepath.Join(plan.Dir, "apply.md"), []byte(out), 0o644); err != nil {
 		cleanup()
 		return nil, err

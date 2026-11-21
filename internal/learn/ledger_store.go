@@ -21,6 +21,27 @@ import (
 // writes.
 const storeLedgerPrefix = "ledger/"
 
+// CheckStoreLedgerWrite reports whether this host may write ledger
+// versions, without writing one: it repeats the newest version's upload
+// with If-None-Match, which a store that allows the write refuses with
+// ErrExists, and one that doesn't refuses with its own error, so a reducer
+// missing the grant learns before the reduce spends a model call. A store
+// with no version yet has nothing to probe, and passes.
+func CheckStoreLedgerWrite(ctx context.Context, st store.Store) error {
+	keys, err := st.List(ctx, storeLedgerPrefix)
+	if err != nil {
+		return err
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	err = st.PutIfAbsent(ctx, keys[len(keys)-1], strings.NewReader(""))
+	if err == nil || errors.Is(err, store.ErrExists) {
+		return nil
+	}
+	return err
+}
+
 // LoadStoreLedger returns the newest rule ledger in the store and its key,
 // or nil when the store holds none. A torn or foreign object is passed over
 // for the version before it.
