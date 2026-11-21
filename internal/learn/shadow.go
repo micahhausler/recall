@@ -75,7 +75,12 @@ func unshadow(out string, shadows []shadow) string {
 }
 
 // syncBack copies every file the model changed or created in a shadow back
-// to its place in the worktree.
+// to its place in the worktree. It never writes through a symlink: a
+// symlinked file or directory under the .claude directory isn't copied out,
+// so a file the model creates at that path would otherwise land wherever
+// the link points, possibly outside the worktree. Only routed paths are
+// staged afterward (Applier.land), so a change to any other file stays out
+// of the commit.
 func syncBack(shadows []shadow) error {
 	for _, s := range shadows {
 		err := filepath.WalkDir(s.copy, func(p string, d fs.DirEntry, err error) error {
@@ -91,6 +96,9 @@ func syncBack(shadows []shadow) error {
 				return err
 			}
 			dst := filepath.Join(s.real, rel)
+			if err := noSymlinkBetween(s.real, dst); err != nil {
+				return err
+			}
 			if old, err := os.ReadFile(dst); err == nil && bytes.Equal(old, data) {
 				return nil
 			}
@@ -136,6 +144,30 @@ func copyTree(src, dst string) error {
 		}
 		return os.WriteFile(target, data, 0o644)
 	})
+}
+
+// noSymlinkBetween refuses a destination when root, or any part of the
+// path from root down to dst that exists, is a symlink.
+func noSymlinkBetween(root, dst string) error {
+	rel, err := filepath.Rel(root, dst)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("%s is outside %s", dst, root)
+	}
+	p := root
+	for _, part := range append([]string{""}, strings.Split(rel, string(filepath.Separator))...) {
+		p = filepath.Join(p, part)
+		fi, err := os.Lstat(p)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to write %s: %s is a symlink", dst, p)
+		}
+	}
+	return nil
 }
 
 func under(p string, roots []string) bool {

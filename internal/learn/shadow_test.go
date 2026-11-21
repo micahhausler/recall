@@ -67,3 +67,50 @@ func TestShadowClaudeDirsRoundTrip(t *testing.T) {
 		t.Errorf("unshadow = %q", o)
 	}
 }
+
+// A symlink under the .claude directory isn't copied out, and a file the
+// model creates at its path is refused on the way back, not written
+// through the link to wherever it points.
+func TestSyncBackRefusesSymlinks(t *testing.T) {
+	wt := filepath.Join(t.TempDir(), "wt")
+	run := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outside, []byte("untouched\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dot := filepath.Join(wt, ".claude")
+	if err := os.MkdirAll(dot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dot, "CLAUDE.md")); err != nil {
+		t.Fatal(err)
+	}
+	outsideDir := t.TempDir()
+	if err := os.Symlink(outsideDir, filepath.Join(dot, "skills")); err != nil {
+		t.Fatal(err)
+	}
+	input := "- edit: " + filepath.Join(dot, "CLAUDE.md") + "\n"
+	_, _, shadows, err := shadowClaudeDirs(input, run, []string{wt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cp := shadows[0].copy
+	for _, rel := range []string{"CLAUDE.md", filepath.Join("skills", "x", "SKILL.md")} {
+		p := filepath.Join(cp, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("written\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := syncBack(shadows); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Errorf("syncBack = %v, want a symlink refusal", err)
+	}
+	if b, _ := os.ReadFile(outside); string(b) != "untouched\n" {
+		t.Errorf("wrote through the file symlink: %q", b)
+	}
+	if entries, _ := os.ReadDir(outsideDir); len(entries) != 0 {
+		t.Errorf("wrote through the directory symlink: %v", entries)
+	}
+}

@@ -410,16 +410,16 @@ func TestRuleLandedAncestryAndExactBullet(t *testing.T) {
 	p := Published{Repo: live, Base: "origin/main", Branch: "learn-x", Commit: dropped}
 	// A short rule whose text pre-existed in the base, inside a longer
 	// line, is not landed when its commit is absent.
-	if landed, ok := RuleLanded(ctx, p, "Run tests."); landed || !ok {
+	if landed, ok := RuleLanded(ctx, p, "Run tests.", MergeRange{}); landed || !ok {
 		t.Errorf("short pre-existing text: landed=%v ok=%v, want false true", landed, ok)
 	}
 	// The exact whole bullet line still lands.
-	if landed, ok := RuleLanded(ctx, p, "one"); !landed || !ok {
+	if landed, ok := RuleLanded(ctx, p, "one", MergeRange{}); !landed || !ok {
 		t.Errorf("exact bullet: landed=%v ok=%v, want true true", landed, ok)
 	}
 	// An ancestor commit landed, even reworded past recognition.
 	p.Commit = head
-	if landed, ok := RuleLanded(ctx, p, "Totally reworded before merging."); !landed || !ok {
+	if landed, ok := RuleLanded(ctx, p, "Totally reworded before merging.", MergeRange{}); !landed || !ok {
 		t.Errorf("ancestor commit: landed=%v ok=%v, want true true", landed, ok)
 	}
 }
@@ -452,7 +452,7 @@ func TestRuleLandedEditedByHand(t *testing.T) {
 	p := Published{Repo: live, Base: "origin/main", Branch: "learn-x", Commit: commit}
 
 	// Rejected: main still holds the old rule.
-	if landed, _ := RuleLanded(ctx, p, proposed); landed {
+	if landed, _ := RuleLanded(ctx, p, proposed, MergeRange{}); landed {
 		t.Error("rejected reword read as landed")
 	}
 
@@ -461,7 +461,7 @@ func TestRuleLandedEditedByHand(t *testing.T) {
 		"If SSH auth fails on a machine, stop and help me set up SSH there; don't switch `origin` or scripts to HTTPS.\n")
 	run(t, live, "commit", "-q", "-am", "squashed")
 	run(t, live, "push", "-q", "origin", "HEAD:main")
-	if landed, ok := RuleLanded(ctx, p, proposed); !landed || !ok {
+	if landed, ok := RuleLanded(ctx, p, proposed, MergeRange{}); !landed || !ok {
 		t.Errorf("hand-edited reword: landed=%v ok=%v, want true true", landed, ok)
 	}
 
@@ -469,7 +469,80 @@ func TestRuleLandedEditedByHand(t *testing.T) {
 	write("# rules\n\n" + old + "- Keep PR descriptions to a few short lines.\n")
 	run(t, live, "commit", "-q", "-am", "other")
 	run(t, live, "push", "-q", "origin", "HEAD:main")
-	if landed, _ := RuleLanded(ctx, p, proposed); landed {
+	if landed, _ := RuleLanded(ctx, p, proposed, MergeRange{}); landed {
 		t.Error("unrelated new bullet read as the proposal")
+	}
+}
+
+// A rewording that keeps the proposal's words and adds many more landed:
+// the match is measured against the proposal, so additions don't count
+// against it.
+func TestRuleLandedElaboratedByHand(t *testing.T) {
+	ctx := context.Background()
+	live := clone(t)
+	name := "agent notes.md" // a space, which a whitespace split of git's output would break
+	write := func(text string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(live, name), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("# rules\n\n- one\n")
+	run(t, live, "add", "-A")
+	run(t, live, "commit", "-q", "-m", "base")
+	run(t, live, "push", "-q", "origin", "HEAD:main")
+
+	proposed := "Tear down test clusters and cloud resources in a background agent, then confirm nothing is left running anywhere."
+	run(t, live, "checkout", "-q", "-b", "learn-x")
+	write("# rules\n\n- one\n- " + proposed + "\n")
+	run(t, live, "commit", "-q", "-am", "add")
+	commit := run(t, live, "rev-parse", "HEAD")
+	run(t, live, "checkout", "-q", "main")
+
+	write("# rules\n\n- one\n- Tear down e2e and test clusters, load balancers, and other cloud resources in a background agent " +
+		"once a run finishes or fails, list what you deleted, then confirm nothing is left running anywhere in the account or region.\n")
+	run(t, live, "commit", "-q", "-am", "squashed")
+	run(t, live, "push", "-q", "origin", "HEAD:main")
+	p := Published{Repo: live, Base: "origin/main", Branch: "learn-x", Commit: commit}
+	if landed, ok := RuleLanded(ctx, p, proposed, MergeRange{}); !landed || !ok {
+		t.Errorf("elaborated rewording: landed=%v ok=%v, want true true", landed, ok)
+	}
+}
+
+// With a pull request's merge range, only what that merge added counts: a
+// similar rule another change added later doesn't make a rejected proposal
+// look landed, and the proposal's own commit isn't needed.
+func TestRuleLandedScopedToTheMerge(t *testing.T) {
+	ctx := context.Background()
+	live := clone(t)
+	write := func(text string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(live, "rules.md"), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("# rules\n\n- one\n")
+	run(t, live, "add", "-A")
+	run(t, live, "commit", "-q", "-m", "base")
+	proposed := "Use SSH for GitHub remotes. If SSH auth fails on a machine, stop and help me set up SSH there."
+
+	// The pull request merged, as one squashed commit, without the proposal.
+	write("# rules\n\n- one\n- Keep PR descriptions short.\n")
+	run(t, live, "commit", "-q", "-am", "the merge")
+	merge := run(t, live, "rev-parse", "HEAD")
+	// Later, another change adds a rule close to the proposal.
+	write("# rules\n\n- one\n- Keep PR descriptions short.\n- Use SSH for GitHub remotes; if SSH auth fails on a machine, stop and help me set up SSH there.\n")
+	run(t, live, "commit", "-q", "-am", "the other side")
+	run(t, live, "push", "-q", "origin", "HEAD:main")
+
+	// No proposal commit at all: the range alone decides.
+	p := Published{Repo: live, Base: "origin/main", Branch: "learn-x"}
+	if landed, _ := RuleLanded(ctx, p, proposed, MergeRange{To: merge, Commits: 1}); landed {
+		t.Error("a similar rule added after the merge read as the proposal landing")
+	}
+	// The same rule inside the merge's own range is the proposal, edited.
+	later := run(t, live, "rev-parse", "HEAD")
+	if landed, ok := RuleLanded(ctx, p, proposed, MergeRange{To: later, Commits: 1}); !landed || !ok {
+		t.Errorf("edited rule in the merge's range: landed=%v ok=%v, want true true", landed, ok)
 	}
 }

@@ -25,8 +25,10 @@ const storeLedgerPrefix = "ledger/"
 // versions, without writing one: it repeats the newest version's upload
 // with If-None-Match, which a store that allows the write refuses with
 // ErrExists, and one that doesn't refuses with its own error, so a reducer
-// missing the grant learns before the reduce spends a model call. A store
-// with no version yet has nothing to probe, and passes.
+// missing the grant learns before the reduce spends a model call. The probe
+// carries that version's own bytes, so if the key vanished between the list
+// and the put, what lands is an identical copy, never an empty newest
+// version. A store with no version yet has nothing to probe, and passes.
 func CheckStoreLedgerWrite(ctx context.Context, st store.Store) error {
 	keys, err := st.List(ctx, storeLedgerPrefix)
 	if err != nil {
@@ -35,7 +37,17 @@ func CheckStoreLedgerWrite(ctx context.Context, st store.Store) error {
 	if len(keys) == 0 {
 		return nil
 	}
-	err = st.PutIfAbsent(ctx, keys[len(keys)-1], strings.NewReader(""))
+	newest := keys[len(keys)-1]
+	r, err := st.Get(ctx, newest)
+	if err != nil {
+		return err
+	}
+	data, err := io.ReadAll(r)
+	r.Close()
+	if err != nil {
+		return err
+	}
+	err = st.PutIfAbsent(ctx, newest, bytes.NewReader(data))
 	if err == nil || errors.Is(err, store.ErrExists) {
 		return nil
 	}
