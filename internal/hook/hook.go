@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"time"
@@ -92,16 +91,30 @@ func Lock(dir string, stale time.Duration, now time.Time) (release func(), ok bo
 		return nil, false
 	}
 	if err := os.Mkdir(dir, 0o755); err != nil {
-		st, serr := os.Stat(dir)
-		if serr != nil || now.Sub(st.ModTime()) < stale {
+		if !older(dir, stale, now) {
 			return nil, false
 		}
-		// Older than stale: a dead worker's lock. Move it aside and make a
-		// fresh one; only the worker whose Mkdir lands gets the lock, so
-		// two that both saw it stale can't both run.
-		aside := fmt.Sprintf("%s.stale-%d-%d", dir, os.Getpid(), rand.Int64())
-		if os.Rename(dir, aside) == nil {
-			_ = os.RemoveAll(aside)
+		// A dead worker's lock. Takeovers go one at a time through a guard
+		// directory, and the holder checks the lock is still stale before
+		// replacing it: a worker that saw it stale before another finished
+		// its takeover would otherwise replace the new owner's lock, and
+		// both would run.
+		guard := dir + ".takeover"
+		if err := os.Mkdir(guard, 0o755); err != nil {
+			// Another worker is taking over. A guard older than stale was
+			// left by one that died mid-takeover; clear it for a later call.
+			if older(guard, stale, now) {
+				_ = os.RemoveAll(guard)
+			}
+			return nil, false
+		}
+		defer os.Remove(guard)
+		_ = os.Chtimes(guard, now, now)
+		if !older(dir, stale, now) {
+			return nil, false
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			return nil, false
 		}
 		if err := os.Mkdir(dir, 0o755); err != nil {
 			return nil, false
@@ -126,4 +139,11 @@ func Lock(dir string, stale time.Duration, now time.Time) (release func(), ok bo
 			os.Remove(dir)
 		}
 	}, true
+}
+
+// older says whether path exists and was last modified at least age before
+// now.
+func older(path string, age time.Duration, now time.Time) bool {
+	st, err := os.Stat(path)
+	return err == nil && now.Sub(st.ModTime()) >= age
 }
