@@ -22,14 +22,12 @@ const (
 )
 
 // ExecInfoEnv is the environment variable recall sets for the command to
-// the request, a Credential as JSON with Spec set, the way a Kubernetes
-// client sets KUBERNETES_EXEC_INFO. It is the only place the request
-// goes: the command's stdin is empty.
+// the request, a Credential as JSON with Spec set. It is the only place
+// the request goes: the command's stdin is empty.
 const ExecInfoEnv = "RECALL_EXEC_INFO"
 
-// Credential is the contract's one object, shaped like a Kubernetes
-// TokenRequest: recall fills in Spec, what it asks for, and the command
-// answers with Status, what it grants.
+// Credential is the contract's one object: recall fills in Spec, what it
+// asks for, and the command answers with Status, what it grants.
 type Credential struct {
 	APIVersion string `json:"apiVersion"`
 	Kind       string `json:"kind"`
