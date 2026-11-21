@@ -1,8 +1,7 @@
 // Package credential gets recall a credential for a hosted repository from
-// outside itself, the way a Kubernetes client runs an exec credential
-// plugin: recall runs a configured command, hands it a request in its
-// environment, and uses the token it prints. recall knows nothing about where the token
-// comes from, so a GitHub App, a bot user's token in a password manager,
+// outside itself: recall runs a configured command, hands it a request in
+// its environment, and uses the token it prints. recall knows nothing about
+// where the token comes from, so a GitHub App, a bot user's token in a password manager,
 // or anything else that speaks the contract (docs/credentials.md) works.
 // The contract's object is api/credentials/v1, which such a command can
 // import.
@@ -141,9 +140,9 @@ func (e *Exec) run(ctx context.Context, repo string) (Credential, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, e.Command[1:]...)
-	// The request goes in the environment, the way a Kubernetes client
-	// sets KUBERNETES_EXEC_INFO, and nowhere else. The command's stdin is
-	// empty: recall runs unattended, so there is no one to answer a prompt.
+	// The request goes in the environment and nowhere else. The command's
+	// stdin is empty: recall runs unattended, so there is no one to answer
+	// a prompt.
 	cmd.Env = append(os.Environ(), credentialsv1.ExecInfoEnv+"="+string(in))
 	var out, errOut bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errOut
