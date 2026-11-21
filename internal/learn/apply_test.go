@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1049,5 +1050,38 @@ func TestLandedRulesSkipsFrontmatterHunk(t *testing.T) {
 	landed := landedRules(plan, applied, diff, dir)
 	if text, ok := landed["r1"]; ok {
 		t.Errorf("the frontmatter YAML item landed as %q; frontmatter is configuration, not a rule", text)
+	}
+}
+
+// A change the model makes in a shadow copy to a file no proposal was routed
+// to syncs back into the worktree but stays out of the commit: only routed
+// paths are staged.
+func TestApplyShadowStagesOnlyRoutedPaths(t *testing.T) {
+	ctx := context.Background()
+	f := newApplyFixture(t, mixedProposals)
+	inner := fakeApply("edited")
+	f.editor.Apply = func(input string, dirs []string) (string, error) {
+		out, err := inner(input, dirs)
+		if err != nil {
+			return out, err
+		}
+		stray, _ := filepath.Glob(filepath.Join(dirs[len(dirs)-1], "*", "dot-claude"))
+		if len(stray) != 1 {
+			return "", fmt.Errorf("shadow copies = %v", stray)
+		}
+		return out, os.WriteFile(filepath.Join(stray[0], "stray.md"), []byte("not routed\n"), 0o644)
+	}
+	plan, err := f.applier.Plan(ctx, f.run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.applier.Run(ctx, plan); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitIn(t, f.dot, "show", plan.Branch+":.claude/CLAUDE.md"); !strings.Contains(got, "edited for Branch first") {
+		t.Errorf("routed edit missing from the branch: %q", got)
+	}
+	if files := gitIn(t, f.dot, "ls-tree", "-r", "--name-only", plan.Branch); strings.Contains(files, "stray.md") {
+		t.Errorf("an unrouted file was committed:\n%s", files)
 	}
 }

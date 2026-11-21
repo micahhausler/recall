@@ -249,10 +249,14 @@ func (l *Ledger) RefreshReviews(ctx context.Context, publisher func(via string) 
 		// Merged says the change landed, not that this proposal did: the
 		// owner can merge a change minus one proposal. The ledger keys each
 		// review to the rule text that landed in the staged diff, so a
-		// merged add or reword whose text is absent from the base was
-		// rejected, even if its wording was replaced by hand.
+		// merged add or reword whose text, or a hand rewording of it, is
+		// absent from the base was rejected.
 		if v == review.Merged && (rv.Kind == "add" || rv.Kind == "reword") && strings.TrimSpace(rv.Rule) != "" {
-			if landed, ok := review.RuleLanded(ctx, published, rv.Rule); ok && !landed {
+			var scope review.MergeRange
+			if r, isRanger := pub.p.(review.Ranger); isRanger {
+				scope, _ = r.Range(ctx, published)
+			}
+			if landed, ok := review.RuleLanded(ctx, published, rv.Rule, scope); ok && !landed {
 				v = review.Closed
 			}
 		}

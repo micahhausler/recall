@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // Change is one repo's committed edits, waiting for the owner's review.
@@ -125,6 +126,29 @@ func (p *PR) Publish(ctx context.Context, c Change) (string, error) {
 	return strings.TrimSpace(lines[len(lines)-1]), nil
 }
 
+// Range asks gh for a merged pull request's merge commit and commit count,
+// so a hand-edited proposal is judged by what that merge alone added.
+func (p *PR) Range(ctx context.Context, pub Published) (MergeRange, bool) {
+	gh := p.GH
+	if gh == "" {
+		gh = "gh"
+	}
+	out, err := exec.CommandContext(ctx, gh, "pr", "view", pub.Where, "--json", "mergeCommit,commits").Output()
+	if err != nil {
+		return MergeRange{}, false
+	}
+	var v struct {
+		MergeCommit *struct {
+			Oid string `json:"oid"`
+		} `json:"mergeCommit"`
+		Commits []json.RawMessage `json:"commits"`
+	}
+	if json.Unmarshal(out, &v) != nil || v.MergeCommit == nil || v.MergeCommit.Oid == "" {
+		return MergeRange{}, false
+	}
+	return MergeRange{To: v.MergeCommit.Oid, Commits: len(v.Commits)}, true
+}
+
 // Verdict asks gh for the pull request's state; squash and rebase merges
 // count as merged, which a branch's history alone can't tell.
 func (p *PR) Verdict(ctx context.Context, pub Published) (Verdict, string, error) {
@@ -202,6 +226,39 @@ func (Branch) Verdict(ctx context.Context, p Published) (Verdict, string, error)
 	return Closed, "", nil
 }
 
+// MergeRange names what one merged change added to its base: the commit
+// the merge made (To) and how many commits the change carried. The zero
+// range means unknown.
+type MergeRange struct {
+	To      string
+	Commits int
+}
+
+// from is the base just before the merge: a merge commit's first parent,
+// or, for a rebase or squash merge, the commit the change's commits sit
+// on. A squash leaves one commit where the change had several, so that
+// reaches back past it, taking in a few commits merged before it.
+func (r MergeRange) from(ctx context.Context, repo string) (string, bool) {
+	parents, err := git(ctx, repo, "", "rev-list", "--parents", "-n", "1", r.To)
+	if err != nil {
+		return "", false
+	}
+	if len(strings.Fields(parents)) > 2 {
+		return r.To + "^1", true
+	}
+	n := max(r.Commits, 1)
+	from := fmt.Sprintf("%s~%d", r.To, n)
+	if !exists(ctx, repo, from) {
+		return "", false
+	}
+	return from, true
+}
+
+// Ranger is a publisher that can say exactly what a merged change added.
+type Ranger interface {
+	Range(ctx context.Context, p Published) (MergeRange, bool)
+}
+
 // RuleLanded reports whether a review's proposal is in the base its change
 // merged into. The owner can drop one proposal's commit, or take its text
 // out, before merging, so a merged change doesn't prove every proposal in
@@ -210,12 +267,10 @@ func (Branch) Verdict(ctx context.Context, p Published) (Verdict, string, error)
 // merge loses that commit, so the fallback is the ledger's record of the
 // rule text that landed, matched as an exact whole bullet line so a short
 // rule can't match text that was already in the base. Last, a proposal the
-// owner reworded by hand before merging landed too: a bullet in a file the
-// proposal's commit changed, new since that commit's parent, and close to
-// the proposed wording (see editedLanded). ok is false when there is nothing
-// to check against: no repo, no rule text, or a remote base that can't be
-// read.
-func RuleLanded(ctx context.Context, p Published, rule string) (landed, ok bool) {
+// owner reworded by hand before merging landed too (editedLanded). ok is
+// false when there is nothing to check against: no repo, no rule text, or a
+// remote base that can't be read.
+func RuleLanded(ctx context.Context, p Published, rule string, scope MergeRange) (landed, ok bool) {
 	// Rules are top-level bullets, one line each; sub-bullets under a rule
 	// are detail, so the first line identifies it.
 	rule = strings.TrimSpace(strings.Split(rule, "\n")[0])
@@ -250,47 +305,78 @@ func RuleLanded(ctx context.Context, p Published, rule string) (landed, ok bool)
 		if _, err := git(ctx, p.Repo, "", "grep", "-q", "-E", "-e", bullet, b); err == nil {
 			return true, true
 		}
-		if editedLanded(ctx, p.Repo, p.Commit, b, rule) {
-			return true, true
-		}
+	}
+	if checked && editedLanded(ctx, p, bases, rule, scope) {
+		return true, true
 	}
 	return false, checked
 }
 
-// editedMinSimilarity is how close, as word-set Jaccard similarity, a new
-// bullet must be to the proposed rule to count as the owner's rewording of
-// it. A hand edit of a rule keeps most of its words (0.6 and up in
-// practice); unrelated rules in one file share few (under 0.2).
-const editedMinSimilarity = 0.5
+// editedMinContainment is how much of the proposed rule's wording, as the
+// share of its words found in a new bullet, marks that bullet as the
+// owner's rewording of it. Measured against the proposal alone, so words
+// the owner adds don't lower it; a hand edit keeps most of the proposal
+// (0.85 and up in practice), while unrelated rules share under 0.4.
+const editedMinContainment = 0.6
+
+// editedMinWords keeps a short proposal from matching any bullet that
+// happens to contain its few words.
+const editedMinWords = 4
 
 // editedLanded reports whether the owner merged a proposal after rewording
-// it: some file the proposal's commit changed holds, in base, a top-level
-// bullet that wasn't in that file at the commit's parent and is close to
-// the proposed rule. Requiring the bullet to be new keeps a rejected reword
-// from matching the rule it would have replaced, which reads much like it.
-// It needs the proposal's commit, so it is false once that is gone.
-func editedLanded(ctx context.Context, repo, commit, base, rule string) bool {
-	if commit == "" {
+// it: a top-level bullet the merge added that holds most of the proposed
+// rule's words. The bullet has to be new, so a rejected reword can't match
+// the rule it would have replaced, which reads much like it.
+//
+// What counts as new is as narrow as the publisher can say. With a merge
+// range (a pull request's merge commit), it is a bullet the merge itself
+// added, in any file it changed. Without one, it is a bullet in a file the
+// proposal's commit changed that wasn't there at that commit's parent; that
+// window also takes in anything else merged into the file since, and needs
+// the proposal's commit, which git prunes some weeks after its branch is
+// deleted.
+func editedLanded(ctx context.Context, p Published, bases []string, rule string, scope MergeRange) bool {
+	want := tokens(rule)
+	if len(want) < editedMinWords {
 		return false
 	}
-	files, err := git(ctx, repo, "", "diff", "--name-only", commit+"^", commit)
-	if err != nil {
-		return false
+	type window struct{ files, from, to string }
+	var windows []window
+	from, scoped := "", false
+	if scope.To != "" && exists(ctx, p.Repo, scope.To) {
+		from, scoped = scope.from(ctx, p.Repo)
 	}
-	want := words(rule)
-	for _, f := range strings.Fields(files) {
-		after, err := gitRaw(ctx, repo, "", "show", base+":"+f)
+	if scoped {
+		windows = append(windows, window{from + ".." + scope.To, from, scope.To})
+	} else if p.Commit != "" && exists(ctx, p.Repo, p.Commit) {
+		for _, b := range bases {
+			if b != "" && exists(ctx, p.Repo, b) {
+				windows = append(windows, window{p.Commit + "^.." + p.Commit, p.Commit + "^", b})
+			}
+		}
+	}
+	for _, w := range windows {
+		files, err := gitRaw(ctx, p.Repo, "", "diff", "-z", "--name-only", w.files)
 		if err != nil {
 			continue
 		}
-		before, _ := gitRaw(ctx, repo, "", "show", commit+"^:"+f)
-		old := map[string]bool{}
-		for _, b := range bullets(before) {
-			old[b] = true
-		}
-		for _, b := range bullets(after) {
-			if !old[b] && jaccard(want, words(b)) >= editedMinSimilarity {
-				return true
+		for _, f := range strings.Split(files, "\x00") {
+			if f == "" {
+				continue
+			}
+			after, err := gitRaw(ctx, p.Repo, "", "show", w.to+":"+f)
+			if err != nil {
+				continue
+			}
+			before, _ := gitRaw(ctx, p.Repo, "", "show", w.from+":"+f)
+			old := map[string]bool{}
+			for _, b := range bullets(before) {
+				old[b] = true
+			}
+			for _, b := range bullets(after) {
+				if !old[b] && containment(want, tokens(b)) >= editedMinContainment {
+					return true
+				}
 			}
 		}
 	}
@@ -310,28 +396,57 @@ func bullets(text string) []string {
 	return out
 }
 
-var wordRE = regexp.MustCompile(`[a-z0-9$]+`)
-
-func words(s string) map[string]bool {
-	out := map[string]bool{}
-	for _, w := range wordRE.FindAllString(strings.ToLower(s), -1) {
-		out[w] = true
-	}
-	return out
-}
-
-func jaccard(a, b map[string]bool) float64 {
-	inter := 0
-	for w := range a {
-		if b[w] {
-			inter++
-		}
-	}
-	union := len(a) + len(b) - inter
-	if union == 0 {
+// containment is the share of want's tokens that have holds.
+func containment(want, have map[string]bool) float64 {
+	if len(want) == 0 {
 		return 0
 	}
-	return float64(inter) / float64(union)
+	n := 0
+	for t := range want {
+		if have[t] {
+			n++
+		}
+	}
+	return float64(n) / float64(len(want))
+}
+
+// stopwords, tokens, and stem copy internal/learn/similar.go, which this
+// package can't import (learn imports review); keep the two in step.
+var stopwords = map[string]bool{
+	"a": true, "an": true, "and": true, "are": true, "as": true, "at": true, "be": true,
+	"but": true, "by": true, "for": true, "from": true, "has": true, "have": true, "in": true,
+	"into": true, "is": true, "it": true, "its": true, "of": true, "on": true, "or": true,
+	"so": true, "than": true, "that": true, "the": true, "their": true, "then": true,
+	"there": true, "these": true, "this": true, "to": true, "was": true, "were": true,
+	"when": true, "which": true, "who": true, "will": true, "with": true,
+}
+
+func tokens(text string) map[string]bool {
+	set := map[string]bool{}
+	words := strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	for _, w := range words {
+		if stopwords[w] {
+			continue
+		}
+		if w = stem(w); w != "" {
+			set[w] = true
+		}
+	}
+	return set
+}
+
+func stem(w string) string {
+	if len(w) <= 4 {
+		return w
+	}
+	for _, suffix := range []string{"ing", "ed", "es", "s"} {
+		if rest, ok := strings.CutSuffix(w, suffix); ok && len(rest) >= 3 {
+			return rest
+		}
+	}
+	return w
 }
 
 // Fake records what it was asked to publish and answers verdicts from a

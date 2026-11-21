@@ -40,7 +40,7 @@ Giving every machine the same reducer policy is simpler, at the cost of letting 
 
 A missing grant on the reduce path fails the run.
 The reduce takes the claim on an unclaimed store and probes the ledger write before its model call, so a reducer without these grants stops before spending anything.
-The probe repeats the newest ledger version's upload with `If-None-Match`, which writes nothing; on a store with no version yet it has nothing to probe, and the first publish reports a denial instead, after the proposals are saved.
+The probe repeats the newest ledger version's upload, with its own bytes and `If-None-Match`, which writes nothing; on a store with no version yet it has nothing to probe, and the first publish reports a denial instead, after the proposals are saved.
 
 ## The printed policies cover setup and archiving only
 
