@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+
+	"github.com/micahhausler/aws-iam-policy/policy"
 )
 
 // SetupActions is every IAM action `archive-chats setup` needs, once per
@@ -27,15 +29,17 @@ var SetupActions = []string{
 // policy is write-only and scoped to the harness prefixes: a machine that's
 // compromised can add objects but can't read or remove other machines'
 // transcripts.
-func Policy(kind, bucket string, harnesses []string) map[string]any {
+func Policy(kind, bucket string, harnesses []string) policy.Policy {
 	arn := "arn:aws:s3:::" + bucket
 	if kind == "setup" {
-		return map[string]any{
-			"Version": "2012-10-17",
-			"Statement": []map[string]any{{
-				"Sid": "ChatArchiveSetup", "Effect": "Allow",
-				"Action": SetupActions, "Resource": arn,
-			}},
+		return policy.Policy{
+			Version: policy.VersionLatest,
+			Statements: policy.NewStatementOrSlice(policy.Statement{
+				Sid:      "ChatArchiveSetup",
+				Effect:   policy.EffectAllow,
+				Action:   policy.NewStringOrSlice(false, SetupActions...),
+				Resource: policy.NewStringOrSlice(true, arn),
+			}),
 		}
 	}
 	prefixes := make([]string, 0, len(harnesses))
@@ -44,19 +48,25 @@ func Policy(kind, bucket string, harnesses []string) map[string]any {
 		prefixes = append(prefixes, h+"/*")
 		puts = append(puts, arn+"/"+h+"/*")
 	}
-	return map[string]any{
-		"Version": "2012-10-17",
-		"Statement": []map[string]any{
-			{
-				"Sid": "ListOwnUploads", "Effect": "Allow",
-				"Action": "s3:ListBucket", "Resource": arn,
-				"Condition": map[string]any{"StringLike": map[string]any{"s3:prefix": prefixes}},
+	return policy.Policy{
+		Version: policy.VersionLatest,
+		Statements: policy.NewStatementOrSlice(
+			policy.Statement{
+				Sid:      "ListOwnUploads",
+				Effect:   policy.EffectAllow,
+				Action:   policy.NewStringOrSlice(true, "s3:ListBucket"),
+				Resource: policy.NewStringOrSlice(true, arn),
+				Condition: map[string]map[string]*policy.ConditionValue{
+					"StringLike": {"s3:prefix": policy.NewConditionValueString(false, prefixes...)},
+				},
 			},
-			{
-				"Sid": "PutWeeklyArchives", "Effect": "Allow",
-				"Action": "s3:PutObject", "Resource": puts,
+			policy.Statement{
+				Sid:      "PutWeeklyArchives",
+				Effect:   policy.EffectAllow,
+				Action:   policy.NewStringOrSlice(true, "s3:PutObject"),
+				Resource: policy.NewStringOrSlice(false, puts...),
 			},
-		},
+		),
 	}
 }
 
@@ -71,6 +81,7 @@ func PrintPolicy(out io.Writer, kind, bucket, host string, harnesses []string) e
 	}
 	fmt.Fprintf(out, "# IAM policy for %s. Bucket: %s\n", what, bucket)
 	if kind == "upload" {
+		fmt.Fprintln(out, "# Archiving only: learning and reducing need more grants, listed in docs/store.md.")
 		for _, h := range harnesses {
 			fmt.Fprintf(out, "# To limit a machine to its own uploads, narrow %s/* to %s/%s/*.\n", h, h, host)
 		}

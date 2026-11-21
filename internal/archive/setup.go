@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"reflect"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/micahhausler/aws-iam-policy/policy"
 )
 
 // S3Admin is every S3 call setup and verify make; *s3.Client satisfies it.
@@ -43,17 +43,20 @@ type aws3 = S3Admin
 
 // tlsOnlyPolicy denies any request not made over TLS; its only
 // Principal "*" is a Deny.
-func tlsOnlyPolicy(bucket string) map[string]any {
-	return map[string]any{
-		"Version": "2012-10-17",
-		"Statement": []map[string]any{{
-			"Sid":       "DenyInsecureTransport",
-			"Effect":    "Deny",
-			"Principal": "*",
-			"Action":    "s3:*",
-			"Resource":  []string{"arn:aws:s3:::" + bucket, "arn:aws:s3:::" + bucket + "/*"},
-			"Condition": map[string]any{"Bool": map[string]any{"aws:SecureTransport": "false"}},
-		}},
+func tlsOnlyPolicy(bucket string) policy.Policy {
+	arn := "arn:aws:s3:::" + bucket
+	return policy.Policy{
+		Version: policy.VersionLatest,
+		Statements: policy.NewStatementOrSlice(policy.Statement{
+			Sid:       "DenyInsecureTransport",
+			Effect:    policy.EffectDeny,
+			Principal: policy.NewGlobalPrincipal(),
+			Action:    policy.NewStringOrSlice(true, "s3:*"),
+			Resource:  policy.NewStringOrSlice(false, arn, arn+"/*"),
+			Condition: map[string]map[string]*policy.ConditionValue{
+				"Bool": {"aws:SecureTransport": policy.NewConditionValueString(true, "false")},
+			},
+		}),
 	}
 }
 
@@ -107,10 +110,10 @@ func (s *Setup) Run(ctx context.Context, dryRun bool) (int, error) {
 			return err
 		}},
 		step{"put-bucket-policy", func() error {
-			policy, _ := json.Marshal(tlsOnlyPolicy(b))
+			doc, _ := json.Marshal(tlsOnlyPolicy(b))
 			_, err := s.API.PutBucketPolicy(ctx, &s3.PutBucketPolicyInput{
 				Bucket: aws.String(b),
-				Policy: aws.String(string(policy)),
+				Policy: aws.String(string(doc)),
 			})
 			return err
 		}},
@@ -209,12 +212,10 @@ func (s *Setup) verify(ctx context.Context) (int, error) {
 	pol, err := s.API.GetBucketPolicy(ctx, &s3.GetBucketPolicyInput{Bucket: b})
 	polOK := false
 	if err == nil {
-		var got map[string]any
-		want, _ := json.Marshal(tlsOnlyPolicy(s.Bucket))
-		var wantTree map[string]any
-		json.Unmarshal(want, &wantTree)
+		var got policy.Policy
+		want := tlsOnlyPolicy(s.Bucket)
 		if json.Unmarshal([]byte(aws.ToString(pol.Policy)), &got) == nil {
-			polOK = reflect.DeepEqual(got, wantTree)
+			polOK = want.Equal(&got)
 		}
 	}
 	report("bucket policy (TLS only)", polOK, errOr(err, matchWord(polOK)))

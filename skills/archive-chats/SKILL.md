@@ -16,6 +16,7 @@ Granting AWS permissions is out of scope: show me the policies, and I attach the
 4. **Retention.** How long S3 keeps each week: 1 year, 3 years, or 10 years (recommended), as `store.s3.retention_days`.
 5. **Redaction.** Off by default. Offer `recall config set archive-chats.redact true`, and say what it trades: secret-shaped text (cloud and API keys, private key blocks, credential headers, JWTs, and passwords in URLs, command flags, and assignments) is replaced in the archive, a secret in any other shape still gets through, and the replaced text can't be recovered from the archive later.
 6. **Check.** `recall archive-chats check --setup`. For each FAIL, quote the fix it prints. Show `recall archive-chats policy setup` and `policy upload`, and say which one each machine needs.
+   `policy upload` covers archiving only: a machine that also learns or reduces needs the grants the repo's `docs/store.md` lists, and `check` doesn't probe them.
 7. **Estimate.** Show `recall archive-chats estimate` as is: local size, compressed size, and the monthly S3 cost over the retention period. If it warns about `cleanupPeriodDays`, offer the edit to my Claude Code settings; don't make it unasked.
 8. **Create.** Show `recall archive-chats setup --dry-run`, ask, then run `recall archive-chats setup`. It's done only when every `verify` line says ok.
 9. **Upload access.** `recall archive-chats check` proves list and write access; it writes one empty `<harness>/<host>/.write-check` object. Ask first.
