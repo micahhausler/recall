@@ -74,6 +74,51 @@ import credentialsv1 "github.com/micahhausler/recall/api/credentials/v1"
 The package imports only the standard library, and recall's own side of the contract is built on it, so the two can't spell a field differently.
 A `Status` prints without its token under `%v`, `%+v`, `%s`, and `%#v`; only `encoding/json` writes it.
 
+## A command in Go writes only where its token comes from
+
+The `command` package beside the types is the command's side of the contract, so a command doesn't write it again:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+
+	credentialsv1 "github.com/micahhausler/recall/api/credentials/v1"
+	"github.com/micahhausler/recall/api/credentials/v1/command"
+)
+
+func main() {
+	err := command.Run(context.Background(), os.Getenv(credentialsv1.ExecInfoEnv), os.Stdout, grant)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "recall-credential:", err)
+		os.Exit(1)
+	}
+}
+
+func grant(ctx context.Context, req command.Request) (credentialsv1.Status, error) {
+	if req.Host != "example.com" {
+		return credentialsv1.Status{}, fmt.Errorf("%s isn't on example.com", req.Spec.Repo)
+	}
+	token, err := mint(ctx, req.Owner, req.Name) // yours to write
+	if err != nil {
+		return credentialsv1.Status{}, err
+	}
+	return credentialsv1.Status{Token: token, Owner: "you"}, nil
+}
+```
+
+- `command.Run` reads and checks the request, calls `grant`, and writes the answer.
+  A request with another `apiVersion` or `kind`, or a `spec.repo` that isn't `host/owner/name`, is an error that says which.
+- `command.Request` holds the `spec` and the three parts of its `repo`: `Host`, `Owner`, and `Name`.
+- `Run` refuses to write to a terminal, which would put a live token on a screen, before it calls `grant`; the error is `command.ErrTerminal`.
+- `Run` writes nothing to stdout unless every step succeeded, so on an error the command prints it to stderr and exits non-zero.
+- `command.ParseRequest` and `Request.WriteAnswer` are the two halves of `Run`, for a command that needs them apart.
+- The request's text and the writer are arguments, so a command's tests pass a string and a buffer.
+- `command` imports `golang.org/x/term` to tell a terminal from any other file; the types alone still import only the standard library.
+
 ## What recall does with it
 
 - **Caching.** recall keeps each credential in memory until one minute before `expirationTimestamp`, or for the run when there is none.

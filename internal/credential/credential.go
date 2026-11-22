@@ -4,7 +4,7 @@
 // where the token comes from, so a GitHub App, a bot user's token in a password manager,
 // or anything else that speaks the contract (docs/credentials.md) works.
 // The contract's object is api/credentials/v1, which such a command can
-// import.
+// import, with api/credentials/v1/command for the command's side of it.
 //
 // A token is held in memory until it is close to expiring and is never
 // written anywhere.

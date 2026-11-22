@@ -12,6 +12,7 @@ require (
 	github.com/klauspost/compress v1.20.4
 	github.com/micahhausler/aws-iam-policy v0.4.4
 	github.com/pelletier/go-toml/v2 v2.4.3
+	golang.org/x/term v0.48.0
 )
 
 require (
@@ -27,4 +28,5 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/signin v1.13.1 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sso v1.39.5 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.44.5 // indirect
+	golang.org/x/sys v0.50.0 // indirect
 )

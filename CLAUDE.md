@@ -28,8 +28,11 @@ Examples and tests use placeholders like `you`, `example.com`, and `laptop-a`.
   The binary, not a model, makes every check that holds a proposal back, and every edit to a harness settings file.
 - `internal/review`: staging an edit for review: a git worktree per repo, one commit per proposal, and the publishers (`pr`, `branch`) that hand it over.
 - `internal/credential`: the credential a configured command supplies per repository (`docs/credentials.md`), for the `pr` publisher and the `github` evidence source to act as; recall never knows where a token comes from.
-- `api/credentials/v1`: the credential contract's object as Go types, the one package outside `internal/`, so a credential command can import it.
+- `api/credentials/v1`: the credential contract's object as Go types, so a credential command can import it.
   A change to its JSON is a change to commands other people wrote: add optional fields, never rename or remove one.
+- `api/credentials/v1/command`: the command's side of the contract, for a credential command written in Go: parse the request, refuse to print a token to a terminal, write the answer.
+  It and the types are the only packages outside `internal/`, and commands other people wrote call them: add to their exported names, never rename or remove one.
+  Nothing about where a token comes from, or about any host or provider, goes in it, and nothing recall's binary is built from imports it.
 - `internal/extension`: the owner's extension files that skills and the reduce append at load time.
 - `internal/hook`: what the plugin's session hooks need: the hook input, the recursion guard, and the worker's lock and schedule.
 - `hooks/hooks.json`: the plugin's SessionEnd hook, which runs `recall hook`; nothing runs at session start.
@@ -39,7 +42,7 @@ Examples and tests use placeholders like `you`, `example.com`, and `laptop-a`.
 ## Rules
 
 - Standard library first.
-  Allowed dependencies: `pelletier/go-toml/v2`, AWS SDK for Go v2 (config, sts, s3), `klauspost/compress/zstd`, `micahhausler/aws-iam-policy` (typed IAM policy documents, for the policies recall prints and the bucket policy it sets and verifies).
+  Allowed dependencies: `pelletier/go-toml/v2`, AWS SDK for Go v2 (config, sts, s3), `klauspost/compress/zstd`, `micahhausler/aws-iam-policy` (typed IAM policy documents, for the policies recall prints and the bucket policy it sets and verifies), `golang.org/x/term` (in `api/credentials/v1/command` only, to refuse to print a token to a terminal: a file's mode can't tell a terminal from the null device, which is a character device too).
   Anything else needs a written reason.
 - Every pluggable part is a Go interface with a small registry keyed by the config name, and an in-memory fake in its package.
   Don't add an interface with only one plausible implementation.
