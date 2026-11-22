@@ -252,6 +252,115 @@ func TestPRReviewRequestFailureIsAWarning(t *testing.T) {
 	run(t, f.Bare, "rev-parse", "--verify", "refs/heads/learn-x") // the branch stays
 }
 
+// assigningGH is a gh that logs each call with its token, opens pull
+// request 7, and answers an assignment with the logins in assigned, one per
+// line, as gh's --jq prints them.
+func assigningGH(t *testing.T, assigned string) (gh, log string) {
+	t.Helper()
+	dir := t.TempDir()
+	gh, log = filepath.Join(dir, "gh"), filepath.Join(dir, "calls")
+	script := "#!/bin/sh\nprintf '%s|%s\\n' \"$GH_TOKEN\" \"$*\" >> '" + log + "'\n" +
+		"case \"$*\" in pr\\ create*) cat > /dev/null; echo https://github.com/you/dotfiles/pull/7;; " +
+		"*/assignees*) printf '" + assigned + "';; esac\n"
+	if err := os.WriteFile(gh, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return gh, log
+}
+
+// review.assignees are assigned once the pull request is open, as the
+// credentials, after the review request.
+func TestPRAssignsThePullRequest(t *testing.T) {
+	ctx := context.Background()
+	live := clone(t)
+	f := newForge(t, run(t, live, "remote", "get-url", "origin"))
+	w := committed(t, live, "learn-x")
+	run(t, live, "remote", "set-url", "origin", "git@github.com:you/dotfiles.git")
+	gh, ghLog := assigningGH(t, `You\nteammate\n`)
+	var warn bytes.Buffer
+	p := &PR{GH: gh, Credentials: &credential.Fake{Credential: credential.Credential{Token: fakeToken, Owner: "you"}},
+		Assignees: []string{"you", "teammate"}, Log: &warn, base: f.URL}
+	where, err := p.Publish(ctx, Change{Worktree: w, Title: "Apply", Body: "b"})
+	if err != nil || where != "https://github.com/you/dotfiles/pull/7" {
+		t.Fatalf("publish = %q, %v", where, err)
+	}
+	calls, _ := os.ReadFile(ghLog)
+	lines := strings.Split(strings.TrimSpace(string(calls)), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("gh calls = %q, want pr create, the review request, then the assignment", lines)
+	}
+	want := fakeToken + "|api --method POST --jq .assignees[].login repos/you/dotfiles/issues/7/assignees -f assignees[]=you -f assignees[]=teammate"
+	if lines[2] != want {
+		t.Errorf("assignment = %s\nwant         %s", lines[2], want)
+	}
+	// The forge spells a login its own way; a match ignores case.
+	if warn.Len() > 0 {
+		t.Errorf("warned: %s", warn.String())
+	}
+}
+
+// Without credentials the assignment goes out as the machine's own login.
+func TestPRAssignsWithoutCredentials(t *testing.T) {
+	ctx := context.Background()
+	live := clone(t)
+	w := committed(t, live, "learn-x")
+	gh, ghLog := assigningGH(t, `you\n`)
+	var warn bytes.Buffer
+	t.Setenv("GH_TOKEN", "")
+	where, err := (&PR{GH: gh, Assignees: []string{"you"}, Log: &warn}).Publish(ctx, Change{Worktree: w, Title: "Apply", Body: "b"})
+	if err != nil || where != "https://github.com/you/dotfiles/pull/7" {
+		t.Fatalf("publish = %q, %v", where, err)
+	}
+	calls, _ := os.ReadFile(ghLog)
+	lines := strings.Split(strings.TrimSpace(string(calls)), "\n")
+	if len(lines) != 2 || lines[1] != "|api --method POST --jq .assignees[].login repos/you/dotfiles/issues/7/assignees -f assignees[]=you" {
+		t.Errorf("gh calls = %q, want pr create then the assignment, with no token", lines)
+	}
+	if warn.Len() > 0 {
+		t.Errorf("warned: %s", warn.String())
+	}
+
+	// With no assignees, nothing is asked.
+	gh, ghLog = assigningGH(t, ``)
+	w = committed(t, clone(t), "learn-y")
+	if _, err := (&PR{GH: gh}).Publish(ctx, Change{Worktree: w, Title: "Apply", Body: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	calls, _ = os.ReadFile(ghLog)
+	if lines := strings.Split(strings.TrimSpace(string(calls)), "\n"); len(lines) != 1 {
+		t.Errorf("gh calls = %q, want only pr create", lines)
+	}
+}
+
+// The forge answers a login it can't assign with success and leaves it out.
+// That, and an assignment it refuses outright, are each a warning that
+// names who wasn't assigned; the pull request stays published.
+func TestPRAssignmentThatDidNotTakeIsAWarning(t *testing.T) {
+	ctx := context.Background()
+	for name, tc := range map[string]struct{ script, want string }{
+		"left out": {"*/assignees*) echo you;; ", "didn't assign teammate"},
+		"refused":  {"*/assignees*) echo 'Resource not accessible by integration' >&2; exit 1;; ", "Resource not accessible by integration"},
+	} {
+		live := clone(t)
+		w := committed(t, live, "learn-x")
+		gh := filepath.Join(t.TempDir(), "gh")
+		script := "#!/bin/sh\ncase \"$*\" in pr\\ create*) cat > /dev/null; echo https://github.com/you/dotfiles/pull/7;; " + tc.script + "esac\n"
+		if err := os.WriteFile(gh, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		var warn bytes.Buffer
+		where, err := (&PR{GH: gh, Assignees: []string{"you", "teammate"}, Log: &warn}).Publish(ctx, Change{Worktree: w, Title: "Apply", Body: "b"})
+		if err != nil || where != "https://github.com/you/dotfiles/pull/7" {
+			t.Fatalf("%s: publish = %q, %v; an assignment that didn't take must not fail the change", name, where, err)
+		}
+		if got := warn.String(); !strings.Contains(got, tc.want) || !strings.Contains(got, where) || !strings.Contains(got, "assigning it to you, teammate failed") {
+			t.Errorf("%s: warning = %q, want %q", name, got, tc.want)
+		}
+		run(t, live, "fetch", "-q", "origin")
+		run(t, live, "rev-parse", "--verify", "refs/remotes/origin/learn-x") // the branch stays
+	}
+}
+
 // When gh fails, the branch the credentials pushed is taken back with them.
 func TestPRWithCredentialsDeletesPushedBranchWhenGHFails(t *testing.T) {
 	ctx := context.Background()

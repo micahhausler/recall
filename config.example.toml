@@ -222,6 +222,13 @@ archive = true
 # store gets one reducer and no duplicate proposals.
 learn_every = 7
 
+[review]
+# Logins to assign each pull request the pr publisher opens, so it shows up
+# under "Assigned to you". It applies with or without a credential command.
+# A login the forge won't assign is a warning; the pull request stays open.
+# Unset: no one is assigned.
+assignees = ["you"]
+
 [review.credentials]
 # A command that supplies a credential for each repository the pr publisher
 # and the github evidence source touch, in place of whatever gh is signed in

@@ -96,6 +96,7 @@ Kiro saves every headless run as a session, so recall deletes each one it starts
 - `recall learn apply` stages the proposals as edits in a fresh git worktree of each repo they touch, and sends each changed repo to review: a pull request (`learn.review = "pr"`, with `gh`) or a local branch (`"branch"`), which works with any git host or none.
   Each change carries one commit per proposal, so you can drop or edit one before merging; after a merge, a proposal whose text did not land is recorded as rejected.
   A pull request's author can't approve it, so `review.credentials.command` can name a command that supplies a bot's credential per repository: the bot opens the pull request, authors its commits, and requests your review, and you review as yourself ([docs/credentials.md](docs/credentials.md)).
+  `review.assignees` lists the logins each pull request is assigned to.
   Your targets, `learn.skills`, and `learn.bin` can live in one repo or several; a repo under `keep.public` gets no proposal text in its pull request.
   A lesson every session of which ran in one repo lands in that repo's own context file when you list the checkout in `learn.repos`; `recall learn targets` shows every file a proposal may touch.
   recall proposes nothing for a repo you didn't list.

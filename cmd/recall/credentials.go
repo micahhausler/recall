@@ -21,14 +21,16 @@ func (e *archiveEnv) credentials() credential.Source {
 	return e.creds
 }
 
-// publisher opens the review publisher registered under name. With a
-// credential command configured, the pr publisher acts as its credentials.
+// publisher opens the review publisher registered under name. The pr
+// publisher assigns its pull requests to review.assignees, and with a
+// credential command configured it acts as that command's credentials.
 func (e *archiveEnv) publisher(name string) (review.Publisher, error) {
 	pub, err := review.New(name)
 	if err != nil {
 		return nil, err
 	}
 	if pr, ok := pub.(*review.PR); ok {
+		pr.Assignees = e.settings.Review.Assignees
 		if creds := e.credentials(); creds != nil {
 			pr.Credentials = creds
 		}

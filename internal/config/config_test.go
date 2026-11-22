@@ -691,6 +691,48 @@ func TestRecurCovers(t *testing.T) {
 
 // The credential command is a program and its arguments, with a timeout;
 // unset, recall uses the machine's own gh login.
+func TestReviewAssignees(t *testing.T) {
+	b := base(t)
+	write(t, b, "host = \"laptop-a\"\n")
+	settings := func() *Settings {
+		t.Helper()
+		c, err := Load(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := c.Settings("/home/you", "laptop-a")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	if got := settings().Review.Assignees; got != nil {
+		t.Errorf("unset: %v, want no one", got)
+	}
+	write(t, b, "[review]\nassignees = [\"you\", \"teammate\"]\n")
+	if got := settings().Review.Assignees; strings.Join(got, ",") != "you,teammate" {
+		t.Errorf("set: %v", got)
+	}
+
+	for body, want := range map[string]string{
+		"[review]\nassignees = \"you\"\n":      "wants an array of strings",
+		"[review]\nassignees = [\"you\", 7]\n": "wants an array of strings",
+		"[review]\nassignees = [\"@you\"]\n":   "isn't a login",
+		"[review]\nassignees = [\"\"]\n":       "isn't a login",
+		"[review]\nassignee = [\"you\"]\n":     "unknown key",
+	} {
+		b := base(t)
+		write(t, b, body)
+		c, err := Load(b)
+		if err == nil {
+			_, err = c.Settings("/home/you", "laptop-a")
+		}
+		if err == nil || !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), "config.toml") {
+			t.Errorf("%q: err = %v, want %q naming the file", body, err, want)
+		}
+	}
+}
+
 func TestReviewCredentials(t *testing.T) {
 	b := base(t)
 	write(t, b, "host = \"laptop-a\"\n")
