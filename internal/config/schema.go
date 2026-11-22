@@ -61,6 +61,7 @@ var schema = []string{
 	"keep.targets",
 	"keep.bin",
 	"keep.public",
+	"review.assignees",
 	"review.credentials.command",
 	"review.credentials.timeout",
 	"extensions.*",
@@ -141,6 +142,9 @@ type HookSettings struct {
 // ReviewSettings say how recall reaches the repositories it sends changes
 // to for review.
 type ReviewSettings struct {
+	// Assignees are the logins assigned to each pull request the pr
+	// publisher opens. Empty assigns no one.
+	Assignees   []string
 	Credentials CredentialSettings
 }
 
@@ -420,6 +424,26 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 					break
 				}
 				s.Learn.Evidence = append(s.Learn.Evidence, ev)
+			}
+		}
+	}
+	if v, ok := c.Get("review.assignees"); ok && err == nil {
+		list, lok := v.([]any)
+		if !lok {
+			err = c.typeErr("review.assignees", "an array of strings: the logins to assign", v)
+		} else {
+			for _, e := range list {
+				ev, sok := e.(string)
+				if !sok {
+					err = c.typeErr("review.assignees", "an array of strings", e)
+					break
+				}
+				if ev == "" || strings.ContainsAny(ev, " \t@") {
+					o, _ := c.Origin("review.assignees")
+					err = fmt.Errorf("%s: review.assignees %q isn't a login; write it bare, like \"you\"", o, ev)
+					break
+				}
+				s.Review.Assignees = append(s.Review.Assignees, ev)
 			}
 		}
 	}

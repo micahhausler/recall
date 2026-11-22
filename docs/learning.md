@@ -22,6 +22,7 @@ Three interfaces carry it:
 - **`model.Editor`** (`internal/model`): the same CLI with file tools only (`Read Edit Write Glob Grep`), confined to the apply step's worktrees.
 - **`review.Publisher`** (`internal/review`): hands a staged change to the owner, keyed by `learn.review`: `pr` pushes and opens a pull request with `gh`, and `branch` leaves the branch in place, which works with any git host or none.
   With `review.credentials.command` set, `pr` and the `github` evidence source act as the credential that command prints per repository, in place of the machine's own login ([credentials.md](credentials.md)).
+  `review.assignees` lists the logins `pr` assigns each pull request to once it is open; a login the forge won't assign is a warning, and the pull request stays open.
 
 
 Borrowed from muse (github.com/ellistarn/muse), which runs the same observe-then-fold shape over conversation history:

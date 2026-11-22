@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
@@ -90,6 +91,10 @@ type PR struct {
 	// its owner, the pull request asks them for review, so a change a bot
 	// opened reaches the owner as a review request.
 	Credentials credential.Source
+	// Assignees are the logins assigned to each pull request once it is
+	// open (review.assignees), with or without credentials. Empty assigns
+	// no one.
+	Assignees []string
 	// Log gets a warning that doesn't fail a publish; nil is os.Stderr.
 	Log io.Writer
 	// base overrides the scheme and host a credentialed push goes to, so a
@@ -191,18 +196,62 @@ func (p *PR) Publish(ctx context.Context, c Change) (string, error) {
 	}
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
 	where := strings.TrimSpace(lines[len(lines)-1])
+	log := p.Log
+	if log == nil {
+		log = os.Stderr
+	}
 	if reviewer != "" {
 		// The pull request is open either way; a review request that
 		// didn't take costs the owner a notification, not the change.
 		if err := p.requestReview(ctx, where, reviewer, ghEnvs); err != nil {
-			log := p.Log
-			if log == nil {
-				log = os.Stderr
-			}
 			fmt.Fprintf(log, "recall: warning: %s is open, but asking %s to review it failed: %v\n", where, reviewer, err)
 		}
 	}
+	if len(p.Assignees) > 0 {
+		// The same goes for an assignment that didn't take.
+		if err := p.assign(ctx, where, p.Assignees, ghEnvs); err != nil {
+			fmt.Fprintf(log, "recall: warning: %s is open, but assigning it to %s failed: %v\n", where, strings.Join(p.Assignees, ", "), err)
+		}
+	}
 	return where, nil
+}
+
+// assign assigns the pull request at where to logins. Like the review
+// request, it is its own call after the pull request exists. The forge
+// answers a login it can't assign with success and leaves it out, so the
+// answer is read: a login missing from it is an error that names it.
+func (p *PR) assign(ctx context.Context, where string, logins, env []string) error {
+	slug, number, ok := pullRequestRef(where)
+	if !ok {
+		return fmt.Errorf("%q isn't a pull request URL", where)
+	}
+	_, owner, name, _ := splitSlug(slug)
+	args := []string{"api", "--method", "POST", "--jq", ".assignees[].login",
+		"repos/" + owner + "/" + name + "/issues/" + number + "/assignees"}
+	for _, login := range logins {
+		args = append(args, "-f", "assignees[]="+login)
+	}
+	cmd := exec.CommandContext(ctx, p.gh(), args...)
+	cmd.Env = append(os.Environ(), env...)
+	var out, errOut bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errOut
+	if err := cmd.Run(); err != nil {
+		if detail := strings.TrimSpace(errOut.String()); detail != "" {
+			return errors.New(detail)
+		}
+		return err
+	}
+	assigned := strings.Fields(out.String())
+	var missing []string
+	for _, login := range logins {
+		if !slices.ContainsFunc(assigned, func(got string) bool { return strings.EqualFold(got, login) }) {
+			missing = append(missing, login)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("the forge accepted the request but didn't assign %s; only someone with access to the repository can be assigned", strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 // requestReview asks login to review the pull request at where. It is its
