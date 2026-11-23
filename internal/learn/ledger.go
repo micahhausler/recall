@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -289,6 +290,9 @@ func LoadLedger(path string) (*Ledger, error) {
 func (l *Ledger) Save(path string) error {
 	data, err := ledgerBytes(l)
 	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	tmp := path + ".tmp"
