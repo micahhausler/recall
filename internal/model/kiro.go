@@ -18,8 +18,9 @@ func init() {
 }
 
 // Kiro runs Kiro CLI headless: `kiro-cli chat --no-interactive
-// --output-format stream-json --trust-tools= [--model <model>]` with the
-// input on stdin. No tool is trusted, so a tool call is never approved.
+// --output-format stream-json --trust-tools= --agent recall-headless
+// --agent-engine v3 [--model <model>]` with the input on stdin, from a
+// scratch dir whose agent has no tools.
 // Kiro saves every run as a session, so the runner deletes it afterward;
 // otherwise recall would read its own runs back as transcripts. The cleanup
 // deletes only the session the stream named, the one session known to be
@@ -50,14 +51,55 @@ func (k *Kiro) command() string {
 	return k.Command
 }
 
-// Run sends input to model; an empty model or "auto" lets Kiro choose.
+// kiroAgentName names the agent every run uses, which Run writes into the
+// run's scratch dir as kiroAgent. The owner's default agent may allow tools
+// without asking (reads under the working directory, or MCP servers), and
+// --trust-tools= revokes none of them; this one has no tools, no MCP
+// servers, and no resources. Managed settings can still add MCP servers to
+// every agent, so it also denies every capability: a deny in any scope wins
+// over an allow in any other.
+const kiroAgentName = "recall-headless"
+
+const kiroAgent = `{
+  "name": "recall-headless",
+  "description": "recall's headless model calls: no tools",
+  "tools": [],
+  "allowedTools": [],
+  "permissions": {"rules": [{"capability": "all", "effect": "deny"}]},
+  "mcpServers": {},
+  "includeMcpJson": false,
+  "resources": []
+}
+`
+
+// kiroEngine is pinned so a run doesn't change with the owner's
+// chat.agentEngine setting; the stream parser reads both engines.
+const kiroEngine = "v3"
+
+// Run sends input to model; an empty model or "auto" lets Kiro choose. It
+// runs in an empty scratch dir, never the caller's (under recur, $HOME),
+// holding only the agent file.
 func (k *Kiro) Run(ctx context.Context, model, input string) (string, Usage, error) {
 	command := k.command()
-	args := []string{"chat", "--no-interactive", "--output-format", "stream-json", "--trust-tools="}
+	dir, err := os.MkdirTemp("", "recall-run-")
+	if err != nil {
+		return "", Usage{}, err
+	}
+	defer os.RemoveAll(dir)
+	agents := filepath.Join(dir, ".kiro", "agents")
+	if err := os.MkdirAll(agents, 0o755); err != nil {
+		return "", Usage{}, err
+	}
+	if err := os.WriteFile(filepath.Join(agents, kiroAgentName+".json"), []byte(kiroAgent), 0o644); err != nil {
+		return "", Usage{}, err
+	}
+	args := []string{"chat", "--no-interactive", "--output-format", "stream-json", "--trust-tools=",
+		"--agent", kiroAgentName, "--agent-engine", kiroEngine}
 	if model != "" && model != "auto" {
 		args = append(args, "--model", model)
 	}
 	cmd := exec.CommandContext(ctx, command, args...)
+	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), HookGuard)
 	cmd.Stdin = strings.NewReader(input)
 	var out, errOut bytes.Buffer
