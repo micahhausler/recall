@@ -189,7 +189,11 @@ type Applier struct {
 	// targets, repos, budget, reviews, and evidence requirements. All paths
 	// in them are live, absolute paths.
 	Gates
+	// Editor makes the edits with file tools confined to the worktrees.
+	// When it is nil, Runner answers with no tools, and the binary writes
+	// the files its answer returns (apply_text.go).
 	Editor    model.Editor
+	Runner    model.Runner
 	Model     string
 	Publisher review.Publisher
 	// Public lists live paths shared publicly (keep.public).
@@ -428,6 +432,7 @@ func (a *Applier) Plan(ctx context.Context, dir string) (*Plan, error) {
 	}
 
 	budget := a.budgetCheck()
+	textSize := textBudget()
 	for i, prop := range ParseProposals(string(md)) {
 		r := Route{ID: fmt.Sprintf("p-%02d", i+1), Proposal: prop, Skip: a.reviewed(prop), Models: evidence.models(prop.Candidates)}
 		if r.Skip == "" && a.unsupported(prop, evidence) {
@@ -455,6 +460,12 @@ func (a *Applier) Plan(ctx context.Context, dir string) (*Plan, error) {
 		}
 		if r.Skip == "" {
 			a.route(&r, targets, taken, rootOf, ignoredAt)
+		}
+		if r.Skip == "" && a.textMode() {
+			if why := textSize(a.textPaths(r)); why != "" {
+				r.Skip = why
+				r.Edit, r.Script = nil, ""
+			}
 		}
 		// Last, so only an add that is going ahead counts against the ones
 		// after it; the shared check skips a held-back proposal itself.
@@ -714,10 +725,15 @@ func (a *Applier) mapping(wts []*review.Worktree) mapping {
 // BuildInput renders the apply model's input for plan, with each repo's
 // worktree at wts (in plan.Repos order).
 func (a *Applier) BuildInput(plan *Plan, wts []*review.Worktree) string {
+	input, _ := a.buildInput(plan, wts)
+	return input
+}
+
+// buildInput is BuildInput, plus, in text mode, the files the input shows
+// and the binary accepts back.
+func (a *Applier) buildInput(plan *Plan, wts []*review.Worktree) (string, *textFiles) {
 	m := a.mapping(wts)
 	var b strings.Builder
-	b.WriteString(applyPrompt)
-
 	b.WriteString("\n\n# WORKTREES\n\n")
 	for _, w := range wts {
 		vis := "private"
@@ -792,7 +808,13 @@ func (a *Applier) BuildInput(plan *Plan, wts []*review.Worktree) string {
 	if len(displaced) > 0 {
 		b.WriteString("\n# DISPLACED RULES\n\n" + strings.Join(displaced, "\n") + "\n")
 	}
-	return b.String()
+	if !a.textMode() {
+		return applyPrompt + b.String(), nil
+	}
+	tf := a.textFiles(plan, m)
+	tf.pickMarker(b.String())
+	tf.render(&b)
+	return strings.ReplaceAll(applyTextPrompt, defaultMarker, tf.marker) + b.String(), tf
 }
 
 // PlannedWorktrees are the worktrees plan would create, for a dry run's
@@ -1011,7 +1033,8 @@ func (s *settingsSession) reapply(ctx context.Context, plan *Plan, res *ApplyRes
 }
 
 // Run applies plan: a worktree per repo, one model run with file tools
-// confined to them, then a commit and a publish per repo that changed.
+// confined to them (or, in text mode, with none, the binary writing its
+// answer), then a commit and a publish per repo that changed.
 // It writes apply-input.md, apply.md (the model's output), and apply.json
 // (the result) into the plan's directory.
 func (a *Applier) Run(ctx context.Context, plan *Plan) (*ApplyResult, error) {
@@ -1061,43 +1084,17 @@ func (a *Applier) Run(ctx context.Context, plan *Plan) (*ApplyResult, error) {
 		return res, a.save(plan, res)
 	}
 
-	input := a.BuildInput(plan, wts)
-	dirs := make([]string, len(wts))
-	for i, w := range wts {
-		dirs[i] = w.Dir
+	var modelOutcomes []Outcome
+	var err error
+	if a.textMode() {
+		modelOutcomes, err = a.runText(ctx, plan, wts, res)
+	} else {
+		modelOutcomes, err = a.runEditor(ctx, plan, wts, res)
 	}
-	// The harness won't let the model edit under a .claude directory, so it
-	// edits copies (shadow.go).
-	input, shadowRoot, shadows, err := shadowClaudeDirs(input, plan.Dir, dirs)
 	if err != nil {
 		cleanup()
 		return nil, err
 	}
-	if shadowRoot != "" {
-		dirs = append(dirs, shadowRoot)
-		defer os.RemoveAll(shadowRoot)
-	}
-	if err := os.WriteFile(filepath.Join(plan.Dir, "apply-input.md"), []byte(input), 0o644); err != nil {
-		cleanup()
-		return nil, err
-	}
-	out, usage, err := a.Editor.Edit(ctx, a.Model, input, dirs)
-	res.Usage = usage
-	if err != nil {
-		cleanup()
-		return nil, fmt.Errorf("apply model: %w", err)
-	}
-	if err := syncBack(shadows); err != nil {
-		cleanup()
-		return nil, err
-	}
-	out = unshadow(out, shadows)
-	if err := os.WriteFile(filepath.Join(plan.Dir, "apply.md"), []byte(out), 0o644); err != nil {
-		cleanup()
-		return nil, err
-	}
-
-	modelOutcomes := ParseOutcomes(out)
 	matchOutcomes(plan.Routes, modelOutcomes)
 	reported := map[string]bool{}
 	for _, o := range modelOutcomes {
@@ -1180,6 +1177,67 @@ func (a *Applier) Run(ctx context.Context, plan *Plan) (*ApplyResult, error) {
 		return res, fmt.Errorf("change not published for %s; see apply.json", strings.Join(failed, ", "))
 	}
 	return res, nil
+}
+
+// runEditor runs the Editor with file tools confined to the worktrees, and
+// returns the outcomes it reports.
+func (a *Applier) runEditor(ctx context.Context, plan *Plan, wts []*review.Worktree, res *ApplyResult) ([]Outcome, error) {
+	if a.Editor == nil {
+		return nil, errors.New("apply: no editor or runner to apply with")
+	}
+	input := a.BuildInput(plan, wts)
+	dirs := make([]string, len(wts))
+	for i, w := range wts {
+		dirs[i] = w.Dir
+	}
+	// The harness won't let the model edit under a .claude directory, so it
+	// edits copies (shadow.go).
+	input, shadowRoot, shadows, err := shadowClaudeDirs(input, plan.Dir, dirs)
+	if err != nil {
+		return nil, err
+	}
+	if shadowRoot != "" {
+		dirs = append(dirs, shadowRoot)
+		defer os.RemoveAll(shadowRoot)
+	}
+	if err := os.WriteFile(filepath.Join(plan.Dir, "apply-input.md"), []byte(input), 0o644); err != nil {
+		return nil, err
+	}
+	out, usage, err := a.Editor.Edit(ctx, a.Model, input, dirs)
+	res.Usage = usage
+	if err != nil {
+		return nil, fmt.Errorf("apply model: %w", err)
+	}
+	if err := syncBack(shadows); err != nil {
+		return nil, err
+	}
+	out = unshadow(out, shadows)
+	if err := os.WriteFile(filepath.Join(plan.Dir, "apply.md"), []byte(out), 0o644); err != nil {
+		return nil, err
+	}
+	return ParseOutcomes(out), nil
+}
+
+// runText runs the Runner with no tools, writes the files its answer
+// returns, and returns the outcomes it reports.
+func (a *Applier) runText(ctx context.Context, plan *Plan, wts []*review.Worktree, res *ApplyResult) ([]Outcome, error) {
+	input, tf := a.buildInput(plan, wts)
+	if err := os.WriteFile(filepath.Join(plan.Dir, "apply-input.md"), []byte(input), 0o644); err != nil {
+		return nil, err
+	}
+	out, usage, err := a.Runner.Run(ctx, a.Model, input)
+	res.Usage = usage
+	if err != nil {
+		return nil, fmt.Errorf("apply model: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(plan.Dir, "apply.md"), []byte(out), 0o644); err != nil {
+		return nil, err
+	}
+	outcomes, err := a.writeAnswer(out, tf)
+	if err != nil {
+		return nil, fmt.Errorf("apply model: %w", err)
+	}
+	return outcomes, nil
 }
 
 // hookScriptOK checks a graduated hook's script as staged. A hook may only
@@ -1332,7 +1390,7 @@ func (a *Applier) land(ctx context.Context, plan *Plan, res *ApplyResult, m mapp
 	changed []string, only bool) Landed {
 	l := Landed{Repo: w.Repo, Branch: w.Branch, Base: w.Base, Proposals: []string{}}
 
-	// The Write tool can't set modes, and a graduated script must run.
+	// The model's writes never set modes, and a graduated script must run.
 	if bin, bw := m.at(review.Resolve(a.Bin)); bw == w {
 		for _, rel := range changed {
 			path := filepath.Join(w.Dir, rel)

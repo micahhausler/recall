@@ -164,10 +164,9 @@ func cmdInit(args []string) int {
 	fmt.Println("  2. See what a first pass over your sessions would cost, then run it:")
 	fmt.Printf("       recall learn map --since %dd --dry-run\n", mapWindowDays)
 	fmt.Printf("       recall learn map --since %dd && recall learn run\n", mapWindowDays)
+	fmt.Printf("  3. Review what it proposes: learn.review is %q (recall learn reviews).\n", s.Learn.Review)
 	if _, err := model.OpenEditor(s.Learn.Runner); errors.Is(err, model.ErrNoEditor) {
-		fmt.Printf("  3. Review what it proposes in proposals.md: learn.runner %q reduces but doesn't apply, since it %v.\n", s.Learn.Runner, model.ErrNoEditor)
-	} else {
-		fmt.Printf("  3. Review what it proposes: learn.review is %q (recall learn reviews).\n", s.Learn.Review)
+		fmt.Printf("     learn.runner %q %v, so it applies with no tools and recall writes the files it returns.\n", s.Learn.Runner, model.ErrNoEditor)
 	}
 	return 0
 }

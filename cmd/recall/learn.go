@@ -1250,12 +1250,19 @@ func newApplier(ctx context.Context, env *archiveEnv, ledger *learn.Ledger) (*le
 	}
 	l := env.settings.Learn
 	editor, err := env.newEditor()
+	var runner model.Runner
+	if errors.Is(err, model.ErrNoEditor) {
+		// Text mode: the runner gets no tools, and the binary writes the
+		// files its answer returns.
+		editor = nil
+		runner, err = env.newRunner()
+	}
 	if err != nil {
 		return nil, err
 	}
 	return &learn.Applier{
 		Gates:  learnGates(env, repos, taken, ledger),
-		Editor: editor, Model: l.ApplyModel, Publisher: pub,
+		Editor: editor, Runner: runner, Model: l.ApplyModel, Publisher: pub,
 		Public: env.settings.Keep.Public,
 		Check:  l.Check, Clock: env.clk, Out: os.Stderr,
 		OwnerInstructions: extension.Read(env.settings.Extensions["learn-apply"], os.Stderr),
@@ -1428,13 +1435,6 @@ func learnRun(ctx context.Context, env *archiveEnv, runner model.Runner, outDir 
 	n := len(learn.ParseProposals(string(md)))
 	if n == 0 {
 		fmt.Println("run: no proposals this time")
-		return 0, read
-	}
-	// A runner with no editor still reduces; its proposals wait for the
-	// owner, and the period counts as done so the reduce isn't paid for
-	// again tomorrow.
-	if _, err := env.newEditor(); errors.Is(err, model.ErrNoEditor) {
-		fmt.Printf("run: %d proposal(s) in %s, not applied: %v\n", n, tilde(filepath.Join(dir, "proposals.md"), env.home), err)
 		return 0, read
 	}
 	code, applied := applyRun(ctx, env, dir, false)

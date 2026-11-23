@@ -55,8 +55,8 @@ func (e *archiveEnv) newRunner() (model.Runner, error) {
 }
 
 // newEditor is the editor the apply step calls through. A runner whose
-// harness can't confine edits to the apply worktrees has none, and apply
-// refuses to run.
+// harness can't confine edits to the apply worktrees has none
+// (model.ErrNoEditor), and apply runs it in text mode instead.
 func (e *archiveEnv) newEditor() (model.Editor, error) {
 	if e.editor != nil {
 		return e.editor, nil
