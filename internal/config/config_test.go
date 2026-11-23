@@ -806,6 +806,13 @@ func TestPrimaryHarnessDefaults(t *testing.T) {
 			t.Fatal(err)
 		}
 		l := s.Learn
+		wantTrailer := "Co-Authored-By: Claude"
+		if strings.HasPrefix(tc.name, "kiro only") {
+			wantTrailer = "Co-Authored-By: Kiro"
+		}
+		if l.EvidenceTrailer != wantTrailer {
+			t.Errorf("%s: evidence trailer = %q, want %q", tc.name, l.EvidenceTrailer, wantTrailer)
+		}
 		if l.Runner != tc.runner || l.Ledger != tc.ledger || l.Skills != tc.skills || l.MapModel != tc.model {
 			t.Errorf("%s: runner, ledger, skills, map model = %q, %q, %q, %q; want %q, %q, %q, %q",
 				tc.name, l.Runner, l.Ledger, l.Skills, l.MapModel, tc.runner, tc.ledger, tc.skills, tc.model)

@@ -90,7 +90,7 @@ A review comment or a failed check on an agent-authored change is a correction n
 With `learn.evidence = ["github"]`, recall reads them through the `gh` CLI.
 The key is empty by default.
 
-- **Only the agent's pull requests count,** identified by the co-author trailer on their commits (`learn.evidence_trailer`).
+- **Only the agent's pull requests count,** identified by the co-author trailer on their commits (`learn.evidence_trailer`). It defaults to the primary harness's: `Co-Authored-By: Claude`, or `Co-Authored-By: Kiro` with `harness.claude` off. Kiro writes no trailer of its own, so its owner adds a steering rule telling it to.
 - **Other people's text is tool-derived.** It is always redacted and never counts as owner-typed, except a comment the owner wrote.
 
 ## Scope: where a rule lands
