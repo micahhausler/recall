@@ -53,8 +53,8 @@ func (r RecurSettings) Covers(step string) bool {
 // store, so only one machine per store proposes; nil means none is known.
 // What init leaves alone it says in notes, with the command that changes it.
 //
-// With harness.claude off there is no session-end hook to run the loop:
-// Kiro has none. Each step then becomes a recur job instead, and path, the
+// With harness.claude off no session-end hook can run the loop: Kiro's
+// kills every process it starts, the detached worker included. Each step then becomes a recur job instead, and path, the
 // PATH init runs with, becomes recur.env's PATH so the scheduler finds
 // recall and the harness CLI.
 func Fresh(c *Config, existing bool, host string, reducer func() (string, error), path string) (plan []KV, notes []string) {
@@ -114,7 +114,7 @@ func Fresh(c *Config, existing bool, host string, reducer func() (string, error)
 	return plan, notes
 }
 
-// The recur jobs init declares on a machine with no session-end hook, one
+// The recur jobs init declares on a machine with no usable session-end hook, one
 // per loop step, under names a job the owner wrote is unlikely to use.
 var freshJobSteps = []struct{ name, schedule, step, command, why string }{
 	{"recall-archive", "0 12 * * 1", StepArchive, StepArchive, "keep a weekly archive of transcripts in the store, every Monday"},
@@ -122,7 +122,7 @@ var freshJobSteps = []struct{ name, schedule, step, command, why string }{
 	{"recall-learn", "0 13 * * 1", StepLearn, StepLearn, "propose changes once a week, every Monday after the archive: one reduce model call"},
 }
 
-// freshJobs is Fresh for a machine with no session-end hook: the same three
+// freshJobs is Fresh for a machine with no usable session-end hook: the same three
 // steps and the same one-reducer-per-store rule, as recur jobs.
 func freshJobs(c *Config, unset func(string) bool, covered func(string) bool, host string,
 	reducer func() (string, error), path string, plan []KV, notes []string) ([]KV, []string) {

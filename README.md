@@ -89,7 +89,7 @@ The plugin also installs the session-end hook, which does nothing until `[hooks]
 In Kiro CLI, `recall init` installs the `keep` and `recall-setup` skills as a Kiro power when the kiro harness is on (`recall config set harness.kiro.enabled true`), from files built into the binary, and rerunning it after an upgrade updates them.
 The Kiro IDE can import the repository as a power from its GitHub URL.
 
-Kiro has no session-end hook, so with Claude Code off (`recall config set harness.claude.enabled false`) `recall init` declares recur jobs for the loop instead, and `recall recur sync` installs them.
+Kiro's session-end hook kills every process it starts, so it can't run recall's background worker; with Claude Code off (`recall config set harness.claude.enabled false`) `recall init` declares recur jobs for the loop instead, and `recall recur sync` installs them.
 
 ## Supported harnesses
 
