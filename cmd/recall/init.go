@@ -12,7 +12,9 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/micahhausler/recall"
 	"github.com/micahhausler/recall/internal/config"
+	"github.com/micahhausler/recall/internal/harness"
 	"github.com/micahhausler/recall/internal/model"
 	"github.com/micahhausler/recall/internal/review"
 	"github.com/micahhausler/recall/internal/store"
@@ -34,8 +36,11 @@ twice. The weekly reduce turns on only when no other machine has claimed it
 on the shared store. On a machine that already has config, review stays on
 pull requests, the default; init prints the command that moves it to a
 local branch. With harness.claude off, each step is a recur job instead,
-since Kiro has no session-end hook; ` + "`recall recur sync`" + ` installs them. It
-calls no model. Safe to run again.
+since Kiro has no session-end hook; ` + "`recall recur sync`" + ` installs them. With
+harness.kiro on, it installs the keep and recall-setup skills into Kiro CLI
+as a power, from files built into this binary, so running it again after an
+upgrade updates them; a missing or failing kiro-cli is a warning. It calls no
+model. Safe to run again.
 `
 
 func cmdInit(args []string) int {
@@ -99,6 +104,7 @@ func cmdInit(args []string) int {
 		fmt.Println("config: nothing to set; every key init would choose is already set")
 	}
 	if *dryRun {
+		initKiroPower(ctx, os.Stdout, env.settings, true)
 		return 0
 	}
 
@@ -144,6 +150,7 @@ func cmdInit(args []string) int {
 				tilde(target, env.home), tilde(filepath.Dir(target), env.home))
 		}
 	}
+	power := initKiroPower(ctx, os.Stdout, s, false)
 	if code := learnRulesSync(ctx, env); code != 0 {
 		return code
 	}
@@ -151,9 +158,12 @@ func cmdInit(args []string) int {
 	fmt.Println("\nNext:")
 	switch {
 	case !claude:
-		fmt.Println("  1. Install the skills as a Kiro power from a checkout of recall, and the recur jobs that run the loop,")
-		fmt.Println("     since Kiro has no session-end hook:")
-		fmt.Println("       git clone https://github.com/micahhausler/recall ~/src/recall && kiro-cli powers install ~/src/recall")
+		if power {
+			fmt.Println("  1. init installed the skills as a Kiro power; rerun recall init after an upgrade to update them.")
+			fmt.Println("     Install the recur jobs that run the loop, since Kiro has no session-end hook:")
+		} else {
+			fmt.Println("  1. Install the recur jobs that run the loop, since Kiro has no session-end hook:")
+		}
 		fmt.Println("       recall recur sync")
 	case hooks:
 		fmt.Println("  1. Install the plugin, which carries the session hook and the skills:")
@@ -169,6 +179,40 @@ func cmdInit(args []string) int {
 		fmt.Printf("     learn.runner %q %v, so it applies with no tools and recall writes the files it returns.\n", s.Learn.Runner, model.ErrNoEditor)
 	}
 	return 0
+}
+
+// kiroPowerCLI is the Kiro CLI initKiroPower installs through.
+var kiroPowerCLI = model.Binary("kiro")
+
+// initKiroPower installs the skills built into the binary into Kiro as a
+// power when the kiro harness is on, and reports whether they are
+// installed. A missing or failing CLI is a warning: init never fails on it.
+func initKiroPower(ctx context.Context, w io.Writer, s *config.Settings, dryRun bool) bool {
+	if _, on := s.Harnesses["kiro"]; !on {
+		return false
+	}
+	power := recall.KiroPower()
+	names, err := harness.PowerSkills(power)
+	if err != nil {
+		fmt.Fprintf(w, "warning: couldn't read the Kiro power built into recall: %v\n", err)
+		return false
+	}
+	skills := strings.Join(names, " and ")
+	if dryRun {
+		fmt.Fprintf(w, "would install the %s skills into Kiro as a power (%s powers install)\n", skills, kiroPowerCLI)
+		return false
+	}
+	if _, err := exec.LookPath(kiroPowerCLI); err != nil {
+		fmt.Fprintf(w, "warning: %s isn't on PATH, so the %s skills aren't installed in Kiro; rerun recall init once it is\n", kiroPowerCLI, skills)
+		return false
+	}
+	line, err := harness.InstallKiroPower(ctx, kiroPowerCLI, power)
+	if err != nil {
+		fmt.Fprintf(w, "warning: couldn't install the %s skills into Kiro: %v\n", skills, err)
+		return false
+	}
+	fmt.Fprintf(w, "kiro power: %s (%s)\n", line, skills)
+	return true
 }
 
 // planned reports whether init's plan sets key.
