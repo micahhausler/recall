@@ -316,7 +316,7 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 
 			RequireOwnerEvidence: true,
 			// The default agent trailer (evidence.Trailer).
-			EvidenceTrailer: "Co-Authored-By: Claude",
+			EvidenceTrailer: DefaultTrailer("claude"),
 		},
 	}
 	var err error
@@ -601,6 +601,9 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 		if _, set := c.Get("learn.skills"); !set {
 			s.Learn.Skills = DefaultSkills(primary, home)
 		}
+		if _, set := c.Get("learn.evidence_trailer"); !set {
+			s.Learn.EvidenceTrailer = DefaultTrailer(primary)
+		}
 	}
 	if s.Learn.Runner == "kiro" {
 		// Kiro names its models differently; auto lets it choose.
@@ -670,6 +673,16 @@ func DefaultSkills(name, home string) string {
 		return filepath.Join(home, ".kiro", "skills")
 	}
 	return filepath.Join(home, ".claude", "skills")
+}
+
+// DefaultTrailer is the commit trailer that marks a primary harness's
+// commits as agent-authored. Kiro writes none of its own, so its owner has
+// it add this one.
+func DefaultTrailer(name string) string {
+	if name == "kiro" {
+		return "Co-Authored-By: Kiro"
+	}
+	return "Co-Authored-By: Claude"
 }
 
 // DefaultSource is where a known harness keeps transcripts; "" for one

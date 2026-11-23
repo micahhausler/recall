@@ -201,7 +201,10 @@ replay = false
 evidence = ["github"]
 # The commit trailer that marks a pull request as agent-authored to an
 # evidence source. Set it when your harness writes a different trailer, or
-# attribution is off and your commits carry your own marker.
+# attribution is off and your commits carry your own marker. With
+# harness.claude off it defaults to "Co-Authored-By: Kiro"; Kiro writes no
+# trailer of its own, so add a steering rule telling it to end each commit
+# message with one.
 evidence_trailer = "Co-Authored-By: Claude"
 
 [hooks]
