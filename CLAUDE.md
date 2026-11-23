@@ -27,7 +27,7 @@ Examples and tests use placeholders like `you`, `example.com`, and `laptop-a`.
 - `internal/learn`: the learning loop (`docs/learning.md`): render, map with cache, rule hits, ledger, aging, candidates, scope, evidence checks, reduce, apply.
   The binary, not a model, makes every check that holds a proposal back, and every edit to a harness settings file.
 - `internal/review`: staging an edit for review: a git worktree per repo, one commit per proposal, and the publishers (`pr`, `branch`) that hand it over.
-- `internal/credential`: the credential a configured command supplies per repository (`docs/credentials.md`), for the `pr` publisher and the `github` evidence source to act as; recall never knows where a token comes from.
+- `internal/credential`: the credential a configured command supplies per repository (`docs/pr-credentials.md`), for the `pr` publisher and the `github` evidence source to act as; recall never knows where a token comes from.
 - `api/credentials/v1`: the credential contract's object as Go types, so a credential command can import it.
   A change to its JSON is a change to commands other people wrote: add optional fields, never rename or remove one.
 - `api/credentials/v1/command`: the command's side of the contract, for a credential command written in Go: parse the request, refuse to print a token to a terminal, write the answer.

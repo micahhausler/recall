@@ -149,7 +149,7 @@ type ReviewSettings struct {
 }
 
 // CredentialSettings name a command that supplies a credential per
-// repository (docs/credentials.md), for the pr publisher and the github
+// repository (docs/pr-credentials.md), for the pr publisher and the github
 // evidence source to act as in place of whatever gh is signed in as. With
 // no command, both use the machine's own gh login and git identity.
 type CredentialSettings struct {

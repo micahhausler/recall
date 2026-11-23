@@ -1,5 +1,5 @@
 // Package command is the command's side of the recall.credentials/v1
-// contract (docs/credentials.md): read the request recall set in the
+// contract (docs/pr-credentials.md): read the request recall set in the
 // environment, check it, and write the answer to stdout. A credential
 // command written in Go calls Run with a function that grants a token, and
 // that function is the only part the command writes itself.

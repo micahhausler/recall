@@ -1,4 +1,4 @@
-// Package v1 is the recall.credentials/v1 contract (docs/credentials.md):
+// Package v1 is the recall.credentials/v1 contract (docs/pr-credentials.md):
 // the one object recall hands a credential command in its environment and
 // reads back from the command's stdout. A command written in Go imports it
 // so the two sides can't spell a field differently. It imports only the

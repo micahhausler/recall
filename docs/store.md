@@ -3,11 +3,12 @@
 The store is a local directory or an S3 bucket that every machine sharing it reads and writes.
 A local store needs no setup beyond the directory.
 An S3 store needs IAM permissions on each key prefix recall uses, and those permissions depend on what the machine does: archive, learn, or reduce.
+For a policy to paste, skip to the reducer example at the end.
 
 ## Every machine writes and reads its own prefixes
 
 | Prefix | Written by | Read by | Holds |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `<harness>/<host>/<year>/W<week>.tar.zst` | every archiving host, never overwritten | `learn map --archives`, and the unobserved-host warning | one week of one host's transcripts |
 | `analysis/<harness>/…` | every learning host, never overwritten | every learning host | map observations, pull-request evidence, and native memory notes |
 | `analysis/hits/<harness>/…` | every learning host, never overwritten | every learning host | rule hits |
@@ -22,15 +23,13 @@ Uploads that never overwrite use `If-None-Match: *`; IAM can't require that head
 
 - `s3:ListBucket` on the bucket, for every prefix a host lists.
 - `s3:PutObject` for every write.
-- `s3:GetObject` for every read, and for every existence check: recall skips work it finds already stored with `HeadObject`, which S3 authorizes as `s3:GetObject`.
-  Without it, the check fails with 403 rather than 404.
-- `s3:DeleteObject` only on `analysis/reviews/*`, and only for the reducer.
-  Nothing else in the store is ever deleted.
+- `s3:GetObject` for every read, and for every existence check: recall skips work it finds already stored with `HeadObject`, which S3 authorizes as `s3:GetObject`. Without it, the check fails with 403 rather than 404.
+- `s3:DeleteObject` only on `analysis/reviews/*`, and only for the reducer. Nothing else in the store is ever deleted.
 
 ## Each role adds to the one before it
 
 | Role | Needs |
-|---|---|
+| --- | --- |
 | Archive | `s3:ListBucket` on `<harness>/*`; `s3:PutObject` on `<harness>/*` |
 | Learn | the archive grants, plus `s3:ListBucket` on `analysis/*` and `ledger/*`; `s3:GetObject` and `s3:PutObject` on `analysis/*`; `s3:GetObject` on `ledger/*` and `learn/reducer`; `s3:GetObject` on `<harness>/*` for `learn map --archives` |
 | Reduce | the learn grants, plus `s3:PutObject` on `learn/reducer` and `ledger/*`; `s3:DeleteObject` on `analysis/reviews/*` |
@@ -47,7 +46,7 @@ The probe repeats the newest ledger version's upload, with its own bytes and `If
 `recall archive-chats policy setup` prints the one-time policy for creating and configuring the bucket.
 `recall archive-chats policy upload` prints the archive role's policy, with no read or delete.
 `recall archive-chats check` probes only that archive role: a list and a write under `<harness>/<host>/`.
-Neither covers the learn or reduce grants above; add those by hand.
+Neither printed policy covers the learn or reduce grants above; add those by hand.
 
 This is a reducer policy for a bucket named `example-bucket` with one harness, `claude`:
 
@@ -103,3 +102,10 @@ This is a reducer policy for a bucket named `example-bucket` with one harness, `
 
 For a machine that learns but doesn't reduce, drop the last two statements.
 For one that only archives, use `recall archive-chats policy upload`.
+
+## Redaction changes what an archive holds
+
+With `archive-chats.redact = true`, secret-shaped tokens in a week's transcripts are replaced with `[REDACTED:<kind>]` as the tarball is built; the files on disk are never changed.
+`recall archive-chats run` and `recall archive-chats build` print one line per week that says how many tokens were replaced.
+Redaction is pattern-based and lossy: it catches token shapes (cloud and API keys, private key blocks, bearer headers, JWTs), not every secret, and the archive no longer holds what it replaced.
+That is why it is off by default.

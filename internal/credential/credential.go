@@ -2,7 +2,7 @@
 // outside itself: recall runs a configured command, hands it a request in
 // its environment, and uses the token it prints. recall knows nothing about
 // where the token comes from, so a GitHub App, a bot user's token in a password manager,
-// or anything else that speaks the contract (docs/credentials.md) works.
+// or anything else that speaks the contract (docs/pr-credentials.md) works.
 // The contract's object is api/credentials/v1, which such a command can
 // import, with api/credentials/v1/command for the command's side of it.
 //
