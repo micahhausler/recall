@@ -55,7 +55,8 @@ redact = false
 # claude is on unless turned off; any other harness is on once its table
 # exists. Known harnesses: claude, kiro. With claude off, learn.runner,
 # learn.ledger, and learn.skills default to kiro's, and recall init declares
-# recur jobs for the loop, since Kiro has no session-end hook.
+# recur jobs for the loop: Kiro's session-end hook kills every process it
+# starts, so it can't run the background worker.
 [harness.claude]
 # Where this harness keeps transcripts. Its context file, CLAUDE.md, is
 # read from this directory's parent.

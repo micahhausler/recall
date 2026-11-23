@@ -36,7 +36,7 @@ twice. The weekly reduce turns on only when no other machine has claimed it
 on the shared store. On a machine that already has config, review stays on
 pull requests, the default; init prints the command that moves it to a
 local branch. With harness.claude off, each step is a recur job instead,
-since Kiro has no session-end hook; ` + "`recall recur sync`" + ` installs them. With
+since Kiro's session-end hook kills the worker it would start; ` + "`recall recur sync`" + ` installs them. With
 harness.kiro on, it installs the keep and recall-setup skills into Kiro CLI
 as a power, from files built into this binary, so running it again after an
 upgrade updates them; a missing or failing kiro-cli is a warning. It calls no
@@ -160,9 +160,9 @@ func cmdInit(args []string) int {
 	case !claude:
 		if power {
 			fmt.Println("  1. init installed the skills as a Kiro power; rerun recall init after an upgrade to update them.")
-			fmt.Println("     Install the recur jobs that run the loop, since Kiro has no session-end hook:")
+			fmt.Println("     Install the recur jobs that run the loop, since Kiro's session-end hook can't run it:")
 		} else {
-			fmt.Println("  1. Install the recur jobs that run the loop, since Kiro has no session-end hook:")
+			fmt.Println("  1. Install the recur jobs that run the loop, since Kiro's session-end hook can't run it:")
 		}
 		fmt.Println("       recall recur sync")
 	case hooks:
