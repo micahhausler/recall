@@ -1,6 +1,6 @@
 ---
 name: recall-setup
-description: First-time recall setup on a machine, start to finish: the binary, the config, the store, the weekly archive job, and the learning loop. Use when I say "set up recall", "install recall", or ask why recall isn't working on this machine. Safe to re-run; every step checks before it changes anything.
+description: "First-time recall setup on a machine, start to finish: the binary, the config, the store, the weekly archive job, and the learning loop. Use when I say \"set up recall\", \"install recall\", or ask why recall isn't working on this machine. Safe to re-run; every step checks before it changes anything."
 ---
 
 Walk these in order, ask before anything that writes, and skip steps that already check out.
