@@ -38,6 +38,7 @@ Examples and tests use placeholders like `you`, `example.com`, and `laptop-a`.
 - `internal/extension`: the owner's extension files that skills and the reduce append at load time.
 - `internal/hook`: what the plugin's session hooks need: the hook input, the recursion guard, and the worker's lock and schedule.
 - `hooks/hooks.json`: the plugin's SessionEnd hook, which runs `recall hook`; nothing runs at session start.
+- `plugin.json`: the Agent Plugins manifest, which installs the same skills as a Kiro power; `.claude-plugin/plugin.json` is Claude Code's.
 - `skills/<name>/SKILL.md`: one skill per subcommand, named like it, ending in the "Owner additions" block that loads `recall extension <name>` (except recall-setup, which runs before the binary exists).
 - `config.example.toml`: every config key, with a comment.
 
@@ -63,8 +64,8 @@ Examples and tests use placeholders like `you`, `example.com`, and `laptop-a`.
 ## Releasing
 
 A release is a tag `vX.Y.Z` on main; the release workflow runs GoReleaser and updates the Homebrew cask.
-The workflow refuses a tag that doesn't match `version` in `.claude-plugin/plugin.json`, so bump the plugin version in the same change and tag the commit that carries it.
-Order: bump plugin.json, push main, wait for test and gitleaks to pass, then tag that commit and push the tag.
+The workflow refuses a tag that doesn't match `version` in `.claude-plugin/plugin.json` and `plugin.json`, so bump both in the same change and tag the commit that carries it.
+Order: bump both plugin manifests, push main, wait for test and gitleaks to pass, then tag that commit and push the tag.
 
 ## Checks
 

@@ -90,8 +90,8 @@ For a vulnerability, don't open a public issue. Report it privately through the 
 
 ## Releasing
 
-A release is a `vX.Y.Z` tag on `main`. The release workflow runs GoReleaser and updates the Homebrew cask, and it rejects a tag that doesn't match `version` in `.claude-plugin/plugin.json`.
+A release is a `vX.Y.Z` tag on `main`. The release workflow runs GoReleaser and updates the Homebrew cask, and it rejects a tag that doesn't match `version` in `.claude-plugin/plugin.json` and `plugin.json`.
 
-1. Bump `version` in `.claude-plugin/plugin.json` and push `main`.
+1. Bump `version` in `.claude-plugin/plugin.json` and `plugin.json`, and push `main`.
 2. Wait for the test and gitleaks checks to pass.
 3. Tag that commit and push the tag.

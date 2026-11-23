@@ -86,6 +86,15 @@ The skills run in Claude Code (not the Claude desktop app) and drive the `recall
 `recall init` is the short path for a new machine; the `recall-setup` skill walks you through every choice, including an S3 store and scheduled jobs.
 The plugin also installs the session-end hook, which does nothing until `[hooks]` in your config turns a step on.
 
+To use the skills in Kiro CLI, install a checkout of the repo as a Kiro power:
+
+```sh
+git clone https://github.com/micahhausler/recall ~/src/recall
+kiro-cli powers install ~/src/recall
+```
+
+Kiro has no session-end hook, so with Claude Code off (`recall config set harness.claude.enabled false`) `recall init` declares recur jobs for the loop instead, and `recall recur sync` installs them.
+
 ## Supported harnesses
 
 recall supports Claude Code and Kiro CLI.
@@ -94,6 +103,10 @@ recall supports Claude Code and Kiro CLI.
 | --- | --- | --- | --- |
 | `claude` (on by default) | `~/.claude/projects` | `~/.claude/CLAUDE.md` and its `@` imports | `claude -p` |
 | `kiro` | `~/.kiro/sessions`, both the v2 and v3 engine layouts | `~/.kiro/steering/**/*.md`, including `AGENTS.md`, and the Markdown files they link | `kiro-cli chat --no-interactive` |
+
+Claude Code isn't required.
+With `harness.claude` off, the loop's defaults follow Kiro: `learn.runner` is `kiro`, and the rule ledger and graduated skills live under `~/.kiro`.
+The kiro runner maps and reduces but never applies: Kiro trusts a tool on any path, so it can't keep edits inside the apply worktrees, and `recall learn run` leaves its proposals in `proposals.md` for you.
 
 ## Skills drive the binary from inside a session
 

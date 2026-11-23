@@ -86,6 +86,21 @@ func RegisterEditor(name string, f func() Editor) {
 	editors[name] = f
 }
 
+// Binary is the CLI the runner named name execs by default, or "" for a
+// runner recall doesn't know.
+func Binary(name string) string {
+	switch name {
+	case "claude":
+		return "claude"
+	case "kiro":
+		return (&Kiro{}).command()
+	}
+	return ""
+}
+
+// ErrNoEditor is OpenEditor's error for a known runner that has no editor.
+var ErrNoEditor = errors.New(`can't confine edits to the apply worktrees, so apply needs learn.runner "claude"`)
+
 // OpenEditor returns the editor for the runner named name. A runner whose
 // harness can't confine edits to given directories has none, and apply
 // refuses to run rather than edit through an unconfined harness or a
@@ -94,7 +109,7 @@ func OpenEditor(name string) (Editor, error) {
 	f, ok := editors[name]
 	if !ok {
 		if _, known := registry[name]; known {
-			return nil, fmt.Errorf("learn.runner %q can't confine edits to the apply worktrees, so apply needs learn.runner \"claude\"", name)
+			return nil, fmt.Errorf("learn.runner %q %w", name, ErrNoEditor)
 		}
 		return nil, fmt.Errorf("unknown learn.runner %q", name)
 	}

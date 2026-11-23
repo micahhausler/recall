@@ -453,7 +453,7 @@ func TestFresh(t *testing.T) {
 		}
 		return strings.Join(out, " ")
 	}
-	plan, notes := Fresh(c, false, "laptop-b", nil)
+	plan, notes := Fresh(c, false, "laptop-b", nil, "")
 	if got := keys(plan); got != `learn.review="branch" hooks.map=true hooks.archive=true hooks.learn_every=7` {
 		t.Errorf("a new machine: %s", got)
 	}
@@ -474,7 +474,7 @@ func TestFresh(t *testing.T) {
 	if err != nil || s.Learn.Review != "branch" || !s.Hooks.Map || !s.Hooks.Archive || s.Hooks.LearnEvery != 7 {
 		t.Fatalf("settings after init = %+v, %v", s, err)
 	}
-	if plan, _ := Fresh(c, true, "laptop-b", nil); len(plan) != 0 {
+	if plan, _ := Fresh(c, true, "laptop-b", nil, ""); len(plan) != 0 {
 		t.Errorf("a second init would still set %s", keys(plan))
 	}
 
@@ -489,7 +489,7 @@ func TestFreshKeepsExistingUsersOnPullRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, notes := Fresh(c, true, "laptop-b", nil)
+	plan, notes := Fresh(c, true, "laptop-b", nil, "")
 	for _, kv := range plan {
 		if kv.Key == "learn.review" {
 			t.Errorf("an existing machine's review was switched to %s", kv.Value)
@@ -515,7 +515,7 @@ func TestFreshKeepsExistingUsersOnPullRequests(t *testing.T) {
 	if c, err = Load(b); err != nil {
 		t.Fatal(err)
 	}
-	if _, notes := Fresh(c, true, "laptop-b", nil); len(notes) != 0 {
+	if _, notes := Fresh(c, true, "laptop-b", nil, ""); len(notes) != 0 {
 		t.Errorf("notes = %v, want none when the key is set", notes)
 	}
 }
@@ -614,7 +614,7 @@ func TestFreshSkipsStepsRecurJobsRun(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		plan, notes := Fresh(c, true, "laptop-b", nil)
+		plan, notes := Fresh(c, true, "laptop-b", nil, "")
 		if got := keys(plan); got != tc.want {
 			t.Errorf("%s: plan = %q, want %q", tc.name, got, tc.want)
 		}
@@ -635,7 +635,7 @@ func TestFreshOneReducerPerStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, notes := Fresh(c, true, "laptop-b", func() (string, error) { return "laptop-a", nil })
+	plan, notes := Fresh(c, true, "laptop-b", func() (string, error) { return "laptop-a", nil }, "")
 	for _, kv := range plan {
 		if kv.Key == "hooks.learn_every" {
 			t.Errorf("a second machine on the store would also reduce: %v", plan)
@@ -651,7 +651,7 @@ func TestFreshOneReducerPerStore(t *testing.T) {
 	}
 
 	// With no claim on the store, the reduce turns on here.
-	plan, _ = Fresh(c, true, "laptop-b", func() (string, error) { return "", nil })
+	plan, _ = Fresh(c, true, "laptop-b", func() (string, error) { return "", nil }, "")
 	on := false
 	for _, kv := range plan {
 		on = on || kv.Key == "hooks.learn_every"
@@ -662,7 +662,7 @@ func TestFreshOneReducerPerStore(t *testing.T) {
 
 	// A store that can't be read leaves the reduce off, with the command
 	// that turns it on by hand.
-	plan, notes = Fresh(c, true, "laptop-b", func() (string, error) { return "", errors.New("offline") })
+	plan, notes = Fresh(c, true, "laptop-b", func() (string, error) { return "", errors.New("offline") }, "")
 	for _, kv := range plan {
 		if kv.Key == "hooks.learn_every" {
 			t.Errorf("an unreadable store still turned the reduce on: %v", plan)
@@ -775,5 +775,110 @@ func TestReviewCredentials(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), "config.toml") {
 			t.Errorf("%q: err = %v, want %q naming the file", body, err, want)
 		}
+	}
+}
+
+// With Claude Code off, the loop's defaults move to the harness that is on,
+// so a Kiro-only machine needs nothing under ~/.claude; a key the owner set
+// still wins, and with Claude Code on nothing moves.
+func TestPrimaryHarnessDefaults(t *testing.T) {
+	for _, tc := range []struct {
+		name, toml                    string
+		runner, ledger, skills, model string
+	}{
+		{"kiro only", "[harness.claude]\nenabled = false\n\n[harness.kiro]\n",
+			"kiro", "/home/you/.kiro/recall-ledger.json", "/home/you/.kiro/skills", "auto"},
+		{"kiro only, keys set", "[harness.claude]\nenabled = false\n\n[harness.kiro]\n\n[learn]\nrunner = \"claude\"\nledger = \"/l.json\"\nskills = \"/s\"\n",
+			"claude", "/l.json", "/s", "sonnet"},
+		{"both on", "[harness.kiro]\n",
+			"claude", "/home/you/.claude/recall-ledger.json", "/home/you/.claude/skills", "sonnet"},
+		{"neither on", "[harness.claude]\nenabled = false\n",
+			"claude", "/home/you/.claude/recall-ledger.json", "/home/you/.claude/skills", "sonnet"},
+	} {
+		b := base(t)
+		write(t, b, tc.toml)
+		c, err := Load(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := c.Settings("/home/you", "laptop-a")
+		if err != nil {
+			t.Fatal(err)
+		}
+		l := s.Learn
+		if l.Runner != tc.runner || l.Ledger != tc.ledger || l.Skills != tc.skills || l.MapModel != tc.model {
+			t.Errorf("%s: runner, ledger, skills, map model = %q, %q, %q, %q; want %q, %q, %q, %q",
+				tc.name, l.Runner, l.Ledger, l.Skills, l.MapModel, tc.runner, tc.ledger, tc.skills, tc.model)
+		}
+	}
+}
+
+// With Claude Code off there is no session-end hook, so init declares each
+// loop step as a recur job instead, carries its PATH into recur.env, and
+// still leaves a step a job already runs, and a reduce another machine
+// claimed, alone. The plan round-trips through Set and Load.
+func TestFreshWithoutClaudeDeclaresJobs(t *testing.T) {
+	b := base(t)
+	write(t, b, "[harness.claude]\nenabled = false\n\n[harness.kiro]\n")
+	c, err := Load(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, notes := Fresh(c, false, "laptop-a", func() (string, error) { return "", nil }, "/usr/bin:/bin")
+	for _, kv := range plan {
+		if strings.HasPrefix(kv.Key, "hooks.") {
+			t.Errorf("plan sets %s, a hook Kiro never fires", kv.Key)
+		}
+		if _, err := Set(b, kv.Key, kv.Value); err != nil {
+			t.Fatalf("set %s = %s: %v", kv.Key, kv.Value, err)
+		}
+	}
+	if len(notes) != 0 {
+		t.Errorf("notes = %v, want none", notes)
+	}
+	c, err = Load(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.Settings("/home/you", "laptop-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range []string{StepArchive, StepMap, StepLearn} {
+		if !s.Recur.Covers(step) {
+			t.Errorf("no job runs %q: %+v", step, s.Recur.Jobs)
+		}
+	}
+	if s.Recur.Jobs["recall-map"].Schedule != "0 */6 * * *" {
+		t.Errorf("recall-map = %+v", s.Recur.Jobs["recall-map"])
+	}
+	if strings.Join(s.Recur.Env, ",") != "PATH=/usr/bin:/bin" {
+		t.Errorf("recur.env = %v", s.Recur.Env)
+	}
+	if s.Hooks.Map || s.Hooks.Archive || s.Hooks.LearnEvery != 0 {
+		t.Errorf("hooks = %+v, want all off", s.Hooks)
+	}
+
+	// Run again: everything is declared, so nothing more is planned.
+	if plan, _ := Fresh(c, true, "laptop-a", nil, "/usr/bin:/bin"); len(plan) != 0 {
+		t.Errorf("second plan = %v, want none", plan)
+	}
+
+	// Another machine's claim keeps the learn job off, with the take hint.
+	b = base(t)
+	write(t, b, "[harness.claude]\nenabled = false\n\n[harness.kiro]\n\n[recur.jobs.mine]\nschedule = \"0 1 * * *\"\ncommand = \"recall archive-chats run\"\n")
+	if c, err = Load(b); err != nil {
+		t.Fatal(err)
+	}
+	plan, notes = Fresh(c, true, "laptop-b", func() (string, error) { return "laptop-a", nil }, "")
+	var keys []string
+	for _, kv := range plan {
+		keys = append(keys, kv.Key)
+	}
+	if got := strings.Join(keys, " "); got != "recur.jobs.recall-map.schedule recur.jobs.recall-map.command" {
+		t.Errorf("plan = %q, want only the map job", got)
+	}
+	if all := strings.Join(notes, "\n"); !strings.Contains(all, "`recall archive-chats run`") || !strings.Contains(all, "recall learn reducer --take") {
+		t.Errorf("notes = %v, want the covered archive and the claimed reduce", notes)
 	}
 }

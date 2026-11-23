@@ -56,6 +56,14 @@ jobs:
         run: |
           claude plugin validate .
           claude plugin validate .claude-plugin/marketplace.json
+      # plugin.json is the Agent Plugins manifest Kiro installs as a power.
+      - name: Both plugin manifests carry one version
+        run: |
+          claude="$(jq -r .version .claude-plugin/plugin.json)"
+          agent="$(jq -r .version plugin.json)"
+          if [ "$claude" != "$agent" ]; then
+            echo ".claude-plugin/plugin.json is $claude but plugin.json is $agent"; exit 1
+          fi
 
   # Lints the cask GoReleaser would publish, with the version release.yml pins.
   cask:

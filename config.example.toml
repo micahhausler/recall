@@ -53,7 +53,9 @@ redact = false
 
 # One table per harness. `enabled = false` in a later file turns one off.
 # claude is on unless turned off; any other harness is on once its table
-# exists. Known harnesses: claude, kiro.
+# exists. Known harnesses: claude, kiro. With claude off, learn.runner,
+# learn.ledger, and learn.skills default to kiro's, and recall init declares
+# recur jobs for the loop, since Kiro has no session-end hook.
 [harness.claude]
 # Where this harness keeps transcripts. Its context file, CLAUDE.md, is
 # read from this directory's parent.
@@ -87,7 +89,9 @@ command = "recall archive-chats run"
 # (claude -p) or "kiro" (kiro-cli chat --no-interactive). Never an API
 # client, so existing auth works unchanged. Kiro saves every headless run as
 # a session; recall deletes each one it starts. learn apply needs "claude":
-# Kiro trusts a tool on any path, so it can't confine edits to worktrees.
+# Kiro trusts a tool on any path, so it can't confine edits to worktrees,
+# and `recall learn run` through kiro leaves its proposals unapplied.
+# Default: "claude", or "kiro" with harness.claude off.
 runner = "claude"
 # The model that reads one session (map), and the model that folds a window
 # of observations into proposals (reduce). Measured on real sessions, haiku
@@ -116,6 +120,7 @@ repos = ["~/src/project"]
 # every machine that shares it: the reducer writes a new version there after
 # each reduce and apply, every other machine treats this file as a cache of
 # the newest store version, and a missing file is restored from the store.
+# Default: this path, or ~/.kiro/recall-ledger.json with harness.claude off.
 ledger = "~/.claude/recall-ledger.json"
 # The candidate ledger: lessons your sessions have shown that aren't rules
 # yet, each a group of alike observations, and which ones a proposal already
@@ -140,6 +145,7 @@ apply_model = "sonnet"
 # Where a proposed new skill lands, as <skills>/<name>/SKILL.md, and where a
 # graduated script lands. Like every target, each must sit in a git checkout:
 # apply stages its edits in a worktree of that checkout, never the live files.
+# skills defaults to ~/.kiro/skills with harness.claude off.
 skills = "~/.claude/skills"
 bin = "~/bin"
 # The harness settings file a graduated rule may be enforced in: a hook that

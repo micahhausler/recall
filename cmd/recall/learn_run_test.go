@@ -268,3 +268,36 @@ func TestApplyRunAlreadyAppliedIsNotDone(t *testing.T) {
 		t.Error("an already-applied run counted as done")
 	}
 }
+
+// A runner with no editor, like kiro, still reduces, but leaves the
+// proposals for the owner instead of failing the apply, and the period
+// counts as done so the scheduled loop doesn't pay for the same reduce
+// again tomorrow.
+func TestLearnRunWithoutAnEditorLeavesProposals(t *testing.T) {
+	f := newHookFixture(t)
+	runner := lessonRunner{}
+	f.env.runner = runner
+	f.env.editor = nil
+	f.env.settings.Learn.Runner = "kiro"
+	ctx := context.Background()
+
+	f.transcript(t, "sess-vet", f.clk.T.Add(-8*time.Hour))
+	if code := learnMap(ctx, f.env, runner, "30d", 0, false, false, 0, nil); code != 0 {
+		t.Fatalf("learn map = %d", code)
+	}
+	code, done := learnRun(ctx, f.env, runner, "", false)
+	if code != 0 || !done {
+		t.Fatalf("learn run = %d, done %v; want 0, done", code, done)
+	}
+	day := filepath.Join(learnStateRoot(f.env), f.clk.T.Format("2006-01-02"))
+	md, err := os.ReadFile(filepath.Join(day, "proposals.md"))
+	if err != nil || !strings.Contains(string(md), "go vet") {
+		t.Fatalf("proposals.md = %q, %v; want the reduce's proposal", md, err)
+	}
+	if exists(filepath.Join(day, "apply.json")) {
+		t.Error("a run with no editor applied anyway")
+	}
+	if got := f.pending(t); got != 0 {
+		t.Errorf("pending reviews = %d, want 0: nothing was staged", got)
+	}
+}
