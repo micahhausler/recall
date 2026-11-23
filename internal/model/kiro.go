@@ -32,7 +32,8 @@ func init() {
 //
 // Kiro is a Runner but not an Editor: a trusted Kiro tool is trusted on any
 // path, outside the workspace too, so it can't keep apply's edits inside
-// the worktrees.
+// the worktrees. Apply runs it with no tools instead, and the binary writes
+// the files its answer returns.
 type Kiro struct {
 	// Command is the Kiro CLI binary, default "kiro-cli".
 	Command string

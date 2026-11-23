@@ -88,9 +88,9 @@ command = "recall archive-chats run"
 # The harness CLI model calls go through, in headless mode: "claude"
 # (claude -p) or "kiro" (kiro-cli chat --no-interactive). Never an API
 # client, so existing auth works unchanged. Kiro saves every headless run as
-# a session; recall deletes each one it starts. learn apply needs "claude":
-# Kiro trusts a tool on any path, so it can't confine edits to worktrees,
-# and `recall learn run` through kiro leaves its proposals unapplied.
+# a session; recall deletes each one it starts. Kiro trusts a tool on any
+# path, so it can't confine edits to worktrees: learn apply through kiro
+# runs with no tools, and recall writes the files the model returns.
 # Default: "claude", or "kiro" with harness.claude off.
 runner = "claude"
 # The model that reads one session (map), and the model that folds a window

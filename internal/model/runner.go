@@ -99,12 +99,12 @@ func Binary(name string) string {
 }
 
 // ErrNoEditor is OpenEditor's error for a known runner that has no editor.
-var ErrNoEditor = errors.New(`can't confine edits to the apply worktrees, so apply needs learn.runner "claude"`)
+var ErrNoEditor = errors.New("can't confine file edits to the apply worktrees")
 
 // OpenEditor returns the editor for the runner named name. A runner whose
-// harness can't confine edits to given directories has none, and apply
-// refuses to run rather than edit through an unconfined harness or a
-// different one.
+// harness can't confine edits to given directories has none; apply then
+// gives that runner no tools and writes the files its answer returns,
+// rather than edit through an unconfined harness.
 func OpenEditor(name string) (Editor, error) {
 	f, ok := editors[name]
 	if !ok {

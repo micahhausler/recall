@@ -269,13 +269,35 @@ func TestApplyRunAlreadyAppliedIsNotDone(t *testing.T) {
 	}
 }
 
-// A runner with no editor, like kiro, still reduces, but leaves the
-// proposals for the owner instead of failing the apply, and the period
-// counts as done so the scheduled loop doesn't pay for the same reduce
-// again tomorrow.
-func TestLearnRunWithoutAnEditorLeavesProposals(t *testing.T) {
+// textApplyRunner is lessonRunner for the map and reduce, and answers a
+// text-mode apply by returning each editable file with the rule added.
+type textApplyRunner struct {
+	lessonRunner
+	applyInputs *[]string
+}
+
+func (r textApplyRunner) Run(ctx context.Context, modelName, input string) (string, model.Usage, error) {
+	if !strings.Contains(input, "\n# FILES\n") {
+		return r.lessonRunner.Run(ctx, modelName, input)
+	}
+	*r.applyInputs = append(*r.applyInputs, input)
+	var out []string
+	for _, line := range strings.Split(input, "\n") {
+		if p, ok := strings.CutPrefix(line, "- edit: "); ok {
+			out = append(out, "%%recall-file%% BEGIN "+p, "# Rules", "", "- Run go vet before saying a change is done.",
+				"%%recall-file%% END "+p, "Applied[add]: Run go vet before done -- "+p)
+		}
+	}
+	return strings.Join(out, "\n"), model.Usage{}, nil
+}
+
+// A runner with no editor, like kiro, applies in text mode: the apply call
+// gets no tools, its input carries the files, and the binary writes the
+// file the answer returns and stages it for review.
+func TestLearnRunWithoutAnEditorAppliesInTextMode(t *testing.T) {
 	f := newHookFixture(t)
-	runner := lessonRunner{}
+	var inputs []string
+	runner := textApplyRunner{applyInputs: &inputs}
 	f.env.runner = runner
 	f.env.editor = nil
 	f.env.settings.Learn.Runner = "kiro"
@@ -289,15 +311,21 @@ func TestLearnRunWithoutAnEditorLeavesProposals(t *testing.T) {
 	if code != 0 || !done {
 		t.Fatalf("learn run = %d, done %v; want 0, done", code, done)
 	}
+	if len(inputs) != 1 {
+		t.Fatalf("text-mode apply calls = %d, want 1", len(inputs))
+	}
+	if !strings.Contains(inputs[0], "You have no tools.") || !strings.Contains(inputs[0], "%%recall-file%% BEGIN ") {
+		t.Errorf("the apply input isn't text mode's:\n%s", inputs[0])
+	}
 	day := filepath.Join(learnStateRoot(f.env), f.clk.T.Format("2006-01-02"))
-	md, err := os.ReadFile(filepath.Join(day, "proposals.md"))
-	if err != nil || !strings.Contains(string(md), "go vet") {
-		t.Fatalf("proposals.md = %q, %v; want the reduce's proposal", md, err)
+	if !exists(filepath.Join(day, "apply.json")) {
+		t.Fatal("the run never applied")
 	}
-	if exists(filepath.Join(day, "apply.json")) {
-		t.Error("a run with no editor applied anyway")
+	if got := f.pending(t); got != 1 {
+		t.Errorf("pending reviews = %d, want 1", got)
 	}
-	if got := f.pending(t); got != 0 {
-		t.Errorf("pending reviews = %d, want 0: nothing was staged", got)
+	got := gitIn(t, filepath.Join(f.home, ".claude"), "show", "learn-"+filepath.Base(day)+":CLAUDE.md")
+	if !strings.Contains(got, "- Run go vet before saying a change is done.") {
+		t.Errorf("the branch's CLAUDE.md = %q", got)
 	}
 }

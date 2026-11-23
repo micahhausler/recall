@@ -249,12 +249,12 @@ func TestOpen(t *testing.T) {
 }
 
 // Kiro can't confine edits to directories, so it has no editor, and apply
-// fails loudly instead of editing through another harness.
+// runs it with no tools instead of editing through another harness.
 func TestOpenEditor(t *testing.T) {
 	if _, err := OpenEditor("claude"); err != nil {
 		t.Errorf("OpenEditor(claude): %v", err)
 	}
-	if _, err := OpenEditor("kiro"); err == nil || !strings.Contains(err.Error(), "can't confine edits") {
+	if _, err := OpenEditor("kiro"); !errors.Is(err, ErrNoEditor) {
 		t.Errorf("OpenEditor(kiro) err = %v", err)
 	}
 	if _, err := OpenEditor("nope"); err == nil || !strings.Contains(err.Error(), "unknown") {
