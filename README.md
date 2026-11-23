@@ -15,7 +15,7 @@ Once a pattern shows up often enough, recall proposes candidate rules, skills, a
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/recall-loop-dark@2x.png">
-  <img alt="The recall learning loop: sessions write transcripts to local disk; scheduled jobs on every host archive them and map them to observations in the store; one host reduces observations into proposals and applies them as pull requests; you review, and merged changes update the live context the next session reads." src="docs/img/recall-loop@2x.png">
+  <img alt="The recall learning loop: sessions write transcripts to local disk; a session-end hook on every host archives them and maps them to observations in the store; the store's one reducer reduces observations into proposals and applies them as pull requests or local branches; you review, and merged changes update the live context the next session reads." src="docs/img/recall-loop@2x.png">
 </picture>
 
 ## Tenets
