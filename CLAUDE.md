@@ -33,6 +33,8 @@ Examples and tests use placeholders like `you`, `example.com`, and `laptop-a`.
 - `api/credentials/v1/command`: the command's side of the contract, for a credential command written in Go: parse the request, refuse to print a token to a terminal, write the answer.
   It and the types are the only packages outside `internal/`, and commands other people wrote call them: add to their exported names, never rename or remove one.
   Nothing about where a token comes from, or about any host or provider, goes in it, and nothing recall's binary is built from imports it.
+- `examples/credential-github-app`: an example credential command built on `api/credentials/v1/command`, which mints a GitHub App installation token per repository.
+  It is a `main` package in recall's module, so CI builds and tests it against the current contract, and GoReleaser, which builds only `cmd/recall`, never ships it.
 - `internal/extension`: the owner's extension files that skills and the reduce append at load time.
 - `internal/hook`: what the plugin's session hooks need: the hook input, the recursion guard, and the worker's lock and schedule.
 - `hooks/hooks.json`: the plugin's SessionEnd hook, which runs `recall hook`; nothing runs at session start.
