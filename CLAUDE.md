@@ -39,6 +39,8 @@ Examples and tests use placeholders like `you`, `example.com`, and `laptop-a`.
 - `internal/hook`: what the plugin's session hooks need: the hook input, the recursion guard, and the worker's lock and schedule.
 - `hooks/hooks.json`: the plugin's SessionEnd hook, which runs `recall hook`; nothing runs at session start.
 - `plugin.json`: the Agent Plugins manifest, which installs the same skills as a Kiro power; `.claude-plugin/plugin.json` is Claude Code's.
+- `embed.go`: package `recall` at the module root, which embeds `plugin.json`, `skills/keep`, and `skills/recall-setup` as the Kiro power `recall init` installs through `kiro-cli powers install`; only `cmd/recall` imports it.
+  Kiro rejects a skill whose frontmatter isn't strict YAML, so a skill the power ships quotes any value that holds `: `.
 - `skills/<name>/SKILL.md`: one skill per subcommand, named like it, ending in the "Owner additions" block that loads `recall extension <name>` (except recall-setup, which runs before the binary exists).
 - `config.example.toml`: every config key, with a comment.
 
