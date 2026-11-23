@@ -179,15 +179,10 @@ require_owner_evidence = true
 # 0, the default, counts no failures and keeps require_owner_evidence as the
 # only gate for a new rule.
 repeat_evidence_sessions = 0
-# Replay the moment that earned a proposed rule before it goes to review:
-# the reduce re-runs the session up to your correction, once with the
-# context file as it is and once with the proposed rule added, and holds the
-# add back when the two runs end the same way, since the rule changed
-# nothing. It also replays, without them, rules earned only on models no
-# recent session ran, and proposes retiring one the current model follows
-# unprompted in every replay. At most 8 moments are replayed per run, each
-# one or two headless calls on learn.map_model; a replay that fails blocks
-# nothing. Off by default, since each replay is a model call.
+# Test a proposed rule against the moment that earned it, with and without
+# the rule, and hold back a rule that changes nothing. A replay is one
+# tool-less model call; it executes nothing. Off by default, since each
+# replay costs a call. See docs/learning.md#replay.
 replay = false
 # Evidence from outside the chat, read by `recall learn map` with no model
 # call. "github" reads review comments and failed checks on pull requests in

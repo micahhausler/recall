@@ -225,9 +225,10 @@ type LearnSettings struct {
 	// evidence alone when the binary counted the repeat in at least that
 	// many sessions; 0 turns that off.
 	RepeatEvidenceSessions int
-	// Replay re-runs the moment that earned a proposed rule before it goes
-	// to review, with and without the rule, and holds back an add the
-	// replay shows changing nothing. It also replays, without them, rules
+	// Replay asks, in one tool-less model call that executes nothing, what
+	// the agent would do next at the moment that earned a proposed rule,
+	// with and without the rule, and holds back an add the replay shows
+	// changing nothing. It also replays, without them, rules
 	// earned only on models no recent session ran, and proposes retiring
 	// one the current model follows unprompted in every replay. Each replay
 	// is a model call, so it is off by default.

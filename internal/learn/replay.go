@@ -21,10 +21,12 @@ import (
 var replayPrompt string
 
 // A proposed rule exists because one moment went wrong, and that moment can
-// be run again: the session up to the owner's correction, once with the
-// target file as it is and once with the proposed rule added. A model plays
-// the agent and ends each run with a structured verdict, and the binary,
-// never the model, compares the two runs and decides what is held back.
+// be asked about again: the session up to the owner's correction, once with
+// the target file as it is and once with the proposed rule added. A replay
+// executes nothing; it is one tool-less call in which a model, reading the
+// session as text, names the agent's next action and gives a structured
+// verdict, and the binary, never the model, compares the two verdicts and
+// decides what is held back.
 
 // maxReplays is how many moments one reduce run may replay (learn.replay).
 // A replay is at most two headless calls, so a full run spends at most 16,
@@ -38,10 +40,11 @@ const maxReplays = 8
 // ok is false when the transcript is gone or was never here.
 type SessionLoader func(harness, session string) ([]events.Event, bool)
 
-// Replayer re-runs the moment that earned a proposal (learn.replay): the
-// session prefix up to the owner's correction, headless with no tools, like
-// the reduce. A replay that shows the rule changing nothing holds the add
-// back; a replay that fails is logged and blocks nothing.
+// Replayer asks what the agent would do next at the moment that earned a
+// proposal (learn.replay), given the session prefix up to the owner's
+// correction, headless with no tools, like the reduce; nothing the session
+// ran is run again. A replay that shows the rule changing nothing holds the
+// add back; a replay that fails is logged and blocks nothing.
 type Replayer struct {
 	Runner model.Runner
 	// Model is the model the replay runs as the agent, learn.map_model.

@@ -36,7 +36,7 @@ type Reducer struct {
 	// OwnerInstructions are the owner's extension text for the reduce
 	// (extensions.learn-reduce), appended to its input when set.
 	OwnerInstructions string
-	// Replay, when set (learn.replay), re-runs the moment that earned each
+	// Replay, when set (learn.replay), replays the moment that earned each
 	// add before it is proposed, and replays outgrown rules' moments
 	// without them; nil leaves replays off.
 	Replay *Replayer
