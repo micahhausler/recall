@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -273,5 +274,45 @@ func TestUsageString(t *testing.T) {
 	}
 	if u.Zero() || (Usage{}).Zero() != true {
 		t.Errorf("Zero() wrong: %+v", u)
+	}
+}
+
+// Every run names recall's own agent and engine, and runs from a scratch dir
+// holding that agent with no tools, so the owner's default agent and working
+// directory never reach a headless run; the dir is gone afterward.
+func TestKiroRunUsesAToollessAgentInAScratchDir(t *testing.T) {
+	sessions := t.TempDir()
+	seen := filepath.Join(t.TempDir(), "seen")
+	script, log := fakeKiro(t, fmt.Sprintf(`pwd > %q
+cat .kiro/agents/recall-headless.json >> %q
+printf '%%s\n' '{"type":"runFinished","data":{"sessionId":"sess_x","status":"success","stopReason":"end_turn","finalText":"ok"}}'
+exit 0
+`, seen, seen))
+	k := &Kiro{Command: script, SessionsDir: sessions}
+	if text, _, err := k.Run(context.Background(), "auto", "in"); err != nil || text != "ok" {
+		t.Fatalf("Run = %q, %v", text, err)
+	}
+	args, _ := os.ReadFile(log)
+	if !strings.Contains(string(args), "--trust-tools= --agent recall-headless --agent-engine v3") {
+		t.Errorf("args = %s", args)
+	}
+	data, err := os.ReadFile(seen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, agent, _ := strings.Cut(string(data), "\n")
+	if cwd, _ := os.Getwd(); dir == cwd {
+		t.Errorf("ran in the caller's dir %s", dir)
+	}
+	var cfg struct {
+		Tools      []string       `json:"tools"`
+		MCPServers map[string]any `json:"mcpServers"`
+		Resources  []string       `json:"resources"`
+	}
+	if err := json.Unmarshal([]byte(agent), &cfg); err != nil || len(cfg.Tools) != 0 || len(cfg.MCPServers) != 0 || len(cfg.Resources) != 0 {
+		t.Errorf("agent = %s (%v)", agent, err)
+	}
+	if _, err := os.Stat(strings.TrimSpace(dir)); !os.IsNotExist(err) {
+		t.Errorf("scratch dir %s left behind (stat err %v)", dir, err)
 	}
 }
