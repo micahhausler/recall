@@ -16,12 +16,14 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: stable
-      - name: Tag matches the plugin version
+      - name: Tag matches the plugin versions
         run: |
-          want="v$(jq -r .version .claude-plugin/plugin.json)"
-          if [ "$GITHUB_REF_NAME" != "$want" ]; then
-            echo "tag $GITHUB_REF_NAME doesn't match plugin.json version $want"; exit 1
-          fi
+          for manifest in .claude-plugin/plugin.json plugin.json; do
+            want="v$(jq -r .version "$manifest")"
+            if [ "$GITHUB_REF_NAME" != "$want" ]; then
+              echo "tag $GITHUB_REF_NAME doesn't match $manifest version $want"; exit 1
+            fi
+          done
       - run: go vet ./...
       - run: go test ./...
       - uses: goreleaser/goreleaser-action@v7

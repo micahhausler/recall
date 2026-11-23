@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/micahhausler/recall/internal/archive"
+	"github.com/micahhausler/recall/internal/config"
 	"github.com/micahhausler/recall/internal/events"
 	"github.com/micahhausler/recall/internal/evidence"
 	"github.com/micahhausler/recall/internal/extension"
@@ -35,7 +36,7 @@ const learnUsage = `Usage:
         sessions, and this host's own that are no longer on disk; a session
         still on disk is read from disk. By default each host maps its own
         sessions and the reduce reads every host's
-  recall learn observations [--harness claude]
+  recall learn observations [--harness NAME]
         print the cached observations as JSONL
   recall learn candidates
         list the lessons the window's sessions showed, as the reduce will
@@ -95,7 +96,7 @@ func cmdLearn(args []string) int {
 	dryRun := fs.Bool("dry-run", false, "build model inputs and report; call no model")
 	force := fs.Bool("force", false, "reduce, run: run on a machine that isn't the store's reducer; the store ledger stays unwritten")
 	take := fs.Bool("take", false, "reducer: move the store's reduce claim to this host")
-	harnessName := fs.String("harness", "claude", "observations: which harness")
+	harnessName := fs.String("harness", "", "observations: which harness (default the primary one: claude, or kiro with claude off)")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, learnUsage) }
 	cmd := ""
 	rest := args
@@ -123,7 +124,11 @@ func cmdLearn(args []string) int {
 	case "map":
 		return learnMap(ctx, env, runner, *since, *limit, *dryRun, *fromArchives, *idle, nil)
 	case "observations":
-		return learnObservations(ctx, env, *harnessName)
+		name := *harnessName
+		if name == "" {
+			name = config.PrimaryHarness(env.settings.Harnesses)
+		}
+		return learnObservations(ctx, env, name)
 	case "candidates":
 		return learnCandidates(ctx, env)
 	case "rules-sync":
@@ -1420,8 +1425,16 @@ func learnRun(ctx context.Context, env *archiveEnv, runner model.Runner, outDir 
 	if err != nil {
 		return fail(err), false
 	}
-	if len(learn.ParseProposals(string(md))) == 0 {
+	n := len(learn.ParseProposals(string(md)))
+	if n == 0 {
 		fmt.Println("run: no proposals this time")
+		return 0, read
+	}
+	// A runner with no editor still reduces; its proposals wait for the
+	// owner, and the period counts as done so the reduce isn't paid for
+	// again tomorrow.
+	if _, err := env.newEditor(); errors.Is(err, model.ErrNoEditor) {
+		fmt.Printf("run: %d proposal(s) in %s, not applied: %v\n", n, tilde(filepath.Join(dir, "proposals.md"), env.home), err)
 		return 0, read
 	}
 	code, applied := applyRun(ctx, env, dir, false)

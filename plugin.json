@@ -1,0 +1,11 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "recall",
+  "version": "0.4.2",
+  "description": "Keeps an agent's memory honest: archives coding-agent transcripts, reports skill use, lints context files, and schedules the jobs that do so.",
+  "author": {
+    "name": "Micah Hausler"
+  },
+  "repository": "https://github.com/micahhausler/recall",
+  "license": "Apache-2.0"
+}

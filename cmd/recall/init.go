@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/micahhausler/recall/internal/config"
+	"github.com/micahhausler/recall/internal/model"
 	"github.com/micahhausler/recall/internal/review"
 	"github.com/micahhausler/recall/internal/store"
 )
@@ -32,7 +33,9 @@ step off when a recur job's command already runs that step, so nothing runs
 twice. The weekly reduce turns on only when no other machine has claimed it
 on the shared store. On a machine that already has config, review stays on
 pull requests, the default; init prints the command that moves it to a
-local branch. It calls no model. Safe to run again.
+local branch. With harness.claude off, each step is a recur job instead,
+since Kiro has no session-end hook; ` + "`recall recur sync`" + ` installs them. It
+calls no model. Safe to run again.
 `
 
 func cmdInit(args []string) int {
@@ -75,7 +78,7 @@ func cmdInit(args []string) int {
 		}
 		return host, nil
 	}
-	plan, notes := config.Fresh(c, len(files) > 0, env.settings.Host, reducer)
+	plan, notes := config.Fresh(c, len(files) > 0, env.settings.Host, reducer, os.Getenv("PATH"))
 	for _, kv := range plan {
 		verb := "set"
 		if *dryRun {
@@ -115,17 +118,20 @@ func cmdInit(args []string) int {
 	}
 	// This machine runs the reduce, so claim it for the store; the first
 	// claim wins, and a re-run on the same host changes nothing.
-	if s.Hooks.LearnEvery > 0 && !s.Recur.Covers(config.StepLearn) {
+	if (s.Hooks.LearnEvery > 0 && !s.Recur.Covers(config.StepLearn)) || planned(plan, "recur.jobs.recall-learn.command") {
 		if st, _, err := openStore(ctx, env); err != nil {
 			fmt.Printf("warning: couldn't record this host as the store's reducer: %v\n", err)
 		} else if err := claimReducer(ctx, st, s.Host); err != nil {
 			fmt.Printf("warning: couldn't record this host as the store's reducer: %v\n", err)
 		}
 	}
-	if _, err := exec.LookPath(s.Learn.Runner); err != nil {
-		fmt.Printf("warning: %s isn't on PATH; the map, reduce, and apply run through it\n", s.Learn.Runner)
+	if bin := model.Binary(s.Learn.Runner); bin != "" {
+		if _, err := exec.LookPath(bin); err != nil {
+			fmt.Printf("warning: %s isn't on PATH; the map, reduce, and apply run through it\n", bin)
+		}
 	}
-	if exe, err := os.Executable(); err == nil {
+	_, claude := s.Harnesses["claude"]
+	if exe, err := os.Executable(); err == nil && claude {
 		if msg := offGUIPath(exe, guiPaths(runtime.GOOS)); msg != "" {
 			fmt.Println(msg)
 		}
@@ -143,17 +149,37 @@ func cmdInit(args []string) int {
 	}
 	hooks := s.Hooks.Map || s.Hooks.Archive || s.Hooks.LearnEvery > 0
 	fmt.Println("\nNext:")
-	if hooks {
+	switch {
+	case !claude:
+		fmt.Println("  1. Install the skills as a Kiro power from a checkout of recall, and the recur jobs that run the loop,")
+		fmt.Println("     since Kiro has no session-end hook:")
+		fmt.Println("       git clone https://github.com/micahhausler/recall ~/src/recall && kiro-cli powers install ~/src/recall")
+		fmt.Println("       recall recur sync")
+	case hooks:
 		fmt.Println("  1. Install the plugin, which carries the session hook and the skills:")
 		fmt.Println("       claude plugin marketplace add micahhausler/recall && claude plugin install recall@recall")
-	} else {
+	default:
 		fmt.Println("  1. Your scheduled jobs run the loop, so the session hook has nothing to do (recall recur list).")
 	}
 	fmt.Println("  2. See what a first pass over your sessions would cost, then run it:")
 	fmt.Printf("       recall learn map --since %dd --dry-run\n", mapWindowDays)
 	fmt.Printf("       recall learn map --since %dd && recall learn run\n", mapWindowDays)
-	fmt.Printf("  3. Review what it proposes: learn.review is %q (recall learn reviews).\n", s.Learn.Review)
+	if _, err := model.OpenEditor(s.Learn.Runner); errors.Is(err, model.ErrNoEditor) {
+		fmt.Printf("  3. Review what it proposes in proposals.md: learn.runner %q reduces but doesn't apply, since it %v.\n", s.Learn.Runner, model.ErrNoEditor)
+	} else {
+		fmt.Printf("  3. Review what it proposes: learn.review is %q (recall learn reviews).\n", s.Learn.Review)
+	}
 	return 0
+}
+
+// planned reports whether init's plan sets key.
+func planned(plan []config.KV, key string) bool {
+	for _, kv := range plan {
+		if kv.Key == key {
+			return true
+		}
+	}
+	return false
 }
 
 // reducerKey is the store object that records the one host that runs the

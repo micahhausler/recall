@@ -157,6 +157,8 @@ It does nothing until `recall init` turns its steps on under `[hooks]`.
 - **A failing step waits a day,** so a reduce that keeps failing can't become a paid model call per session.
 - **No recursion.** Every harness run recall starts carries `RECALL_HOOK=1`, and recall's hooks do nothing when they see it.
 - **One reducer per store.** A reduce on every machine would send duplicate proposals, so the first `recall init` claims the store. `recall learn reducer --take` moves the claim.
+- **Kiro has no session-end hook.** With `harness.claude` off, `recall init` declares the same three steps as recur jobs, and copies its `PATH` into `recur.env` so the scheduler finds `recall` and `kiro-cli`.
+- **A runner with no editor stops at the proposals.** Through kiro, `recall learn run` reduces and leaves `proposals.md` unapplied, and the period still counts as done, so the reduce isn't paid for again the next day.
 
 ## Why apply is a separate stage
 

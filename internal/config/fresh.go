@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -51,7 +52,12 @@ func (r RecurSettings) Covers(step string) bool {
 // is asked for the host that already runs the reduce on this machine's
 // store, so only one machine per store proposes; nil means none is known.
 // What init leaves alone it says in notes, with the command that changes it.
-func Fresh(c *Config, existing bool, host string, reducer func() (string, error)) (plan []KV, notes []string) {
+//
+// With harness.claude off there is no session-end hook to run the loop:
+// Kiro has none. Each step then becomes a recur job instead, and path, the
+// PATH init runs with, becomes recur.env's PATH so the scheduler finds
+// recall and the harness CLI.
+func Fresh(c *Config, existing bool, host string, reducer func() (string, error), path string) (plan []KV, notes []string) {
 	unset := func(key string) bool { _, ok := c.Get(key); return !ok }
 	if unset("learn.review") {
 		if existing {
@@ -69,6 +75,9 @@ func Fresh(c *Config, existing bool, host string, reducer func() (string, error)
 			}
 		}
 		return false
+	}
+	if on, ok := c.Get("harness.claude.enabled"); ok && on == false {
+		return freshJobs(c, unset, covered, host, reducer, path, plan, notes)
 	}
 	if unset("hooks.map") {
 		if covered(StepMap) {
@@ -101,6 +110,53 @@ func Fresh(c *Config, existing bool, host string, reducer func() (string, error)
 		default:
 			plan = append(plan, KV{"hooks.learn_every", "7", "propose changes once a week, from the same hook: one reduce and one apply model call"})
 		}
+	}
+	return plan, notes
+}
+
+// The recur jobs init declares on a machine with no session-end hook, one
+// per loop step, under names a job the owner wrote is unlikely to use.
+var freshJobSteps = []struct{ name, schedule, step, command, why string }{
+	{"recall-archive", "0 12 * * 1", StepArchive, StepArchive, "keep a weekly archive of transcripts in the store, every Monday"},
+	{"recall-map", "0 */6 * * *", StepMap, StepMap + " --idle 6h", "observe sessions that have been quiet for six hours, every six hours, at a few cents of model use each"},
+	{"recall-learn", "0 13 * * 1", StepLearn, StepLearn, "propose changes once a week, every Monday after the archive: one reduce model call"},
+}
+
+// freshJobs is Fresh for a machine with no session-end hook: the same three
+// steps and the same one-reducer-per-store rule, as recur jobs.
+func freshJobs(c *Config, unset func(string) bool, covered func(string) bool, host string,
+	reducer func() (string, error), path string, plan []KV, notes []string) ([]KV, []string) {
+	added := false
+	for _, j := range freshJobSteps {
+		base, step := "recur.jobs."+j.name, j.step
+		switch {
+		case covered(step):
+			notes = append(notes, fmt.Sprintf("no %s job: a recur job already runs `%s`", j.name, step))
+			continue
+		case !unset(base + ".command"):
+			notes = append(notes, fmt.Sprintf("%s.command is already set; left as it is", base))
+			continue
+		}
+		if step == StepLearn && reducer != nil {
+			claim, err := reducer()
+			if err != nil {
+				notes = append(notes, fmt.Sprintf("no %s job: couldn't check the store for another machine's reduce (%v)", j.name, err))
+				continue
+			}
+			if claim != "" {
+				notes = append(notes, fmt.Sprintf("no %s job: %s already runs the reduce on this store (this machine is %s), "+
+					"and one reducer per store avoids duplicate proposals; if %s is gone, `recall learn reducer --take` moves the claim here", j.name, claim, host, claim))
+				continue
+			}
+		}
+		plan = append(plan,
+			KV{base + ".schedule", strconv.Quote(j.schedule), j.why},
+			KV{base + ".command", strconv.Quote(j.command), "the step that job runs; `recall recur sync` installs it"})
+		added = true
+	}
+	if added && unset("recur.env") && path != "" {
+		plan = append(plan, KV{"recur.env", "[" + strconv.Quote("PATH="+path) + "]",
+			"the PATH init ran with, so the scheduler finds recall and the harness CLI"})
 	}
 	return plan, notes
 }

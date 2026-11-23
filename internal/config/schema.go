@@ -305,12 +305,12 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 			MapModel:    "sonnet",
 			ReduceModel: "opus",
 			Targets:     []string{filepath.Join(home, ".claude", "CLAUDE.md")},
-			Ledger:      filepath.Join(home, ".claude", "recall-ledger.json"),
+			Ledger:      DefaultLedger("claude", home),
 			Candidates:  filepath.Join(home, ".local", "state", "recall", "learn", "candidates.json"),
 			RetireDays:  90,
 			MapWorkers:  4,
 			ApplyModel:  "sonnet",
-			Skills:      filepath.Join(home, ".claude", "skills"),
+			Skills:      DefaultSkills("claude", home),
 			Bin:         filepath.Join(home, "bin"),
 			Review:      "pr",
 
@@ -583,10 +583,23 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 	if _, set := c.Get("learn.targets"); !set {
 		// Each enabled harness's own context file.
 		s.Learn.Targets = nil
-		for _, name := range []string{"claude", "kiro"} {
+		for _, name := range KnownHarnesses {
 			if _, ok := s.Harnesses[name]; ok {
 				s.Learn.Targets = append(s.Learn.Targets, DefaultTarget(name, home))
 			}
+		}
+	}
+	// With Claude Code off, the loop runs through the harness that is on and
+	// keeps its files in that harness's home, so nothing needs ~/.claude.
+	if primary := PrimaryHarness(s.Harnesses); primary != "claude" {
+		if _, set := c.Get("learn.runner"); !set {
+			s.Learn.Runner = primary
+		}
+		if _, set := c.Get("learn.ledger"); !set {
+			s.Learn.Ledger = DefaultLedger(primary, home)
+		}
+		if _, set := c.Get("learn.skills"); !set {
+			s.Learn.Skills = DefaultSkills(primary, home)
 		}
 	}
 	if s.Learn.Runner == "kiro" {
@@ -623,6 +636,40 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// KnownHarnesses are the harnesses recall has an adapter for, in the order
+// PrimaryHarness prefers them.
+var KnownHarnesses = []string{"claude", "kiro"}
+
+// PrimaryHarness is the enabled harness whose CLI and home the loop's
+// defaults follow: claude when it is on, else the first other known one on,
+// else claude.
+func PrimaryHarness(enabled map[string]HarnessSettings) string {
+	for _, name := range KnownHarnesses {
+		if _, ok := enabled[name]; ok {
+			return name
+		}
+	}
+	return "claude"
+}
+
+// DefaultLedger is the rule ledger's default path for a primary harness,
+// in that harness's home.
+func DefaultLedger(name, home string) string {
+	if name == "kiro" {
+		return filepath.Join(home, ".kiro", "recall-ledger.json")
+	}
+	return filepath.Join(home, ".claude", "recall-ledger.json")
+}
+
+// DefaultSkills is where a primary harness loads the owner's own skills
+// from, and so where a graduated skill lands.
+func DefaultSkills(name, home string) string {
+	if name == "kiro" {
+		return filepath.Join(home, ".kiro", "skills")
+	}
+	return filepath.Join(home, ".claude", "skills")
 }
 
 // DefaultSource is where a known harness keeps transcripts; "" for one
