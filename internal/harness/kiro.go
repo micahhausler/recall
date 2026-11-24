@@ -14,7 +14,7 @@ import (
 )
 
 func init() {
-	Register("kiro", func(s config.HarnessSettings) (Harness, error) {
+	Register(config.HarnessKiro, func(s config.HarnessSettings) (Harness, error) {
 		return &Kiro{source: s.Source}, nil
 	})
 }
@@ -29,7 +29,7 @@ type Kiro struct {
 	source string
 }
 
-func (k *Kiro) Name() string      { return "kiro" }
+func (k *Kiro) Name() string      { return config.HarnessKiro }
 func (k *Kiro) SourceDir() string { return k.source }
 
 // root is the Kiro home, ~/.kiro by default: the sessions directory's parent.

@@ -136,7 +136,7 @@ func cmdInit(args []string) int {
 			fmt.Printf("warning: %s isn't on PATH; the map, reduce, and apply run through it\n", bin)
 		}
 	}
-	_, claude := s.Harnesses["claude"]
+	_, claude := s.Harnesses[config.HarnessClaude]
 	if exe, err := os.Executable(); err == nil && claude {
 		if msg := offGUIPath(exe, guiPaths(runtime.GOOS)); msg != "" {
 			fmt.Println(msg)
@@ -182,13 +182,13 @@ func cmdInit(args []string) int {
 }
 
 // kiroPowerCLI is the Kiro CLI initKiroPower installs through.
-var kiroPowerCLI = model.Binary("kiro")
+var kiroPowerCLI = model.Binary(config.HarnessKiro)
 
 // initKiroPower installs the skills built into the binary into Kiro as a
 // power when the kiro harness is on, and reports whether they are
 // installed. A missing or failing CLI is a warning: init never fails on it.
 func initKiroPower(ctx context.Context, w io.Writer, s *config.Settings, dryRun bool) bool {
-	if _, on := s.Harnesses["kiro"]; !on {
+	if _, on := s.Harnesses[config.HarnessKiro]; !on {
 		return false
 	}
 	power := recall.KiroPower()

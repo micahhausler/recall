@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/micahhausler/recall/internal/config"
 	"github.com/micahhausler/recall/internal/hook"
 )
 
@@ -90,9 +91,9 @@ func RegisterEditor(name string, f func() Editor) {
 // runner recall doesn't know.
 func Binary(name string) string {
 	switch name {
-	case "claude":
-		return "claude"
-	case "kiro":
+	case config.HarnessClaude:
+		return config.HarnessClaude
+	case config.HarnessKiro:
 		return (&Kiro{}).command()
 	}
 	return ""
@@ -117,8 +118,8 @@ func OpenEditor(name string) (Editor, error) {
 }
 
 func init() {
-	Register("claude", func() Runner { return &CLI{Command: "claude"} })
-	RegisterEditor("claude", func() Editor { return &CLI{Command: "claude"} })
+	Register(config.HarnessClaude, func() Runner { return &CLI{Command: "claude"} })
+	RegisterEditor(config.HarnessClaude, func() Editor { return &CLI{Command: "claude"} })
 }
 
 // CLI runs a harness command headless: `<command> -p --model <model>` with

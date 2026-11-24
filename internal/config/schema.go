@@ -301,7 +301,7 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 		// The credential package's DefaultTimeout.
 		Review: ReviewSettings{Credentials: CredentialSettings{Timeout: 30 * time.Second}},
 		Learn: LearnSettings{
-			Runner:      "claude",
+			Runner:      HarnessClaude,
 			MapModel:    "sonnet",
 			ReduceModel: "opus",
 			Targets:     []string{filepath.Join(home, ".claude", "CLAUDE.md")},
@@ -310,13 +310,13 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 			RetireDays:  90,
 			MapWorkers:  4,
 			ApplyModel:  "sonnet",
-			Skills:      DefaultSkills("claude", home),
+			Skills:      DefaultSkills(HarnessClaude, home),
 			Bin:         filepath.Join(home, "bin"),
 			Review:      "pr",
 
 			RequireOwnerEvidence: true,
 			// The default agent trailer (evidence.Trailer).
-			EvidenceTrailer: DefaultTrailer("claude"),
+			EvidenceTrailer: DefaultTrailer(HarnessClaude),
 		},
 	}
 	var err error
@@ -577,8 +577,8 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 			s.Harnesses[name] = h
 		}
 	}
-	if _, declared := c.Get("harness.claude"); !declared {
-		s.Harnesses["claude"] = HarnessSettings{Source: DefaultSource("claude", home), Enabled: true}
+	if _, declared := c.Get("harness." + HarnessClaude); !declared {
+		s.Harnesses[HarnessClaude] = HarnessSettings{Source: DefaultSource(HarnessClaude, home), Enabled: true}
 	}
 	if _, set := c.Get("learn.targets"); !set {
 		// Each enabled harness's own context file.
@@ -591,7 +591,7 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 	}
 	// With Claude Code off, the loop runs through the harness that is on and
 	// lands graduated skills where that harness loads them.
-	if primary := PrimaryHarness(s.Harnesses); primary != "claude" {
+	if primary := PrimaryHarness(s.Harnesses); primary != HarnessClaude {
 		if _, set := c.Get("learn.runner"); !set {
 			s.Learn.Runner = primary
 		}
@@ -638,9 +638,58 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 	return s, nil
 }
 
+// The harnesses recall has an adapter for. Config code names a harness
+// through these and through harnessDefaults, so a new harness is one constant
+// and one table entry here, plus its adapter and runner registrations.
+const (
+	HarnessClaude = "claude"
+	HarnessKiro   = "kiro"
+)
+
 // KnownHarnesses are the harnesses recall has an adapter for, in the order
 // PrimaryHarness prefers them.
-var KnownHarnesses = []string{"claude", "kiro"}
+var KnownHarnesses = []string{HarnessClaude, HarnessKiro}
+
+// defaults are one harness's per-owner defaults. Paths are relative to home.
+type defaults struct {
+	source      []string // where transcripts live
+	target      []string // the context file every session loads
+	skills      []string // where the owner's own skills load from
+	trailer     string   // the commit trailer that marks its commits
+	mapModel    string   // "" keeps the global default
+	reduceModel string   // "" keeps the global default
+}
+
+var harnessDefaults = map[string]defaults{
+	HarnessClaude: {
+		source:  []string{".claude", "projects"},
+		target:  []string{".claude", "CLAUDE.md"},
+		skills:  []string{".claude", "skills"},
+		trailer: "Co-Authored-By: Claude",
+	},
+	HarnessKiro: {
+		source: []string{".kiro", "sessions"},
+		target: []string{".kiro", "steering", "AGENTS.md"},
+		skills: []string{".kiro", "skills"},
+		// Kiro writes no trailer of its own, so its owner has it add this one.
+		trailer: "Co-Authored-By: Kiro",
+		// Kiro names its models differently; auto lets it choose.
+		mapModel:    "auto",
+		reduceModel: "auto",
+	},
+}
+
+// defaultsFor is name's defaults, falling back to Claude Code's.
+func defaultsFor(name string) defaults {
+	if d, ok := harnessDefaults[name]; ok {
+		return d
+	}
+	return harnessDefaults[HarnessClaude]
+}
+
+func under(home string, rel []string) string {
+	return filepath.Join(append([]string{home}, rel...)...)
+}
 
 // PrimaryHarness is the enabled harness whose CLI and home the loop's
 // defaults follow: claude when it is on, else the first other known one on,
@@ -651,36 +700,26 @@ func PrimaryHarness(enabled map[string]HarnessSettings) string {
 			return name
 		}
 	}
-	return "claude"
+	return HarnessClaude
 }
 
 // DefaultSkills is where a primary harness loads the owner's own skills
 // from, and so where a graduated skill lands.
 func DefaultSkills(name, home string) string {
-	if name == "kiro" {
-		return filepath.Join(home, ".kiro", "skills")
-	}
-	return filepath.Join(home, ".claude", "skills")
+	return under(home, defaultsFor(name).skills)
 }
 
 // DefaultTrailer is the commit trailer that marks a primary harness's
-// commits as agent-authored. Kiro writes none of its own, so its owner has
-// it add this one.
+// commits as agent-authored.
 func DefaultTrailer(name string) string {
-	if name == "kiro" {
-		return "Co-Authored-By: Kiro"
-	}
-	return "Co-Authored-By: Claude"
+	return defaultsFor(name).trailer
 }
 
 // DefaultSource is where a known harness keeps transcripts; "" for one
 // recall doesn't know, which must set harness.<name>.source.
 func DefaultSource(name, home string) string {
-	switch name {
-	case "claude":
-		return filepath.Join(home, ".claude", "projects")
-	case "kiro":
-		return filepath.Join(home, ".kiro", "sessions")
+	if d, ok := harnessDefaults[name]; ok {
+		return under(home, d.source)
 	}
 	return ""
 }
@@ -689,11 +728,8 @@ func DefaultSource(name, home string) string {
 // and the owner edits: CLAUDE.md for Claude Code, the global AGENTS.md
 // steering file for Kiro.
 func DefaultTarget(name, home string) string {
-	switch name {
-	case "claude":
-		return filepath.Join(home, ".claude", "CLAUDE.md")
-	case "kiro":
-		return filepath.Join(home, ".kiro", "steering", "AGENTS.md")
+	if d, ok := harnessDefaults[name]; ok {
+		return under(home, d.target)
 	}
 	return ""
 }

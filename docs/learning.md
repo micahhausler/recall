@@ -24,20 +24,21 @@ proposed edits -> apply (worktree per repo) -> a pull request or branch per repo
 The loop borrows from muse (github.com/ellistarn/muse), which runs the same observe-then-fold shape over conversation history.
 The structured output lines, the fingerprint cache, the compression before the model call, and conservative folding here all started there.
 
-## Seven prompts are embedded in the binary
+## Six prompts are embedded in the binary
 
 The prompts live in `internal/learn/prompts` and are compiled into the binary, so each release pins the wording every step runs on.
-Each prompt describes its input and fixes the shape of its output, which the binary parses. Changing `map.md` or either rule-hit prompt changes every session's fingerprint, so the next map reads each session again.
+Each prompt describes its input and fixes the shape of its output, which the binary parses.
+`apply-text.md` is a variant of `apply.md`, so the table counts it with apply. Changing `map.md` or either rule-hit prompt changes every session's fingerprint, so the next map reads each session again.
 
 | Prompt | Step | What it asks for | What comes back |
 | --- | --- | --- | --- |
-| `map.md` | Map | Read one compressed session and report only corrections, context, procedures, tool failures, and skill misses. It says most sessions are routine and the expected answer is `NONE`. | `Quote:` and `Observation[category]:` lines, or `NONE` |
-| `hits.md` | Map | Judge the session against the rules listed under CURRENT RULES. It is appended to `map.md` the first time a session is read, so one call observes and judges. | `Rule[id]:` lines marked relevant, followed, or violated |
-| `hits-only.md` | Map | The same judgment for a session already observed, when a rule it wasn't shown needs judging. It goes ahead of `hits.md` in place of `map.md`. | `Rule[id]:` lines, or `NONE` |
-| `reduce.md` | Reduce | Fold the window's candidates into proposals, starting from the rules as they are. An add needs two sessions, or one where the owner said "always" or "never". | A `## Proposals` section with one block per add, reword, retire, skill, or graduate |
-| `apply.md` | Apply | Turn each checked proposal into an edit in a git worktree, changing only the paths the binary routed it to. | One `Applied[kind]:` or `Skipped[kind]:` line per proposal |
-| `apply-text.md` | Apply, text mode | The same edits with no tools, for a runner with no editor: the input carries the files, and the model returns each changed file whole. | One block per changed file between marker lines, then the same outcome lines |
-| `replay.md` | Replay | Act as the agent at one past moment, decide the next action, then judge that action against the recorded mistake. | A `Next:` line and a `Verdict: repeats` or `Verdict: avoids` line |
+| [`map.md`](../internal/learn/prompts/map.md) | Map | Read one compressed session and report only corrections, context, procedures, tool failures, and skill misses. It says most sessions are routine and the expected answer is `NONE`. | `Quote:` and `Observation[category]:` lines, or `NONE` |
+| [`hits.md`](../internal/learn/prompts/hits.md) | Map | Judge the session against the rules listed under CURRENT RULES. It is appended to `map.md` the first time a session is read, so one call observes and judges. | `Rule[id]:` lines marked relevant, followed, or violated |
+| [`hits-only.md`](../internal/learn/prompts/hits-only.md) | Map | The same judgment for a session already observed, when a rule it wasn't shown needs judging. It goes ahead of `hits.md` in place of `map.md`. | `Rule[id]:` lines, or `NONE` |
+| [`reduce.md`](../internal/learn/prompts/reduce.md) | Reduce | Fold the window's candidates into proposals, starting from the rules as they are. An add needs two sessions, or one where the owner said "always" or "never". | A `## Proposals` section with one block per add, reword, retire, skill, or graduate |
+| [`apply.md`](../internal/learn/prompts/apply.md) | Apply | Turn each checked proposal into an edit in a git worktree, changing only the paths the binary routed it to. | One `Applied[kind]:` or `Skipped[kind]:` line per proposal |
+| [`apply-text.md`](../internal/learn/prompts/apply-text.md) | Apply, text mode | The same edits with no tools, for a runner that can't confine file edits: the input carries the files, and the model returns each changed file whole. | One block per changed file between marker lines, then the same outcome lines |
+| [`replay.md`](../internal/learn/prompts/replay.md) | Replay | Act as the agent at one past moment, decide the next action, then judge that action against the recorded mistake. | A `Next:` line and a `Verdict: repeats` or `Verdict: avoids` line |
 
 - **Empty is an explicit answer.** The map prompt expects `NONE` for most sessions, and the reduce prompt says zero proposals is a fine outcome. Models can't reliably emit empty output, so every output line has a fixed prefix and anything else is discarded.
 - **Quotes make evidence checkable.** The map must put the owner's exact words, at least three of them, before every correction, context, and procedure. The binary checks each quote against the session, and a checked quote is what makes an observation owner-typed.
@@ -136,9 +137,9 @@ Nothing it does writes a live file.
 - **The binary routes each proposal before a model sees it** and holds back one that is off target, reuses a taken name, or lands outside a git checkout.
 - **Each repo gets a fresh worktree** on a `learn-<date>` branch.
 - **One model run with file tools makes the edits,** limited to the exact paths the binary named.
-- **A runner with no editor applies in text mode.** Kiro trusts a tool on any path, so it can't keep writes inside the worktrees, and it gets no tools at all.
+- **A runner that can't confine file edits applies in text mode.** Kiro trusts a tool on any path, so it can't keep writes inside the worktrees, and it gets no tools at all.
   The input carries the current contents of every file a proposal may change, plus each worktree's `AGENTS.md` or `CLAUDE.md`, and the model answers with each changed file whole between marker lines.
-- **In text mode the binary holds the pen.** It writes a returned file only when its cleaned path is one the binary listed as editable for the run, inside that run's worktree, with no symlink at the file and no existing parent resolving outside the worktree.
+- **In text mode `recall` itself makes the edits.** It writes a returned file only when its cleaned path is one the binary listed as editable for the run, inside that run's worktree, with no symlink at the file and no existing parent resolving outside the worktree.
   It refuses anything else, including a file returned twice, reports why, and doesn't apply a proposal whose outcome names a refused file.
   An answer with an unterminated block or no outcome lines fails the apply, like a failed editor run.
   A proposal whose files would push the input past 256 KiB is held back before the model runs.
