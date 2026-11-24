@@ -131,7 +131,7 @@ func cmdInit(args []string) int {
 			fmt.Printf("warning: couldn't record this host as the store's reducer: %v\n", err)
 		}
 	}
-	if bin := model.Binary(s.Learn.Runner); bin != "" {
+	if bin := config.DefaultCLI(s.Learn.Runner); bin != "" {
 		if _, err := exec.LookPath(bin); err != nil {
 			fmt.Printf("warning: %s isn't on PATH; the map, reduce, and apply run through it\n", bin)
 		}
@@ -157,12 +157,12 @@ func cmdInit(args []string) int {
 	hooks := s.Hooks.Map || s.Hooks.Archive || s.Hooks.LearnEvery > 0
 	fmt.Println("\nNext:")
 	switch {
-	case !claude:
+	case !config.HookRunsLoop(s.Harnesses):
 		if power {
 			fmt.Println("  1. init installed the skills as a Kiro power; rerun recall init after an upgrade to update them.")
-			fmt.Println("     Install the recur jobs that run the loop, since Kiro's session-end hook can't run it:")
+			fmt.Println("     Install the recur jobs that run the loop, since no enabled harness's session-end hook can run it:")
 		} else {
-			fmt.Println("  1. Install the recur jobs that run the loop, since Kiro's session-end hook can't run it:")
+			fmt.Println("  1. Install the recur jobs that run the loop, since no enabled harness's session-end hook can run it:")
 		}
 		fmt.Println("       recall recur sync")
 	case hooks:
@@ -182,7 +182,7 @@ func cmdInit(args []string) int {
 }
 
 // kiroPowerCLI is the Kiro CLI initKiroPower installs through.
-var kiroPowerCLI = model.Binary(config.HarnessKiro)
+var kiroPowerCLI = config.DefaultCLI(config.HarnessKiro)
 
 // initKiroPower installs the skills built into the binary into Kiro as a
 // power when the kiro harness is on, and reports whether they are

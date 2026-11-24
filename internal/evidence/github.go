@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/micahhausler/recall/internal/config"
 	"github.com/micahhausler/recall/internal/credential"
 )
 
@@ -19,10 +20,6 @@ func init() {
 		return &GitHub{Repos: o.Repos, Trailer: o.Trailer, Credentials: o.Credentials}, nil
 	})
 }
-
-// Trailer is the commit trailer that marks an agent-authored commit, and so
-// an agent-authored pull request.
-const Trailer = "Co-Authored-By: Claude"
 
 // prLimit is how many of a repo's most recently updated pull requests one
 // run scans.
@@ -88,9 +85,11 @@ type GitHub struct {
 
 func (g *GitHub) Name() string { return "github" }
 
+// trailer is the commit trailer that marks an agent-authored commit, and so
+// an agent-authored pull request: Claude Code's when none is set.
 func (g *GitHub) trailer() string {
 	if g.Trailer == "" {
-		return Trailer
+		return config.DefaultTrailer(config.HarnessClaude)
 	}
 	return g.Trailer
 }

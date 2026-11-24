@@ -38,7 +38,7 @@ func init() {
 // the worktrees. Apply runs it with no tools instead, and the binary writes
 // the files its answer returns.
 type Kiro struct {
-	// Command is the Kiro CLI binary, default "kiro-cli".
+	// Command is the Kiro CLI binary, default config.DefaultCLI's.
 	Command string
 	// SessionsDir is where Kiro saves sessions, default ~/.kiro/sessions.
 	SessionsDir string
@@ -48,7 +48,7 @@ type Kiro struct {
 
 func (k *Kiro) command() string {
 	if k.Command == "" {
-		return "kiro-cli"
+		return config.DefaultCLI(config.HarnessKiro)
 	}
 	return k.Command
 }
@@ -123,7 +123,7 @@ func (k *Kiro) sessionsDir() string {
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".kiro", "sessions")
+	return config.DefaultSource(config.HarnessKiro, home)
 }
 
 // kiroSessions lists the sessions on disk under dir as id to path, in both

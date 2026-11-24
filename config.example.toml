@@ -140,7 +140,8 @@ window_days = 0
 # reduce still shows what each file and each rule costs.
 budget = 2000
 # The model that applies reviewed proposals as edits. It gets file tools,
-# confined to fresh worktrees, and no shell.
+# confined to fresh worktrees, and no shell. With runner = "kiro" it defaults
+# to "auto", like the map and reduce models.
 apply_model = "sonnet"
 # Where a proposed new skill lands, as <skills>/<name>/SKILL.md, and where a
 # graduated script lands. Like every target, each must sit in a git checkout:

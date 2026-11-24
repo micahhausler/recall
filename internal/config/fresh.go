@@ -53,10 +53,10 @@ func (r RecurSettings) Covers(step string) bool {
 // store, so only one machine per store proposes; nil means none is known.
 // What init leaves alone it says in notes, with the command that changes it.
 //
-// With harness.claude off no session-end hook can run the loop: Kiro's
-// kills every process it starts, the detached worker included. Each step then becomes a recur job instead, and path, the
-// PATH init runs with, becomes recur.env's PATH so the scheduler finds
-// recall and the harness CLI.
+// With no enabled harness whose session-end hook can run the loop (Kiro's
+// kills every process it starts, the detached worker included), each step
+// becomes a recur job instead, and path, the PATH init runs with, becomes
+// recur.env's PATH so the scheduler finds recall and the harness CLI.
 func Fresh(c *Config, existing bool, host string, reducer func() (string, error), path string) (plan []KV, notes []string) {
 	unset := func(key string) bool { _, ok := c.Get(key); return !ok }
 	if unset("learn.review") {
@@ -76,7 +76,7 @@ func Fresh(c *Config, existing bool, host string, reducer func() (string, error)
 		}
 		return false
 	}
-	if on, ok := c.Get("harness.claude.enabled"); ok && on == false {
+	if !c.hookRunsLoop() {
 		return freshJobs(c, unset, covered, host, reducer, path, plan, notes)
 	}
 	if unset("hooks.map") {
@@ -112,6 +112,24 @@ func Fresh(c *Config, existing bool, host string, reducer func() (string, error)
 		}
 	}
 	return plan, notes
+}
+
+// hookRunsLoop is HookRunsLoop for a config not yet resolved into settings:
+// Claude Code is on unless harness.claude.enabled is false, and any other
+// harness is on once it has a [harness.<name>] table that doesn't turn it off.
+func (c *Config) hookRunsLoop() bool {
+	for _, h := range harnesses {
+		if !h.hookRunsLoop {
+			continue
+		}
+		if on, ok := c.Get("harness." + h.name + ".enabled"); ok && on == false {
+			continue
+		}
+		if _, declared := c.Get("harness." + h.name); declared || h.name == HarnessClaude {
+			return true
+		}
+	}
+	return false
 }
 
 // The recur jobs init declares on a machine with no usable session-end hook, one

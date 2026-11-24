@@ -10,11 +10,12 @@ import (
 	"os"
 	"os/exec"
 
+	"github.com/micahhausler/recall/internal/config"
 	"github.com/micahhausler/recall/internal/hook"
 )
 
 // kiroCLI is the Kiro CLI binary the inventory runs.
-var kiroCLI = "kiro-cli"
+var kiroCLI = config.DefaultCLI(config.HarnessKiro)
 
 // Inventory starts a headless Kiro session in dir and reads the skills and
 // slash commands it advertises, the harness's own list, then stops it once
