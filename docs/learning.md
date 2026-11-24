@@ -177,7 +177,7 @@ The reduce proposes and the apply edits, and they stay two stages behind one com
 
 ## Rule ledger
 
-The ledger is a separate file beside the context files, never comments inside them, because comments cost context in every session.
+The ledger is a separate file, `~/.local/state/recall/ledger.json` by default, never comments inside the context files, because comments cost context in every session.
 It has one entry per rule.
 
 ```json
