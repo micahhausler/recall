@@ -889,3 +889,122 @@ func TestFreshWithoutClaudeDeclaresJobs(t *testing.T) {
 		t.Errorf("notes = %v, want the covered archive and the claimed reduce", notes)
 	}
 }
+
+// A harness recall doesn't know reads in a known one's format from its own
+// source, and adds no target and no runner.
+func TestHarnessFormat(t *testing.T) {
+	b := base(t)
+	write(t, b, "[harness.work]\nformat = \"claude\"\nsource = \"~/.other-claude/projects\"\n")
+	c, err := Load(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.Settings("/home/you", "laptop-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h := s.Harnesses["work"]; h.Format != "claude" || h.Source != "/home/you/.other-claude/projects" || !h.Enabled {
+		t.Errorf("work = %+v", h)
+	}
+	if strings.Join(s.Learn.Targets, ",") != "/home/you/.claude/CLAUDE.md" || s.Learn.Runner != "claude" {
+		t.Errorf("targets %v, runner %q", s.Learn.Targets, s.Learn.Runner)
+	}
+}
+
+func TestHarnessFormatErrors(t *testing.T) {
+	for _, tc := range []struct{ toml, want string }{
+		{"[harness.kiro]\nformat = \"claude\"\n", "is a harness recall knows"},
+		{"[harness.work]\nformat = \"other\"\nsource = \"/w\"\n", "claude, kiro, events"},
+		{"[harness.claude]\nformat = \"events\"\n", "is a harness recall knows"},
+		{"[harness.analysis]\nformat = \"events\"\n", "store prefix"},
+		{"[harness.hits]\nformat = \"events\"\n", "store prefix"},
+		{"[harness.reviews]\nformat = \"events\"\n", "store prefix"},
+		{"[harness.ledger]\nformat = \"events\"\n", "store prefix"},
+		{"[harness.learn]\nformat = \"events\"\n", "store prefix"},
+		{"[harness.evidence-github]\nformat = \"events\"\n", "store prefix"},
+		{"[harness.analysis]\nformat = \"claude\"\nsource = \"/w\"\n", "store prefix"},
+		{"[harness.work]\nformat = \"claude\"\n", "no source"},
+	} {
+		b := base(t)
+		write(t, b, tc.toml)
+		c, err := Load(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = c.Settings("/home/you", "laptop-a")
+		if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "config.toml:") {
+			t.Errorf("%q: err = %v, want %q with its origin", tc.toml, err, tc.want)
+		}
+	}
+}
+
+// An events harness's source defaults to its import directory, and it
+// adds no target and no runner.
+func TestHarnessFormatEvents(t *testing.T) {
+	b := base(t)
+	write(t, b, "[harness.chat]\nformat = \"events\"\n\n[harness.notes]\nformat = \"events\"\nsource = \"~/notes/events\"\n")
+	c, err := Load(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.Settings("/home/you", "laptop-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h := s.Harnesses["chat"]; h.Format != FormatEvents || h.Source != "/home/you/.local/state/recall/import/chat/sessions" || !h.Enabled {
+		t.Errorf("chat = %+v", h)
+	}
+	if h := s.Harnesses["notes"]; h.Source != "/home/you/notes/events" {
+		t.Errorf("notes = %+v", h)
+	}
+	if strings.Join(s.Learn.Targets, ",") != "/home/you/.claude/CLAUDE.md" || s.Learn.Runner != "claude" {
+		t.Errorf("targets %v, runner %q", s.Learn.Targets, s.Learn.Runner)
+	}
+}
+
+func TestHarnessImport(t *testing.T) {
+	b := base(t)
+	write(t, b, "[harness.chat]\nformat = \"events\"\n\n[harness.chat.import]\ncommand = [\"~/bin/chat-history\", \"--all\"]\ntimeout = \"2m\"\n\n"+
+		"[harness.notes]\nformat = \"events\"\n\n[harness.notes.import]\ncommand = [\"notes-export\"]\n\n[harness.plain]\nformat = \"events\"\n")
+	c, err := Load(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.Settings("/home/you", "laptop-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chat := s.Harnesses["chat"].Import
+	if chat == nil || strings.Join(chat.Command, " ") != "/home/you/bin/chat-history --all" || chat.Timeout != 2*time.Minute {
+		t.Errorf("chat import = %+v", chat)
+	}
+	notes := s.Harnesses["notes"].Import
+	if notes == nil || strings.Join(notes.Command, " ") != "notes-export" || notes.Timeout != DefaultImportTimeout {
+		t.Errorf("notes import = %+v", notes)
+	}
+	if s.Harnesses["plain"].Import != nil {
+		t.Errorf("an events harness with no import table has %+v", s.Harnesses["plain"].Import)
+	}
+}
+
+func TestHarnessImportErrors(t *testing.T) {
+	for _, tc := range []struct{ toml, want, line string }{
+		{"[harness.chat]\nformat = \"events\"\n\n[harness.chat.import]\n", "has no command", "config.toml:4"},
+		{"[harness.chat]\nformat = \"events\"\n\n[harness.chat.import]\ntimeout = \"1m\"\n", "has no command", "config.toml:4"},
+		{"[harness.chat]\nformat = \"events\"\n\n[harness.chat.import]\ncommand = []\n", "names no program", "config.toml:5"},
+		{"[harness.chat]\nformat = \"events\"\n\n[harness.chat.import]\ncommand = \"chat\"\n", "an array of strings", "config.toml:5"},
+		{"[harness.chat]\nformat = \"events\"\n\n[harness.chat.import]\ncommand = [\"chat\"]\ntimeout = \"soon\"\n", "positive duration", "config.toml:6"},
+		{"[harness.work]\nformat = \"claude\"\nsource = \"/w\"\n\n[harness.work.import]\ncommand = [\"chat\"]\n", "format = \"events\"", "config.toml:5"},
+	} {
+		b := base(t)
+		write(t, b, tc.toml)
+		c, err := Load(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = c.Settings("/home/you", "laptop-a")
+		if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), tc.line) {
+			t.Errorf("%q: err = %v, want %q at %s", tc.toml, err, tc.want, tc.line)
+		}
+	}
+}

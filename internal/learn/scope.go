@@ -2,9 +2,12 @@ package learn
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"sort"
 	"strings"
 
 	"github.com/micahhausler/recall/internal/events"
@@ -45,17 +48,23 @@ type Locator func(dir string) (root, remote string)
 // directory, and locate looks a directory up on this machine; both are
 // unset for a session read from another host's archive, whose paths mean
 // nothing here.
+// An event's repo, when the source recorded one, is the session's remote
+// whatever the lookup finds.
 func scopeOf(evs []events.Event, home string, locate Locator) Scope {
+	repo := dominant(evs, func(e events.Event) string { return e.Repo })
 	cwd := dominantCWD(evs)
 	if cwd == "" {
-		return Scope{}
+		return Scope{Remote: repo}
 	}
 	if locate == nil {
-		return Scope{CWD: foreignHome(cwd)}
+		return Scope{CWD: foreignHome(cwd), Remote: repo}
 	}
 	sc := Scope{CWD: homeRelative(cwd, home)}
 	if root, remote := locate(cwd); root != "" {
 		sc.Repo, sc.Remote = homeRelative(root, home), remote
+	}
+	if repo != "" {
+		sc.Remote = repo
 	}
 	return sc
 }
@@ -63,15 +72,22 @@ func scopeOf(evs []events.Event, home string, locate Locator) Scope {
 // dominantCWD is the directory most of a session's own turns ran in; the
 // earliest wins a tie.
 func dominantCWD(evs []events.Event) string {
+	return dominant(evs, func(e events.Event) string { return e.CWD })
+}
+
+// dominant is the value of field most of a session's own turns carry; the
+// earliest wins a tie.
+func dominant(evs []events.Event, field func(events.Event) string) string {
 	count := map[string]int{}
 	best := ""
 	for _, e := range evs {
-		if e.Sidechain || e.CWD == "" {
+		v := field(e)
+		if e.Sidechain || v == "" {
 			continue
 		}
-		count[e.CWD]++
-		if best == "" || count[e.CWD] > count[best] {
-			best = e.CWD
+		count[v]++
+		if best == "" || count[v] > count[best] {
+			best = v
 		}
 	}
 	return best
@@ -223,4 +239,69 @@ func originOf(config string) string {
 		}
 	}
 	return ""
+}
+
+// harnessScope says why an add can't go to its target, if it can't, when
+// every session behind it came from one harness: the target is read by
+// another enabled harness too, or the harness has no context file of its
+// own. Repo scope comes first, so a repo's file is never checked; outside
+// evidence names no harness; and only an add narrows. readers maps each
+// enabled harness to the files it loads, and own a harness to the file its
+// lessons go in.
+func harnessScope(p Proposal, target string, repos []Repo, e RunEvidence, readers map[string][]string, own map[string]string, home string) string {
+	if p.Kind != "add" || len(readers) < 2 || target == "" || repoOf(repos, target) != nil {
+		return ""
+	}
+	from := ""
+	for _, ref := range e.sessions(p.Candidates) {
+		switch {
+		case strings.HasPrefix(ref.Harness, "evidence-"):
+			continue
+		case ref.Harness == "":
+			return "" // recorded before refs named their harness
+		case from != "" && ref.Harness != from:
+			return ""
+		}
+		from = ref.Harness
+	}
+	if from == "" {
+		return ""
+	}
+	if _, enabled := readers[from]; !enabled {
+		return ""
+	}
+	if len(readers[from]) == 0 {
+		return fmt.Sprintf("every session behind it came from %s, which loads no context file of its own; a lesson only %s's sessions show has no file to land in", from, from)
+	}
+	reads := func(name, path string) bool {
+		path = normReader(path, home)
+		return slices.ContainsFunc(readers[name], func(f string) bool { return normReader(f, home) == path })
+	}
+	var others []string
+	for name := range readers {
+		if name != from && reads(name, target) {
+			others = append(others, name)
+		}
+	}
+	if len(others) == 0 {
+		return ""
+	}
+	sort.Strings(others)
+	where := "a file only " + from + " loads"
+	if t := own[from]; t != "" {
+		shared := false
+		for name := range readers {
+			shared = shared || (name != from && reads(name, t))
+		}
+		if !shared {
+			where = homeRelative(t, home)
+		}
+	}
+	return fmt.Sprintf("every session behind it came from %s, and %s loads %s too; it belongs in %s", from,
+		strings.Join(others, " and "), homeRelative(normReader(target, home), home), where)
+}
+
+// normReader writes a path the way targets and readers are compared.
+func normReader(p, home string) string {
+	return review.Resolve(normTarget(p, home))
 }

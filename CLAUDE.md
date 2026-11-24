@@ -21,8 +21,9 @@ Examples and tests use placeholders like `you`, `example.com`, and `laptop-a`.
 - `internal/archive`: the weekly transcript archive.
 - `internal/redact`: the token-shape redaction the archive applies when `archive-chats.redact` is on.
 - `internal/harness`: one adapter per coding agent's transcript format and native memory: `claude` and `kiro`.
+  A harness recall doesn't know by name sets `format` to read through one of them under its own name, or `events` to read recall's own normalized events (`events.go`).
 - `internal/evidence`: evidence sources outside the chat, read behind `learn.evidence`; `github` (review comments and failed checks on agent-authored pull requests, through `gh`) is the only one today.
-- `internal/events`: the normalized event schema (`docs/events.md`).
+- `internal/events`: recall's side of the normalized event schema (`docs/events.md`), aliases of `api/events/v1` plus the JSONL writer.
 - `internal/clock`: the injected clock; nothing calls `time.Now` directly where a week boundary matters.
 - `internal/model`: the headless harness-CLI runner model calls go through; never an API client.
   Only the apply step's `Editor` gets tools, and only file tools confined to its worktrees.
@@ -33,10 +34,18 @@ Examples and tests use placeholders like `you`, `example.com`, and `laptop-a`.
 - `api/credentials/v1`: the credential contract's object as Go types, so a credential command can import it.
   A change to its JSON is a change to commands other people wrote: add optional fields, never rename or remove one.
 - `api/credentials/v1/command`: the command's side of the contract, for a credential command written in Go: parse the request, refuse to print a token to a terminal, write the answer.
-  It and the types are the only packages outside `internal/`, and commands other people wrote call them: add to their exported names, never rename or remove one.
+  It, the types, `api/events/v1`, and `api/imports/v1` are the only packages outside `internal/`, and code other people wrote calls them: add to their exported names, never rename or remove one.
   Nothing about where a token comes from, or about any host or provider, goes in it, and nothing recall's binary is built from imports it.
+- `internal/imports`: running an import plugin (`docs/import.md`): the `Source` interface, `Exec` and `Fake`, validation, redaction, storing, state, and the lock.
+  The binary validates every file a plugin writes; nothing in the output runs.
+- `api/imports/v1` and `api/imports/v1/command`: the import contract's types, and the plugin's side of it for a plugin written in Go: parse the request, write session files within the limits, print the answer.
+  Like the credential packages, add to their JSON and exported names, never rename or remove one, and nothing recall's binary is built from imports `command`.
+- `api/events/v1`: the event schema as a contract (`recall.events/v1`): `Event`, the `Kind` constants, `Check`, `CheckSession`, and `Summarize`, standard library only.
+  Events grow by optional fields and new kinds, never a rename or a removal.
 - `examples/credential-github-app`: an example credential command built on `api/credentials/v1/command`, which mints a GitHub App installation token per repository.
   It is a `main` package in recall's module, so CI builds and tests it against the current contract, and GoReleaser, which builds only `cmd/recall`, never ships it.
+- `examples/import-example`: an example import plugin built on `api/imports/v1/command`, which maps a synthetic source file of flat turns and of a message tree; `cmd/recall`'s end-to-end import test builds and runs it.
+  Like the credential example, CI builds and tests it, and GoReleaser never ships it.
 - `internal/extension`: the owner's extension files that skills and the reduce append at load time.
 - `internal/hook`: what the plugin's session hooks need: the hook input, the recursion guard, and the worker's lock and schedule.
 - `hooks/hooks.json`: the plugin's SessionEnd hook, which runs `recall hook`; nothing runs at session start.

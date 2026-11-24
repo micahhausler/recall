@@ -1,0 +1,4 @@
+{"harness":"plugin-wrote-this","host":"laptop-z","session":"s-0001","cwd":"/home/you/src/example","timestamp":"2026-03-02T12:00:00Z","kind":"user_prompt","role":"user","text":"run the tests and fix what fails","unknown_field":"dropped"}
+{"session":"s-0001","cwd":"/home/you/src/example","timestamp":"2026-03-02T12:00:04Z","kind":"tool_call","role":"assistant","tool":"shell","input":"go test ./..."}
+{"session":"s-0001","cwd":"/home/you/src/example","timestamp":"2026-03-02T12:00:06Z","kind":"tool_result","role":"assistant","tool":"shell","input":"go test ./...","ok":false,"text":"--- FAIL: TestParse"}
+{"session":"s-0001","cwd":"/home/you/src/example","timestamp":"2026-03-02T12:00:10Z","kind":"assistant_text","role":"assistant","text":"TestParse fails on an empty line."}

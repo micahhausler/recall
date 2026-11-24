@@ -1,0 +1,11 @@
+{"harness":"example","session":"s-0001","cwd":"/home/you/src/example","timestamp":"2026-03-02T12:00:00Z","kind":"user_prompt","role":"user","text":"run the tests and fix what fails"}
+{"harness":"example","session":"s-0001","cwd":"/home/you/src/example","timestamp":"2026-03-02T12:00:04Z","kind":"tool_call","role":"assistant","tool":"shell","input":"go test ./..."}
+{"harness":"example","session":"s-0001","cwd":"/home/you/src/example","timestamp":"2026-03-02T12:00:06Z","kind":"tool_result","role":"assistant","text":"--- FAIL: TestParse","tool":"shell","input":"go test ./...","ok":false}
+{"harness":"example","session":"s-0001","cwd":"/home/you/src/example","timestamp":"2026-03-02T12:00:07Z","kind":"tool_call","role":"assistant","tool":"Read","input":"/home/you/src/example/parse.go"}
+{"harness":"example","session":"s-0001","cwd":"/home/you/src/example","timestamp":"2026-03-02T12:00:08Z","kind":"tool_result","role":"assistant","text":"package example","tool":"Read","input":"/home/you/src/example/parse.go","ok":true}
+{"harness":"example","session":"s-0001","cwd":"/home/you/src/example","timestamp":"2026-03-02T12:00:08Z","kind":"tool_call","role":"assistant","tool":"@docs/Search","input":"empty line parsing"}
+{"harness":"example","session":"s-0001","cwd":"/home/you/src/example","timestamp":"2026-03-02T12:00:09Z","kind":"tool_result","role":"assistant","text":"{\"hits\":1}\none result","tool":"@docs/Search","input":"empty line parsing","ok":true}
+{"harness":"example","session":"s-0001","cwd":"/home/you/src/example","timestamp":"2026-03-02T12:00:09Z","kind":"skill_invoked","role":"assistant","skill":"go-testing"}
+{"harness":"example","session":"s-0001","cwd":"/home/you/src/example","timestamp":"2026-03-02T12:00:10Z","kind":"assistant_text","role":"assistant","text":"TestParse fails on an empty line."}
+{"harness":"example","session":"s-0001","cwd":"/home/you/src/example","timestamp":"2026-03-02T12:00:11Z","kind":"tool_call","role":"assistant","tool":"other"}
+{"harness":"example","session":"s-0001","cwd":"/home/you/src/example","timestamp":"2026-03-02T12:00:12Z","kind":"tool_result","role":"assistant","tool":"other","ok":false}

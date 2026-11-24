@@ -1,0 +1,180 @@
+{
+  "spaces": [
+    {
+      "desktop": false,
+      "sessions": [
+        {
+          "id": "s-0001",
+          "directory": "/home/you/src/example",
+          "messages": [
+            {
+              "type": "INPUT",
+              "sentAt": 1772452800.0,
+              "content": "run the tests and fix what fails"
+            },
+            {
+              "type": "TOOL",
+              "sentAt": 1772452806.0,
+              "content": "{\"name\": \"Running: go test ./...\", \"title\": \"Running: go test ./...\", \"kind\": \"execute\", \"status\": \"failed\", \"rawInput\": {\"command\": \"go test ./...\", \"__tool_use_purpose\": \"run the tests\"}, \"rawOutput\": \"--- FAIL: TestParse\", \"startedAt\": 1772452804000, \"completedAt\": 1772452806000}"
+            },
+            {
+              "type": "TOOL",
+              "sentAt": 1772452808.0,
+              "content": "{\"name\": \"Read /home/you/src/example/parse.go\", \"title\": \"Read /home/you/src/example/parse.go\", \"kind\": \"read\", \"status\": \"completed\", \"locations\": [{\"path\": \"/home/you/src/example/parse.go\"}], \"rawOutput\": [{\"type\": \"text\", \"text\": \"package example\"}], \"startedAt\": 1772452807000, \"completedAt\": 1772452808000}"
+            },
+            {
+              "type": "TOOL",
+              "sentAt": 1772452809.0,
+              "content": "{\"name\": \"Running: @docs/Search\", \"title\": \"Running: @docs/Search\", \"kind\": \"other\", \"status\": \"completed\", \"rawInput\": {\"query\": \"empty line parsing\"}, \"rawOutput\": {\"items\": [{\"Json\": {\"hits\": 1}}, {\"Text\": \"one result\"}]}, \"startedAt\": 1772452808500, \"completedAt\": 1772452809000}"
+            },
+            {
+              "type": "TOOL",
+              "sentAt": 1772452809.5,
+              "content": "{\"name\": \"skill\", \"title\": \"skill\", \"kind\": \"other\", \"status\": \"completed\", \"rawInput\": {\"skillName\": \"go-testing\"}, \"startedAt\": 1772452809200, \"completedAt\": 1772452809500}"
+            },
+            {
+              "type": "RESPONSE",
+              "sentAt": 1772452810.0,
+              "content": "TestParse fails on an empty line."
+            },
+            {
+              "type": "TOOL",
+              "sentAt": 1772452812.0,
+              "content": "{\"name\": \"dummy\", \"title\": \"dummy\", \"kind\": \"other\", \"status\": \"failed\", \"startedAt\": 1772452811000, \"completedAt\": 1772452812000}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "desktop": true,
+      "sessions": [
+        {
+          "id": "s-0002",
+          "directory": "/home/you/src/example",
+          "messages": [
+            {
+              "type": "INPUT",
+              "sentAt": 1772452900.0,
+              "content": "this one ran on the desktop"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "conversations": [
+    {
+      "uuid": "c-0001",
+      "chat_messages": [
+        {
+          "uuid": "u-1",
+          "sender": "human",
+          "parent_message_uuid": "00000000-0000-4000-8000-000000000000",
+          "created_at": "2026-03-02T12:00:00Z",
+          "content": [
+            {
+              "type": "injected_prompt_block",
+              "text": "Today is Monday."
+            },
+            {
+              "type": "text",
+              "text": "summarize the failing check on my pull request"
+            }
+          ]
+        },
+        {
+          "uuid": "a-1",
+          "sender": "assistant",
+          "parent_message_uuid": "u-1",
+          "created_at": "2026-03-02T12:00:03Z",
+          "content": [
+            {
+              "type": "thinking",
+              "text": "..."
+            },
+            {
+              "type": "tool_use",
+              "id": "toolu_01",
+              "name": "WebFetch",
+              "input": {
+                "url": "https://example.com/you/example/checks"
+              }
+            },
+            {
+              "type": "tool_result",
+              "tool_use_id": "toolu_01",
+              "is_error": true,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "403 Forbidden"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "text": "I can't read that page without a login."
+            }
+          ]
+        },
+        {
+          "uuid": "u-2",
+          "sender": "human",
+          "parent_message_uuid": "00000000-0000-4000-8000-000000000000",
+          "created_at": "2026-03-02T12:01:00Z",
+          "content": [
+            {
+              "type": "text",
+              "text": "summarize the failing check; the log is pasted below"
+            }
+          ]
+        },
+        {
+          "uuid": "a-2",
+          "sender": "assistant",
+          "parent_message_uuid": "u-2",
+          "created_at": "2026-03-02T12:01:05Z",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_02",
+              "name": "Skill",
+              "input": {
+                "skill": "summarize-logs"
+              }
+            },
+            {
+              "type": "flag",
+              "text": "a topic banner"
+            },
+            {
+              "type": "text",
+              "text": "The check fails because TestParse panics on an empty line.",
+              "start_timestamp": "2026-03-02T12:01:08Z"
+            }
+          ]
+        },
+        {
+          "uuid": "u-3",
+          "sender": "human",
+          "parent_message_uuid": "a-2",
+          "created_at": "2026-03-02T12:05:00Z",
+          "content": [
+            {
+              "type": "text",
+              "text": "[Artifact comment sent to Claude]\nArtifact: https://example.com/artifact/1\nComment thread: t-1\nSent to Claude at: 2026-03-02T12:05:00Z\n\nThe owner left a comment on the artifact.\n=== BEGIN ARTIFACT COMMENT n-1 ===\n> make the summary one sentence\n=== END ARTIFACT COMMENT n-1 ===\n<comment-anchor-context>\nElement path: div > p\n</comment-anchor-context>"
+            }
+          ]
+        },
+        {
+          "uuid": "a-3",
+          "sender": "assistant",
+          "parent_message_uuid": "u-3",
+          "created_at": "2026-03-02T12:05:04Z",
+          "content": []
+        }
+      ]
+    }
+  ]
+}

@@ -1,6 +1,8 @@
 package config
 
 import (
+	"strings"
+
 	"github.com/pelletier/go-toml/v2/unstable"
 )
 
@@ -18,6 +20,12 @@ func keyLines(data []byte) map[string]int {
 		switch e.Kind {
 		case unstable.Table, unstable.ArrayTable:
 			prefix = keyParts(e.Key())
+			if it := e.Key(); it.Next() {
+				k := "[" + strings.Join(prefix, ".") + "]"
+				if _, ok := lines[k]; !ok {
+					lines[k] = p.Shape(it.Node().Raw).Start.Line
+				}
+			}
 		case unstable.KeyValue:
 			key := append(append([]string{}, prefix...), keyParts(e.Key())...)
 			recordLines(lines, key, e, p)

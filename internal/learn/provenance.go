@@ -131,8 +131,10 @@ type SessionRef struct {
 	Session string `json:"session"`
 	Host    string `json:"host,omitempty"`
 	Day     string `json:"day"`
-	// Repo is the session's Scope.Key.
-	Repo string `json:"repo,omitempty"`
+	// Repo is the session's Scope.Key, and Harness the harness it ran in;
+	// outside evidence's is its source's, evidence-<name>.
+	Repo    string `json:"repo,omitempty"`
+	Harness string `json:"harness,omitempty"`
 	// Owner reports whether the session holds an owner-typed observation
 	// for this candidate, and Repeat whether it holds a repeat the binary
 	// counted from tool calls.
@@ -159,7 +161,7 @@ func runEvidence(clusters []Cluster) RunEvidence {
 			if !ok {
 				i = len(refs)
 				at[ev.from()] = i
-				ref := SessionRef{Session: ev.from(), Host: ev.Host, Day: ev.Day, Repo: ev.Scope.Key()}
+				ref := SessionRef{Session: ev.from(), Host: ev.Host, Day: ev.Day, Repo: ev.Scope.Key(), Harness: ev.Harness}
 				if ev.Origin == "" {
 					ref.Models = ev.Models // a note's record names no model
 				}

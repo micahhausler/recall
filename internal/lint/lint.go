@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -54,8 +55,32 @@ func (l *Linter) Run(files []string) ([]Finding, error) {
 	if l.LookPath == nil {
 		l.LookPath = exec.LookPath
 	}
-	seen := map[string]bool{}
 	var findings []Finding
+	_, err := l.walk(files, func(f Finding) { findings = append(findings, f) })
+	if err != nil {
+		return nil, err
+	}
+	return findings, nil
+}
+
+// Reach lists the files and every file they pull in, by Run's resolution,
+// sorted. A file that can't be read is left out.
+func (l *Linter) Reach(files []string) []string {
+	seen, _ := l.walk(files, nil)
+	out := make([]string, 0, len(seen))
+	for path := range seen {
+		out = append(out, path)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// walk reads the files and every file they pull in, depth first, and
+// returns the ones it read. With report set it lints each line and fails
+// on a file it can't open; without, it only follows.
+func (l *Linter) walk(files []string, report func(Finding)) (map[string]bool, error) {
+	seen := map[string]bool{}
+	read := map[string]bool{}
 	var walk func(path string) error
 	walk = func(path string) error {
 		abs, err := filepath.Abs(path)
@@ -68,9 +93,13 @@ func (l *Linter) Run(files []string) ([]Finding, error) {
 		seen[abs] = true
 		f, err := os.Open(abs)
 		if err != nil {
+			if report == nil {
+				return nil
+			}
 			return err
 		}
 		defer f.Close()
+		read[abs] = true
 		sc := bufio.NewScanner(f)
 		n := 0
 		var imports []string
@@ -83,23 +112,27 @@ func (l *Linter) Run(files []string) ([]Finding, error) {
 					target = filepath.Join(filepath.Dir(abs), target)
 				}
 				if _, err := os.Stat(target); err != nil {
-					if !l.Ignore[target] {
-						findings = append(findings, Finding{abs, n, fmt.Sprintf("import @%s: %s doesn't exist", m[1], target)})
+					if report != nil && !l.Ignore[target] {
+						report(Finding{abs, n, fmt.Sprintf("import @%s: %s doesn't exist", m[1], target)})
 					}
 				} else {
 					imports = append(imports, target)
 				}
 				continue
 			}
-			findings = append(findings, l.lintLine(abs, n, line)...)
+			if report != nil {
+				for _, f := range l.lintLine(abs, n, line) {
+					report(f)
+				}
+			}
 			for _, m := range linkRE.FindAllStringSubmatch(backtickRE.ReplaceAllString(line, ""), -1) {
 				target, ok := l.linkTarget(abs, m[1])
 				if !ok {
 					continue
 				}
 				if _, err := os.Stat(target); err != nil {
-					if !l.Ignore[target] {
-						findings = append(findings, Finding{abs, n, fmt.Sprintf("link %s: %s doesn't exist", m[1], target)})
+					if report != nil && !l.Ignore[target] {
+						report(Finding{abs, n, fmt.Sprintf("link %s: %s doesn't exist", m[1], target)})
 					}
 				} else if strings.HasSuffix(target, ".md") {
 					imports = append(imports, target)
@@ -121,7 +154,7 @@ func (l *Linter) Run(files []string) ([]Finding, error) {
 			return nil, err
 		}
 	}
-	return findings, nil
+	return read, nil
 }
 
 // linkTarget resolves a Markdown link to a local file, relative to the

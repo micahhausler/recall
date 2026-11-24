@@ -9,11 +9,14 @@ One JSON object per event:
 
 | Field | Meaning |
 | --- | --- |
-| `harness` | The adapter that emitted it: `claude` or `kiro`. |
+| `harness` | The harness the session belongs to: `claude`, `kiro`, or the name of a `[harness.<name>]` table read through a `format`. |
 | `host` | The machine the session ran on; empty when reading a downloaded archive, whose key path names the host. |
 | `session` | The session id: the transcript file name without `.jsonl`. |
 | `cwd` | The working directory of the turn. |
+| `repo` | The origin of the repository the turn ran in, as host/path like `example.com/you/example`, for a source that knows it without a checkout on this machine. Scope uses it as the session's remote. Local adapters leave it empty and resolve the checkout from `cwd`. |
 | `timestamp` | RFC 3339, as the harness recorded it. |
+| `message_id` | The source's id for the message the event came from; every event from one message carries the same one. At most 128 bytes. |
+| `parent_id` | The `message_id` of the message this one follows, empty at the root. At most 128 bytes. |
 | `kind` | What happened; the list below. |
 | `role` | `user` or `assistant`, when the harness says. |
 | `text` | The prose: a prompt, the model's text, a tool result, a refusal category. |
@@ -39,7 +42,7 @@ For example, a typed prompt and the tool call that followed it:
 The transcript details in this section and the next are Claude Code's.
 The Kiro section below says how its transcripts map onto the same kinds.
 
-- `user_prompt`: a prompt typed into the interactive CLI. What counts as typed: a user turn with text, on the `cli` entrypoint, not meta, not a compaction summary, not wrapped in `<...>` tags. A `sdk-cli` session (a scripted `claude -p` run) emits no user prompts.
+- `user_prompt`: text a person typed into the harness's interface, the interactive CLI or a product's chat window. For Claude Code, what counts as typed: a user turn with text, on the `cli` entrypoint, not meta, not a compaction summary, not wrapped in `<...>` tags. A `sdk-cli` session (a scripted `claude -p` run) emits no user prompts.
 - `assistant_text`: prose the model wrote.
 - `tool_call`: the model invoking a tool; `tool` names it.
 - `tool_result`: the tool's answer; `ok = false` when the result carried `is_error`.
@@ -48,6 +51,15 @@ The Kiro section below says how its transcripts map onto the same kinds.
 - `builtin_command`: a `<command-name>` turn the harness ran itself, like `/clear`; never a skill. The harness answers a built-in with local command output (`<local-command-stdout>` or a `local_command` system line), and expands a skill into a meta turn starting `Base directory for this skill:`, which sets `skill_dir`. A command followed by neither stays a `slash_command`.
 - `refusal`: the model or API declined; `text` carries the category when known.
 - `compact`: a compaction summary standing in for earlier turns.
+
+## Branches
+
+A source whose messages form a tree, such as a chat product where the owner edits a prompt, sets `message_id` and `parent_id` on every event.
+A flat source leaves both empty, and so do the local adapters today.
+
+- A message's events come after its parent's, and siblings come in the order they were created.
+- A `user_prompt` beside an earlier user sibling is an edit of it, and an assistant message beside an earlier assistant sibling is a regenerated answer. The binary derives both; no event claims an edit.
+- The map's render walks the tree depth first: the shared prefix once, the older branch marked abandoned, then the newer branch marked as replacing it. A session with no fork renders as a flat one does.
 
 ## Decisions
 
@@ -58,10 +70,21 @@ The Kiro section below says how its transcripts map onto the same kinds.
 - Tool names and inputs on results come from correlating `tool_use_id` with the earlier call in the same session.
 - A tool's input is summarized by the one field that says what the call did (`command`, `file_path`, `pattern`, `url`, `query`, `description`); a tool with no such field keeps its input as compact JSON. The summary passes through the same token-shape redaction the archive offers, since a command can carry a credential.
 
+## The schema is a contract
+
+The schema is `recall.events/v1`, and its Go types live in `api/events/v1`, outside `internal/`, so an import plugin builds on the same types recall reads.
+
+- It grows only by optional fields and new kinds, never a rename or a removal.
+- A reader drops an event of a kind it doesn't know and counts it, so a newer writer works with an older recall.
+- `Check` is the per-event validation recall applies to events it didn't write: a known kind, an RFC 3339 `timestamp`, a `role` that is empty, `user`, or `assistant`, `ok` only on `tool_result`, and bounded message ids.
+- `CheckSession` adds the session's rules: one session id, at least one dated event, and every `parent_id` naming an earlier message.
+- `Summarize` is the one-line input summary above, before redaction and the 200-character cut, so every adapter and plugin summarizes a tool's input the same way.
+
 ## Adapters
 
 An adapter implements `harness.Harness`: name the archive prefix, list sessions, say which files a week's archive includes, and read one session stream into events.
 `claude` reads `~/.claude/projects/*/*.jsonl`. Codex and others plug in beside them later.
+A harness with `format = "events"` reads files of these events as they are, one session per `<id>.jsonl` in its source; recall writes `harness`, `host`, and `session` itself, and drops a line that fails `Check`.
 Each must emit the schema above; `docs/learning.md` says where each harness's proposals land.
 
 ### Kiro

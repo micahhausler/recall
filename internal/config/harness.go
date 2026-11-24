@@ -1,6 +1,10 @@
 package config
 
-import "path/filepath"
+import (
+	"path/filepath"
+	"slices"
+	"strings"
+)
 
 // The harnesses recall has an adapter for. Code that branches on a harness
 // names it through these.
@@ -8,6 +12,30 @@ const (
 	HarnessClaude = "claude"
 	HarnessKiro   = "kiro"
 )
+
+// FormatEvents is the harness.<name>.format of a harness whose transcripts
+// are recall's own normalized events, one session per file, such as an
+// import's (docs/import.md).
+const FormatEvents = "events"
+
+// Formats are the values harness.<name>.format takes: a known harness's
+// transcript format, or recall's own events.
+var Formats = append(append([]string{}, KnownHarnesses...), FormatEvents)
+
+// ImportDir is an events harness's state directory, which holds its
+// stored sessions.
+func ImportDir(home, name string) string {
+	return filepath.Join(home, ".local", "state", "recall", "import", name)
+}
+
+// reservedHarnesses are store prefixes recall writes for itself, which a
+// harness name, being a prefix too, can't take.
+var reservedHarnesses = []string{"analysis", "hits", "reviews", "ledger", "learn"}
+
+// reservedHarness reports whether name is one of recall's own prefixes.
+func reservedHarness(name string) bool {
+	return slices.Contains(reservedHarnesses, name) || strings.HasPrefix(name, "evidence-")
+}
 
 // harnessDefaults is what recall knows about one harness before any config
 // file says otherwise. Paths are elements under the owner's home.
@@ -139,7 +167,8 @@ func DefaultTrailer(name string) string {
 }
 
 // DefaultSource is where a known harness keeps transcripts. A harness recall
-// doesn't know must set harness.<name>.source.
+// doesn't know must set harness.<name>.source, and harness.<name>.format to
+// the known harness whose transcript format it shares.
 func DefaultSource(name, home string) string {
 	h, _ := defaultsFor(name)
 	return under(home, h.source)

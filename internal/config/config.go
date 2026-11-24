@@ -37,6 +37,8 @@ type Config struct {
 	Base   string
 	values map[string]any
 	origin map[string]Origin
+	// tables is where each table was first declared.
+	tables map[string]Origin
 }
 
 // EnvVar names the base config file, overriding the default path; the
@@ -76,7 +78,7 @@ func Load(base string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &Config{Base: base, values: map[string]any{}, origin: map[string]Origin{}}
+	c := &Config{Base: base, values: map[string]any{}, origin: map[string]Origin{}, tables: map[string]Origin{}}
 	for _, f := range files {
 		data, err := os.ReadFile(f)
 		if err != nil {
@@ -92,6 +94,7 @@ func Load(base string) (*Config, error) {
 			return nil, fmt.Errorf("%s: %w", f, err)
 		}
 		lines := keyLines(data)
+		recordTables(tree, c.tables, f, lines, "")
 		mergeInto(c.values, tree, c.origin, f, lines, "")
 	}
 	if err := c.validate(); err != nil {
@@ -135,6 +138,32 @@ func recordOrigins(v any, origins map[string]Origin, file string, lines map[stri
 		return
 	}
 	origins[path] = Origin{File: file, Line: lines[path]}
+}
+
+// recordTables records where each table in one file's tree is declared,
+// keeping the first file's.
+func recordTables(tree map[string]any, tables map[string]Origin, file string, lines map[string]int, prefix string) {
+	for k, v := range tree {
+		m, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		path := k
+		if prefix != "" {
+			path = prefix + "." + k
+		}
+		if _, seen := tables[path]; !seen {
+			tables[path] = Origin{File: file, Line: lines["["+path+"]"]}
+		}
+		recordTables(m, tables, file, lines, path)
+	}
+}
+
+// TableOrigin returns where a table was declared: its header's line, or
+// the file alone for a table only dotted keys made.
+func (c *Config) TableOrigin(key string) (Origin, bool) {
+	o, ok := c.tables[key]
+	return o, ok
 }
 
 // Get returns the merged value at a dotted key: a scalar, []any, or

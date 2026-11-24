@@ -101,6 +101,9 @@ A rule in a global file costs context in every session, so a lesson that holds i
 - **Only listed repos.** `learn.targets` are the global files, and `learn.repos` lists the checkouts a proposal may also target. A pull request on a repo may be read by other people, so recall never finds a repo on its own.
 - **Narrowest target wins.** The reduce places each rule, and the binary checks it. A repo-scoped proposal must cite only sessions that ran in that repo, and a global rule whose every session ran in one repo is held back.
 - **Pull requests open on origin,** so in a fork the change never lands upstream.
+- **Harness scope narrows like repo scope.** A new rule whose every cited session came from one harness goes in a file only that harness loads, such as Kiro's steering file for a lesson only Kiro sessions show. A file is a harness's own when no other enabled harness loads it, directly or through an `@` import or a Markdown link, by the resolution `recall lint` follows, so with one harness enabled every target is its own. The binary holds back an add aimed at a file another harness loads, and names the file it belongs in.
+- **A harness with no file of its own gets no harness-specific rule.** An import loads no context file, so a lesson only an import's sessions show is held back; one other harnesses' sessions corroborate goes through.
+- **Repo scope applies first, and only adds narrow.** Outside evidence names no harness, so it neither narrows nor widens a proposal, and a reword, retirement, or graduation acts on a rule where it lives.
 
 ## Budget: what a rule costs
 
@@ -211,6 +214,7 @@ It has one entry per rule.
 A rule exists because a model needed it. A rule a newer model follows unprompted reads "relevant, followed" forever, so aging never retires it.
 The ledger records the models behind each rule, and `recall learn age` flags one earned only on models no recent session ran.
 That marks a rule worth a trial without it, never a retirement on that alone.
+A session that names no model, such as an import from a source that doesn't record one, counts as evidence for a rule but never decides aging: it adds nothing to the recent models, so it can't keep an old rule current, and a rule earned partly on it records only the named models.
 
 ## Replay
 

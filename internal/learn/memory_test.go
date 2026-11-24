@@ -95,7 +95,7 @@ func TestMemoryNotesBecomeObservations(t *testing.T) {
 		t.Fatalf("cluster = %d observation(s) from %d session(s), want 3 from 2", len(k.Evidence), k.Sessions)
 	}
 	var sb strings.Builder
-	renderCandidates(&sb, open[:1], 0)
+	renderCandidates(&sb, open[:1], 0, false)
 	if !strings.Contains(sb.String(), "- [memory] 2026-11-02 note p/zsh from session s1 in example.com/you/project:") {
 		t.Errorf("a note should be shown as a note:\n%s", sb.String())
 	}

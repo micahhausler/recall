@@ -1,0 +1,5 @@
+[owner] before
+
+[earlier turns compacted]
+[owner] after
+

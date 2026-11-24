@@ -379,7 +379,9 @@ const (
 )
 
 // renderCandidates writes the CANDIDATES section of the reduce input.
-func renderCandidates(b *strings.Builder, open []Cluster, used int) {
+// byHarness names the harness a candidate's sessions came from, for a
+// window with more than one.
+func renderCandidates(b *strings.Builder, open []Cluster, used int, byHarness bool) {
 	if len(open) == 0 {
 		b.WriteString("(none in the window)\n")
 	}
@@ -402,6 +404,15 @@ func renderCandidates(b *strings.Builder, open []Cluster, used int) {
 			fmt.Fprintf(b, "; %d of them in repo %s, the rest in no known repo", k.Placed, k.Repos[0])
 		default:
 			fmt.Fprintf(b, "; %d repos", len(k.Repos))
+		}
+		if byHarness {
+			switch hs := k.harnesses(); len(hs) {
+			case 0:
+			case 1:
+				fmt.Fprintf(b, "; harness %s", hs[0])
+			default:
+				fmt.Fprintf(b, "; harnesses %s", strings.Join(hs, ", "))
+			}
 		}
 		if k.Note != "" {
 			fmt.Fprintf(b, "; %s", k.Note)
@@ -500,4 +511,20 @@ func ExpandEvidence(proposals string, clusters []Cluster) string {
 		})
 	}
 	return strings.Join(lines, "\n")
+}
+
+// harnesses are the harnesses a cluster's sessions came from, sorted;
+// outside evidence names none.
+func (k Cluster) harnesses() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, ev := range k.Evidence {
+		if ev.Harness == "" || strings.HasPrefix(ev.Harness, "evidence-") || seen[ev.Harness] {
+			continue
+		}
+		seen[ev.Harness] = true
+		out = append(out, ev.Harness)
+	}
+	sort.Strings(out)
+	return out
 }

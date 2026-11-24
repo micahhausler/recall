@@ -17,6 +17,7 @@ Usage:
   recall recur sync|check|list|run reconcile declared recurring jobs with cron or launchd
   recall archive-chats ...         upload each week's transcripts to the store
   recall events [PATH...]          print normalized transcript events as JSONL
+  recall import [NAME...]          fetch sessions through the import plugins config names
   recall skills                    report which skills sessions actually invoke
   recall lint [FILES...]           find stale paths and commands in context files
   recall learn ...                 the learning loop: map, reduce, apply, run, reviews
@@ -52,6 +53,8 @@ func run(args []string) int {
 		return cmdArchiveChats(rest)
 	case "events":
 		return cmdEvents(rest)
+	case "import":
+		return cmdImport(rest)
 	case "skills":
 		return cmdSkills(rest)
 	case "lint":

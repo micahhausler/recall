@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	eventsv1 "github.com/micahhausler/recall/api/events/v1"
 	"github.com/micahhausler/recall/internal/events"
 	"github.com/micahhausler/recall/internal/redact"
 )
@@ -206,56 +207,10 @@ type toolCall struct {
 	name, input string
 }
 
-// inputBudget is how much of a tool's input an event keeps.
-const inputBudget = 200
-
-// toolInput summarizes a tool call's input in one line: the field that says
-// what the call did, for the tools whose input has one, and compact JSON
-// for the rest. Secret-shaped tokens are redacted and the rest is cut to
-// inputBudget.
+// toolInput summarizes a tool call's input in one line, redacted and cut.
 func toolInput(name string, raw json.RawMessage) string {
-	var in map[string]json.RawMessage
-	if json.Unmarshal(raw, &in) != nil {
-		return ""
-	}
-	str := func(key string) string {
-		var v string
-		json.Unmarshal(in[key], &v)
-		return v
-	}
-	var out string
-	switch name {
-	case "Bash":
-		out = str("command")
-	case "Read", "Edit", "Write", "NotebookEdit":
-		out = str("file_path")
-		if out == "" {
-			out = str("notebook_path")
-		}
-	case "Grep":
-		out = str("pattern")
-		if path := str("path"); path != "" {
-			out += " in " + path
-		}
-	case "Glob":
-		out = str("pattern")
-	case "Agent", "Task":
-		out = str("description")
-	case "WebFetch":
-		out = str("url")
-	case "WebSearch":
-		out = str("query")
-	default:
-		if len(in) > 0 {
-			out = string(raw)
-		}
-	}
-	out = strings.Join(strings.Fields(out), " ")
-	out, _ = redact.String(out)
-	if r := []rune(out); len(r) > inputBudget {
-		out = string(r[:inputBudget]) + "…"
-	}
-	return out
+	out, _ := redact.String(eventsv1.Summarize(name, raw))
+	return eventsv1.TrimInput(out)
 }
 
 func (c *Claude) userEvents(l *line, msg *message, base func(*line) events.Event, toolNames map[string]toolCall) []events.Event {

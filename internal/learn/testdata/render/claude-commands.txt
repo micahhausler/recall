@@ -1,0 +1,10 @@
+[command: /clear ]
+[command: /plugin ]
+[command: /new-issue CVE draft]
+[assistant] ok
+
+[command: /mystery ]
+[assistant] ok
+
+[tool: Bash]
+[skill: advisory]
