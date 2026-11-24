@@ -116,13 +116,12 @@ targets = ["~/.claude/CLAUDE.md", "~/.kiro/steering/AGENTS.md"]
 # recall never proposes a change to a repo that isn't listed here, since a
 # pull request there may be read by other people. Default: none.
 repos = ["~/src/project"]
-# The rule ledger, a separate file beside the context files (docs/learning.md),
-# never comments in the files. The store holds the authoritative copy for
-# every machine that shares it: the reducer writes a new version there after
-# each reduce and apply, every other machine treats this file as a cache of
-# the newest store version, and a missing file is restored from the store.
-# Default: this path, or ~/.kiro/recall-ledger.json with harness.claude off.
-ledger = "~/.claude/recall-ledger.json"
+# The rule ledger, a separate file, never comments in the context files
+# (docs/learning.md). The store holds the authoritative copy for every
+# machine that shares it: the reducer writes a new version there after each
+# reduce and apply, every other machine treats this file as a cache of the
+# newest store version, and a missing file is rebuilt.
+ledger = "~/.local/state/recall/ledger.json"
 # The candidate ledger: lessons your sessions have shown that aren't rules
 # yet, each a group of alike observations, and which ones a proposal already
 # used. It holds observation text, so it defaults to local state, on the one

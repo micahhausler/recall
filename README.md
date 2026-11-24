@@ -101,7 +101,7 @@ recall supports Claude Code and Kiro CLI.
 | `kiro` | `~/.kiro/sessions`, both the v2 and v3 engine layouts | `~/.kiro/steering/**/*.md`, including `AGENTS.md`, and the Markdown files they link | `kiro-cli chat --no-interactive` |
 
 Claude Code isn't required.
-With `harness.claude` off, the loop's defaults follow Kiro: `learn.runner` is `kiro`, and the rule ledger and graduated skills live under `~/.kiro`.
+With `harness.claude` off, the loop's defaults follow Kiro: `learn.runner` is `kiro`, and graduated skills land in `~/.kiro/skills`.
 The kiro runner applies through text mode: Kiro trusts a tool on any path, so it can't keep edits inside the apply worktrees, and it gets no tools.
 Its input carries the files the proposals change, it answers with each changed file whole, and recall writes only the paths it listed, inside the worktrees.
 

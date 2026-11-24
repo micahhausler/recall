@@ -17,7 +17,7 @@ If I take the short path, skip to step 5's first map, and review with `recall le
    Verify with `recall version` before going on.
 2. **Config.** `recall config show` prints the merged config and where each value came from; with nothing configured yet, defaults apply.
    If `~/.kiro/sessions` exists, offer to turn on the Kiro harness (`recall config set harness.kiro.enabled true`), and ask whether the learning loop should run through Kiro (`recall config set learn.runner kiro`); say that `learn apply` then runs in text mode: Kiro can't confine write tools to the worktrees, so it gets none, and recall writes the files the model returns, only at the paths it listed.
-   If this machine has no Claude Code, offer `recall config set harness.claude.enabled false`: the runner, the ledger, and `learn.skills` then default to Kiro's, and `recall init` declares recur jobs for the loop instead of the session hook, since Kiro's session-end hook kills the worker it starts; `recall recur sync` installs them.
+   If this machine has no Claude Code, offer `recall config set harness.claude.enabled false`: the runner and `learn.skills` then default to Kiro's, and `recall init` declares recur jobs for the loop instead of the session hook, since Kiro's session-end hook kills the worker it starts; `recall recur sync` installs them.
    With the Kiro harness on, `recall init` installs the `keep` and `recall-setup` skills into Kiro as a power, from files built into the binary; rerunning it after an upgrade updates them.
    Shared settings belong in a dotfiles-managed drop-in under `~/.config/recall/config.d/`; machine-only values go through `recall config set`.
 3. **Store.** Ask which store:

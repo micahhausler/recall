@@ -305,7 +305,7 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 			MapModel:    "sonnet",
 			ReduceModel: "opus",
 			Targets:     []string{filepath.Join(home, ".claude", "CLAUDE.md")},
-			Ledger:      DefaultLedger("claude", home),
+			Ledger:      filepath.Join(home, ".local", "state", "recall", "ledger.json"),
 			Candidates:  filepath.Join(home, ".local", "state", "recall", "learn", "candidates.json"),
 			RetireDays:  90,
 			MapWorkers:  4,
@@ -590,13 +590,10 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 		}
 	}
 	// With Claude Code off, the loop runs through the harness that is on and
-	// keeps its files in that harness's home, so nothing needs ~/.claude.
+	// lands graduated skills where that harness loads them.
 	if primary := PrimaryHarness(s.Harnesses); primary != "claude" {
 		if _, set := c.Get("learn.runner"); !set {
 			s.Learn.Runner = primary
-		}
-		if _, set := c.Get("learn.ledger"); !set {
-			s.Learn.Ledger = DefaultLedger(primary, home)
 		}
 		if _, set := c.Get("learn.skills"); !set {
 			s.Learn.Skills = DefaultSkills(primary, home)
@@ -655,15 +652,6 @@ func PrimaryHarness(enabled map[string]HarnessSettings) string {
 		}
 	}
 	return "claude"
-}
-
-// DefaultLedger is the rule ledger's default path for a primary harness,
-// in that harness's home.
-func DefaultLedger(name, home string) string {
-	if name == "kiro" {
-		return filepath.Join(home, ".kiro", "recall-ledger.json")
-	}
-	return filepath.Join(home, ".claude", "recall-ledger.json")
 }
 
 // DefaultSkills is where a primary harness loads the owner's own skills

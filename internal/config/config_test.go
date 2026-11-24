@@ -787,13 +787,13 @@ func TestPrimaryHarnessDefaults(t *testing.T) {
 		runner, ledger, skills, model string
 	}{
 		{"kiro only", "[harness.claude]\nenabled = false\n\n[harness.kiro]\n",
-			"kiro", "/home/you/.kiro/recall-ledger.json", "/home/you/.kiro/skills", "auto"},
+			"kiro", "/home/you/.local/state/recall/ledger.json", "/home/you/.kiro/skills", "auto"},
 		{"kiro only, keys set", "[harness.claude]\nenabled = false\n\n[harness.kiro]\n\n[learn]\nrunner = \"claude\"\nledger = \"/l.json\"\nskills = \"/s\"\n",
 			"claude", "/l.json", "/s", "sonnet"},
 		{"both on", "[harness.kiro]\n",
-			"claude", "/home/you/.claude/recall-ledger.json", "/home/you/.claude/skills", "sonnet"},
+			"claude", "/home/you/.local/state/recall/ledger.json", "/home/you/.claude/skills", "sonnet"},
 		{"neither on", "[harness.claude]\nenabled = false\n",
-			"claude", "/home/you/.claude/recall-ledger.json", "/home/you/.claude/skills", "sonnet"},
+			"claude", "/home/you/.local/state/recall/ledger.json", "/home/you/.claude/skills", "sonnet"},
 	} {
 		b := base(t)
 		write(t, b, tc.toml)
