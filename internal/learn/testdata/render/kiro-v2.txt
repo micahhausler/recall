@@ -1,0 +1,9 @@
+[owner] list the files in example.com's repo
+
+[assistant] Listing them.
+
+[tool: shell]
+[tool: read]
+[tool read FAILED: no such file]
+[owner] use ls -la instead
+

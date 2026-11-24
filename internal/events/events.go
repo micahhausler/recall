@@ -1,64 +1,32 @@
-// Package events defines the one normalized event schema every harness
-// adapter emits. The schema is documented in docs/events.md; adapters live
-// with their harness.
+// Package events is recall's side of the normalized event schema,
+// api/events/v1 (docs/events.md); adapters live with their harness.
 package events
 
 import (
 	"bufio"
 	"encoding/json"
 	"io"
+
+	eventsv1 "github.com/micahhausler/recall/api/events/v1"
 )
 
 // Kind is what happened in one event.
-type Kind string
-
-const (
-	// UserPrompt is a prompt a person typed into the interactive CLI
-	// (on a sidechain, the orchestrating agent "types" it; Sidechain says so).
-	UserPrompt Kind = "user_prompt"
-	// AssistantText is prose the model wrote.
-	AssistantText Kind = "assistant_text"
-	// ToolCall is the model invoking a tool.
-	ToolCall Kind = "tool_call"
-	// ToolResult is a tool's answer; OK is false when the tool errored.
-	ToolResult Kind = "tool_result"
-	// SkillInvoked is a Skill tool call; Skill carries the skill name.
-	SkillInvoked Kind = "skill_invoked"
-	// SlashCommand is a user turn wrapped in <command-name>; Skill carries
-	// the command name.
-	SlashCommand Kind = "slash_command"
-	// BuiltinCommand is a slash command the harness ran itself, like /clear;
-	// it is never a skill. Skill carries the command name.
-	BuiltinCommand Kind = "builtin_command"
-	// Refusal is the model or API declining to continue.
-	Refusal Kind = "refusal"
-	// Compact is a compaction summary standing in for earlier turns.
-	Compact Kind = "compact"
-)
+type Kind = eventsv1.Kind
 
 // Event is one normalized thing that happened in a session.
-type Event struct {
-	Harness   string `json:"harness"`
-	Host      string `json:"host,omitempty"`
-	Session   string `json:"session"`
-	CWD       string `json:"cwd,omitempty"`
-	Timestamp string `json:"timestamp,omitempty"`
-	Kind      Kind   `json:"kind"`
-	Role      string `json:"role,omitempty"`
-	Text      string `json:"text,omitempty"`
-	Tool      string `json:"tool,omitempty"`
-	// Input is a short summary of a tool call's input, such as a shell
-	// command or a file path, with secret-shaped tokens redacted. A tool
-	// result carries the input of the call it answers.
-	Input string `json:"input,omitempty"`
-	OK    *bool  `json:"ok,omitempty"`
-	Skill string `json:"skill,omitempty"`
-	// SkillDir is the directory the harness loaded a slash-invoked skill
-	// from, when the transcript records it.
-	SkillDir  string `json:"skill_dir,omitempty"`
-	Model     string `json:"model,omitempty"`
-	Sidechain bool   `json:"sidechain,omitempty"`
-}
+type Event = eventsv1.Event
+
+const (
+	UserPrompt     = eventsv1.UserPrompt
+	AssistantText  = eventsv1.AssistantText
+	ToolCall       = eventsv1.ToolCall
+	ToolResult     = eventsv1.ToolResult
+	SkillInvoked   = eventsv1.SkillInvoked
+	SlashCommand   = eventsv1.SlashCommand
+	BuiltinCommand = eventsv1.BuiltinCommand
+	Refusal        = eventsv1.Refusal
+	Compact        = eventsv1.Compact
+)
 
 // WriteJSONL writes events one JSON object per line.
 func WriteJSONL(w io.Writer, evs []Event) error {
@@ -73,4 +41,4 @@ func WriteJSONL(w io.Writer, evs []Event) error {
 }
 
 // Bool is a pointer to b, for the OK field.
-func Bool(b bool) *bool { return &b }
+func Bool(b bool) *bool { return eventsv1.Bool(b) }

@@ -1,0 +1,5 @@
+{"session":"chat-c-0001","timestamp":"2026-03-02T12:00:00Z","message_id":"u-1","kind":"user_prompt","role":"user","text":"summarize the failing check on my pull request"}
+{"session":"chat-c-0001","timestamp":"2026-03-02T12:00:03Z","message_id":"a-1","parent_id":"u-1","kind":"tool_call","role":"assistant","tool":"WebFetch","input":"https://example.com/you/example/checks"}
+{"session":"chat-c-0001","timestamp":"2026-03-02T12:00:03Z","message_id":"a-1","parent_id":"u-1","kind":"tool_result","role":"assistant","tool":"WebFetch","input":"https://example.com/you/example/checks","ok":false,"text":"403 Forbidden"}
+{"session":"chat-c-0001","timestamp":"2026-03-02T12:00:03Z","message_id":"a-1","parent_id":"u-1","kind":"assistant_text","role":"assistant","text":"I can't read that page without a login."}
+{"session":"chat-c-0001","timestamp":"2026-03-02T12:01:00Z","message_id":"u-2","kind":"user_prompt","role":"user","text":"summarize the failing check; the log is pasted below"}

@@ -68,6 +68,33 @@ source = "~/.claude/projects"
 # steering directory with AGENTS.md, are read from this directory's parent.
 source = "~/.kiro/sessions"
 
+# A harness recall doesn't know by name reads its transcripts in the format
+# of the known harness `format` names, from its own source, such as Claude
+# Code run with CLAUDE_CONFIG_DIR set or an app that runs a harness CLI with
+# its own config directory. It archives and maps under its own name, and
+# adds no learn.targets entry and no runner.
+# [harness.claude-work]
+# format = "claude"
+# source = "~/.claude-work/projects"
+
+# format = "events" reads recall's own normalized events, one session per
+# <id>.jsonl directly in source, which defaults to
+# ~/.local/state/recall/import/<name>/sessions. Its paths name another
+# machine and are never looked up here. analysis, hits, reviews, ledger,
+# learn, and evidence-* are recall's own store prefixes and can't name a
+# harness.
+# [harness.chat]
+# format = "events"
+
+# An import: recall runs import.command (required; the program, then its
+# arguments, without a shell; a bare name is looked up on PATH) with the
+# request in RECALL_IMPORT_INFO, and stores the sessions it writes under
+# the harness's source. import.timeout bounds one run (default "10m").
+# `recall import` runs it. See docs/harnesses.md.
+# [harness.chat.import]
+# command = ["chat-history", "--workspace", "all"]
+# timeout = "10m"
+
 # Recurring jobs are the opt-in alternative to the session hooks, for a
 # machine that wants a fixed schedule or whose sessions never end cleanly.
 [recur]
@@ -84,6 +111,14 @@ cron_tz = "America/Los_Angeles"
 [recur.jobs.archive-chats]
 schedule = "0 12 * * 1"
 command = "recall archive-chats run"
+
+# An import that fetches from a service runs from a job on the one machine
+# whose drop-in names its import.command; a bare-named plugin, and what it
+# runs, must be on recur.env's PATH. The archive and the map need it at
+# least weekly. An import of a file you download runs by hand instead.
+# [recur.jobs.import-chat]
+# schedule = "0 6 * * *"
+# command = "recall import chat"
 
 [learn]
 # The harness CLI model calls go through, in headless mode: "claude"

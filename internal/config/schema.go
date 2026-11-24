@@ -26,6 +26,9 @@ var schema = []string{
 	"archive-chats.redact",
 	"harness.*.source",
 	"harness.*.enabled",
+	"harness.*.format",
+	"harness.*.import.command",
+	"harness.*.import.timeout",
 	"recur.prefix",
 	"recur.env",
 	"recur.cron_tz",
@@ -269,7 +272,24 @@ type ArchiveSettings struct {
 type HarnessSettings struct {
 	Source  string
 	Enabled bool
+	// Format is the known harness whose transcript format a harness
+	// recall doesn't know shares, or FormatEvents; empty for a known one.
+	Format string
+	// Import is the plugin that fetches an events harness's sessions
+	// (docs/import.md); nil when none is configured.
+	Import *ImportSettings
 }
+
+// ImportSettings name the plugin an events harness imports through.
+type ImportSettings struct {
+	// Command is the program and its arguments, run without a shell.
+	Command []string
+	// Timeout bounds one run of the plugin.
+	Timeout time.Duration
+}
+
+// DefaultImportTimeout bounds one import run when import.timeout is unset.
+const DefaultImportTimeout = 10 * time.Minute
 
 type RecurSettings struct {
 	Prefix string
@@ -566,7 +586,17 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 		h := HarnessSettings{Enabled: true, Source: DefaultSource(name, home)}
 		base := "harness." + name
 		path(base+".source", &h.Source)
+		str(base+".format", &h.Format)
+		if h.Format == FormatEvents && h.Source == "" {
+			h.Source = filepath.Join(ImportDir(home, name), "sessions")
+		}
 		c.boolKey(base+".enabled", &h.Enabled, &err)
+		if err == nil {
+			err = c.checkFormat(name, h)
+		}
+		if err == nil {
+			h.Import, err = c.importSettings(name, h, home)
+		}
 		if h.Enabled {
 			s.Harnesses[name] = h
 		}
@@ -636,6 +666,84 @@ const (
 	MinMapWorkers = 1
 	MaxMapWorkers = 32
 )
+
+// importSettings reads harness.<name>.import: a command, required, and a
+// timeout, on an events harness only.
+func (c *Config) importSettings(name string, h HarnessSettings, home string) (*ImportSettings, error) {
+	key := "harness." + name + ".import"
+	v, ok := c.Get(key)
+	if !ok {
+		return nil, nil
+	}
+	o, _ := c.TableOrigin(key)
+	if _, table := v.(map[string]any); !table {
+		o, _ = c.Origin(key)
+		return nil, fmt.Errorf("%s: %s is a table: [%s] with a command", o, key, key)
+	}
+	if h.Format != FormatEvents {
+		return nil, fmt.Errorf("%s: [%s] needs harness.%s.format = %q; an import writes recall's own events", o, key, name, FormatEvents)
+	}
+	imp := &ImportSettings{Timeout: DefaultImportTimeout}
+	cv, ok := c.Get(key + ".command")
+	if !ok {
+		return nil, fmt.Errorf("%s: [%s] has no command; set command to the plugin to run, then its arguments", o, key)
+	}
+	list, ok := cv.([]any)
+	if !ok {
+		return nil, c.typeErr(key+".command", "an array of strings: the program, then its arguments", cv)
+	}
+	for i, e := range list {
+		s, ok := e.(string)
+		if !ok {
+			return nil, c.typeErr(key+".command", "an array of strings", e)
+		}
+		if i == 0 {
+			s = ExpandHome(s, home)
+		}
+		imp.Command = append(imp.Command, s)
+	}
+	if len(imp.Command) == 0 || imp.Command[0] == "" {
+		co, _ := c.Origin(key + ".command")
+		return nil, fmt.Errorf("%s: %s.command names no program", co, key)
+	}
+	if tv, ok := c.Get(key + ".timeout"); ok {
+		to, _ := c.Origin(key + ".timeout")
+		s, sok := tv.(string)
+		d, perr := time.ParseDuration(s)
+		if !sok {
+			return nil, c.typeErr(key+".timeout", "a duration string like \"10m\"", tv)
+		}
+		if perr != nil || d <= 0 {
+			return nil, fmt.Errorf("%s: %s.timeout %q isn't a positive duration like \"10m\"", to, key, s)
+		}
+		imp.Timeout = d
+	}
+	return imp, nil
+}
+
+// checkFormat rejects a format on a harness recall knows, a format that
+// isn't a known harness or events, a name recall uses as a store prefix of
+// its own, and a formatted harness with no source.
+func (c *Config) checkFormat(name string, h HarnessSettings) error {
+	if h.Format == "" {
+		return nil
+	}
+	key := "harness." + name + ".format"
+	o, _ := c.Origin(key)
+	if _, known := defaultsFor(name); known {
+		return fmt.Errorf("%s: %s is a harness recall knows, so %s can't change its format", o, name, key)
+	}
+	if _, known := defaultsFor(h.Format); !known && h.Format != FormatEvents {
+		return fmt.Errorf("%s: %s is %q; it names the transcript format this harness shares: %s", o, key, h.Format, strings.Join(Formats, ", "))
+	}
+	if reservedHarness(name) {
+		return fmt.Errorf("%s: harness %q is a store prefix recall uses for itself; name it something else", o, name)
+	}
+	if h.Source == "" {
+		return fmt.Errorf("%s: harness %q has a format but no source", o, name)
+	}
+	return nil
+}
 
 func (c *Config) boolKey(key string, dst *bool, err *error) {
 	if v, ok := c.Get(key); ok && *err == nil {

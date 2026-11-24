@@ -1,0 +1,10 @@
+[owner] why is the build failing?
+
+[assistant] Let me check.
+
+[tool: execute_bash]
+[tool execute_bash FAILED: exit 2]
+[skill: keep]
+[owner] stop and explain
+
+[refusal: ]

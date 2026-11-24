@@ -100,6 +100,9 @@ recall supports Claude Code and Kiro CLI.
 | `claude` (on by default) | `~/.claude/projects` | `~/.claude/CLAUDE.md` and its `@` imports | `claude -p` |
 | `kiro` | `~/.kiro/sessions`, both the v2 and v3 engine layouts | `~/.kiro/steering/**/*.md`, including `AGENTS.md`, and the Markdown files they link | `kiro-cli chat --no-interactive` |
 
+Harnesses recall has no adapter for plug in out of tree: a `[harness.<name>]` table reads a known harness's transcripts from another home, or recall's own normalized events, which an import plugin can fetch from systems recall can't read in place.
+[`docs/harnesses.md`](docs/harnesses.md) covers both.
+
 Claude Code isn't required.
 With `harness.claude` off, the loop's defaults follow Kiro: `learn.runner` is `kiro`, and graduated skills land in `~/.kiro/skills`.
 The kiro runner applies through text mode: Kiro trusts a tool on any path, so it can't keep edits inside the apply worktrees, and it gets no tools.

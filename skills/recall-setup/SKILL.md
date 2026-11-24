@@ -38,6 +38,8 @@ If I take the short path, skip to step 5's first map, and review with `recall le
    Leave out any repo whose pull requests other people read unless I say to include it.
    To apply a reduce's proposals, confirm `learn.targets`, `learn.skills`, and `learn.bin` each sit in a git checkout, then offer `recall learn apply --dry-run`, and say it opens one pull request per changed repo (`learn.review = "branch"` keeps them local).
    Once the proposals have earned trust, one machine can schedule `recall learn run` (rules sync, reduce, apply) after the others' weekly map.
+   If I import sessions from a system recall can't read in place (`docs/import.md`), the `[harness.<name>]` table with `format = "events"` goes in shared config every machine reads, since the reducer reads only the harnesses its own config declares, and `[harness.<name>.import]` goes only in the drop-in of the one machine that runs the import; two machines importing one source count each session twice.
+   An import that fetches from a service runs from a recur job through the recur skill, and one that reads a downloaded export runs by hand with `recall import <name>`; `recall import <name> --dry-run` shows what a first run would store.
 6. **Check.** Finish with `recall recur check`, `recall skills --since 90d`, and `recall lint`; show me anything they flag.
 
 On a machine that shares config through dotfiles, steps 2 and 3 are usually already done; start at 4.

@@ -1,0 +1,5 @@
+[owner] one
+
+[command: /clear ]
+[owner] two
+

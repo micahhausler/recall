@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/micahhausler/recall/internal/clock"
+	"github.com/micahhausler/recall/internal/lint"
 	"github.com/micahhausler/recall/internal/model"
 	"github.com/micahhausler/recall/internal/review"
 )
@@ -359,5 +360,67 @@ func TestLedgerKeepsRulesItCannotSee(t *testing.T) {
 	l.SyncTargets([]string{here, fresh}, day(4))
 	if last := l.Rules[len(l.Rules)-1]; last.Text != "Table tests." || last.Since != "2026-11-04" {
 		t.Errorf("loop-created first rule = %+v, want it in force from today", last)
+	}
+}
+
+// The apply holds back a Kiro-only add aimed at a base file both harnesses
+// load, through Claude Code's @import and a Markdown link in Kiro's
+// steering, and points it at Kiro's own steering file; the same add with
+// only Kiro enabled, and a Kiro-only add to Kiro's own file, go ahead.
+func TestApplyHoldsBackAnAddOnlyOneHarnessShows(t *testing.T) {
+	isolateGit(t)
+	base := review.Resolve(t.TempDir())
+	home := liveRepo(t, base, "home", map[string]string{
+		".claude/CLAUDE.md":         "@~/.agents/base.md\n\n- one\n",
+		".agents/base.md":           "- base\n",
+		".kiro/steering/AGENTS.md":  "Read [the base rules](../../.agents/base.md).\n\n- kiro\n",
+		".kiro/steering/style.md":   "- style\n",
+		"notes/unrelated-to-any.md": "- nothing loads this\n",
+	})
+	claudeMD := filepath.Join(home, ".claude", "CLAUDE.md")
+	shared := filepath.Join(home, ".agents", "base.md")
+	steering := filepath.Join(home, ".kiro", "steering", "AGENTS.md")
+	linter := &lint.Linter{Home: home}
+	readers := map[string][]string{
+		"claude": linter.Reach([]string{claudeMD}),
+		"kiro":   linter.Reach([]string{steering, filepath.Join(home, ".kiro", "steering", "style.md")}),
+	}
+	dir := filepath.Join(base, "state", "2026-11-11")
+	writeFile(t, filepath.Join(dir, "proposals.md"), "## Proposals\n\n"+
+		"### add: Kiro lesson in the base\n- target: "+shared+"\n- rule: Steer with care.\n- evidence: c-0001\n\n"+
+		"### add: Kiro lesson in its steering\n- target: "+steering+"\n- rule: Steer with care here.\n- evidence: c-0001\n\n"+
+		"### add: Shared lesson in the base\n- target: "+shared+"\n- rule: Shared care.\n- evidence: c-0001, c-0002\n")
+	e := RunEvidence{
+		"c-0001": {{Session: "s1", Day: "2026-11-01", Harness: "kiro", Owner: true}},
+		"c-0002": {{Session: "s2", Day: "2026-11-02", Harness: "claude", Owner: true}},
+	}
+	if err := e.save(dir); err != nil {
+		t.Fatal(err)
+	}
+	plan := func(readers map[string][]string) map[string]string {
+		a := &Applier{Gates: Gates{Targets: []string{claudeMD, shared, steering}, Home: home, Readers: readers,
+			Own: map[string]string{"claude": claudeMD, "kiro": steering}},
+			Clock: &clock.Fake{T: time.Date(2026, 11, 11, 0, 0, 0, 0, time.UTC)}}
+		p, err := a.Plan(context.Background(), dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		skips := map[string]string{}
+		for _, r := range p.Routes {
+			skips[r.Title] = r.Skip
+		}
+		return skips
+	}
+	skips := plan(readers)
+	if want := "every session behind it came from kiro, and claude loads ~/.agents/base.md too; it belongs in ~/.kiro/steering/AGENTS.md"; skips["Kiro lesson in the base"] != want {
+		t.Errorf("held back for %q, want %q", skips["Kiro lesson in the base"], want)
+	}
+	for _, title := range []string{"Kiro lesson in its steering", "Shared lesson in the base"} {
+		if skips[title] != "" {
+			t.Errorf("%q held back: %s", title, skips[title])
+		}
+	}
+	if skips := plan(map[string][]string{"kiro": readers["kiro"]}); skips["Kiro lesson in the base"] != "" {
+		t.Errorf("with only kiro enabled, held back: %s", skips["Kiro lesson in the base"])
 	}
 }

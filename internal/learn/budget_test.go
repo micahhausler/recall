@@ -349,3 +349,49 @@ func TestRulesRecordTheModelThatEarnedThem(t *testing.T) {
 		t.Errorf("with no recent sessions to compare, nothing can be listed: %+v", got)
 	}
 }
+
+// A session that names no model counts as evidence but never decides
+// aging: it adds nothing to the recent models, so it can't keep an old
+// rule current, and a rule earned partly on it records only the named
+// models.
+func TestSessionsWithoutAModelNeverDecideAging(t *testing.T) {
+	now := time.Date(2026, 11, 11, 0, 0, 0, 0, time.UTC)
+	imported := session("s-imported", "2026-11-09", zshA)
+	imported.Harness = "chat"
+	local := session("s-local", "2026-11-10", zshA)
+	local.Models = []string{"model-new"}
+	if got := WindowModels([]SessionObservations{imported, local}, now); strings.Join(got, ",") != "model-new" {
+		t.Errorf("recent models = %v, want only the named one", got)
+	}
+	l := &Ledger{Rules: []Rule{{ID: "r-0001", Text: "Old.", Models: []string{"model-old"}}}}
+	if got := l.Outgrown(WindowModels([]SessionObservations{imported, local}, now)); len(got) != 1 {
+		t.Errorf("a session with no model kept an old rule current: outgrown = %+v", got)
+	}
+	if got := l.Outgrown(WindowModels([]SessionObservations{imported}, now)); len(got) != 0 {
+		t.Errorf("sessions with no model decided aging: outgrown = %+v", got)
+	}
+
+	old := session("s-old", "2026-11-01", zshA)
+	old.Models = []string{"model-old"}
+	cl := &CandidateLedger{}
+	evidence := runEvidence(cl.Cluster([]SessionObservations{old, imported}, "2026-08-13", "2026-11-11"))
+	var ids []string
+	for id, refs := range evidence {
+		if len(refs) == 2 {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) != 1 {
+		t.Fatalf("evidence = %+v, want one candidate from both sessions", evidence)
+	}
+	if got := evidence.models(ids); strings.Join(got, ",") != "model-old" {
+		t.Errorf("a rule earned partly on a session with no model records %v, want only model-old", got)
+	}
+	harnesses := map[string]bool{}
+	for _, ref := range evidence[ids[0]] {
+		harnesses[ref.Harness] = true
+	}
+	if !harnesses["chat"] || !harnesses["claude"] {
+		t.Errorf("evidence refs name harnesses %v, want chat and claude", harnesses)
+	}
+}

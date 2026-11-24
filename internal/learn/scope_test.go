@@ -9,6 +9,7 @@ import (
 
 	"github.com/micahhausler/recall/internal/events"
 	"github.com/micahhausler/recall/internal/model"
+	"github.com/micahhausler/recall/internal/review"
 	"github.com/micahhausler/recall/internal/store"
 )
 
@@ -135,6 +136,29 @@ func TestScopeOf(t *testing.T) {
 	}
 }
 
+// An imported session's repo keys its scope with no checkout here.
+func TestScopeOfRepo(t *testing.T) {
+	evs := []events.Event{
+		{Kind: events.UserPrompt, CWD: "/home/them/src/example", Repo: "example.com/you/example"},
+		{Kind: events.AssistantText, CWD: "/home/them/src/example", Repo: "example.com/you/example"},
+	}
+	got := scopeOf(evs, "", nil)
+	if want := (Scope{CWD: "~/src/example", Remote: "example.com/you/example"}); got != want {
+		t.Errorf("scope = %+v, want %+v", got, want)
+	}
+	if got.Key() != "example.com/you/example" {
+		t.Errorf("key = %q, want the event's repo", got.Key())
+	}
+	noCWD := scopeOf([]events.Event{{Kind: events.UserPrompt, Repo: "example.com/you/example"}}, "", nil)
+	if noCWD != (Scope{Remote: "example.com/you/example"}) {
+		t.Errorf("scope with no directory = %+v", noCWD)
+	}
+	none := func(string) (string, string) { return "", "" }
+	if got := scopeOf(evs, "/home/you", none); got.Key() != "example.com/you/example" || got.Repo != "" {
+		t.Errorf("scope with no checkout found = %+v", got)
+	}
+}
+
 func TestMapRecordsScope(t *testing.T) {
 	fake := &model.Fake{Response: "NONE\n"}
 	m := mapper(store.NewMem(), fake, nil)
@@ -159,7 +183,7 @@ func TestCandidatesNameTheirRepos(t *testing.T) {
 	cl := &CandidateLedger{}
 	one, _ := Open(cl.Cluster(append(filler(), a), "2026-08-13", "2026-11-11"), nil)
 	var sb strings.Builder
-	renderCandidates(&sb, one, 0)
+	renderCandidates(&sb, one, 0, false)
 	if !strings.Contains(sb.String(), "; repo example.com/you/project)") {
 		t.Errorf("a one-repo candidate should name its repo:\n%s", sb.String())
 	}
@@ -167,13 +191,13 @@ func TestCandidatesNameTheirRepos(t *testing.T) {
 	unplaced := session("s3", "2026-11-04", zshB)
 	mixed, _ := Open(cl.Cluster(append(filler(), a, unplaced), "2026-08-13", "2026-11-11"), nil)
 	sb.Reset()
-	renderCandidates(&sb, mixed, 0)
+	renderCandidates(&sb, mixed, 0, false)
 	if !strings.Contains(sb.String(), "; 1 of them in repo example.com/you/project, the rest in no known repo)") {
 		t.Errorf("a partly placed candidate claims too much:\n%s", sb.String())
 	}
 	both, _ := Open(cl.Cluster(append(filler(), a, b), "2026-08-13", "2026-11-11"), nil)
 	sb.Reset()
-	renderCandidates(&sb, both, 0)
+	renderCandidates(&sb, both, 0, false)
 	for _, want := range []string{"; 2 repos)", "session s2 in ~/src/other:", "session s1 in example.com/you/project:"} {
 		if !strings.Contains(sb.String(), want) {
 			t.Errorf("a candidate across repos misses %q:\n%s", want, sb.String())
@@ -304,5 +328,58 @@ func TestRepeatsAcrossSessions(t *testing.T) {
 	open, _ := Open(cl.Cluster(got, "2026-08-13", "2026-11-11"), nil)
 	if len(open) != 1 || open[0].Sessions != 3 || open[0].Category != CategoryRepeat {
 		t.Errorf("clusters = %+v", open)
+	}
+}
+
+func TestHarnessScope(t *testing.T) {
+	home := review.Resolve(t.TempDir())
+	base := filepath.Join(home, ".agents", "base.md")
+	claudeMD := filepath.Join(home, ".claude", "CLAUDE.md")
+	steering := filepath.Join(home, ".kiro", "steering", "AGENTS.md")
+	local := filepath.Join(home, "src", "project", "AGENTS.md")
+	repo := Repo{Root: filepath.Join(home, "src", "project"), Remote: "example.com/you/project", Files: []RepoFile{{Path: local}}}
+	both := map[string][]string{"claude": {claudeMD, base}, "kiro": {steering, base}, "chat": {}}
+	kiroOnly := map[string][]string{"kiro": {steering, base}}
+	own := map[string]string{"claude": claudeMD, "kiro": steering}
+	e := RunEvidence{
+		"c-kiro":   {{Session: "s1", Harness: "kiro"}},
+		"c-claude": {{Session: "s2", Harness: "claude"}},
+		"c-chat":   {{Session: "s3", Harness: "chat"}},
+		"c-review": {{Session: "pr-1", Harness: "evidence-github"}},
+		"c-old":    {{Session: "s4"}},
+		"c-repo":   {{Session: "s5", Harness: "kiro", Repo: "example.com/you/project"}},
+	}
+	add := func(cands ...string) Proposal { return Proposal{Kind: "add", Candidates: cands} }
+	cases := []struct {
+		name    string
+		p       Proposal
+		target  string
+		readers map[string][]string
+		want    string
+	}{
+		{"a kiro-only add aimed at a base file both load", add("c-kiro"), base, both, "it belongs in ~/.kiro/steering/AGENTS.md"},
+		{"the same add with only kiro enabled", add("c-kiro"), base, kiroOnly, ""},
+		{"a kiro-only add aimed at kiro's own file", add("c-kiro"), steering, both, ""},
+		{"a kiro-only add aimed at claude's file", add("c-kiro"), claudeMD, both, "claude loads ~/.claude/CLAUDE.md too"},
+		{"an add only an import's sessions support", add("c-chat"), claudeMD, both, "loads no context file of its own"},
+		{"an add citing an import and a local harness", add("c-chat", "c-claude"), base, both, ""},
+		{"outside evidence doesn't widen a one-harness add", add("c-kiro", "c-review"), base, both, "came from kiro"},
+		{"outside evidence doesn't narrow a shared add", add("c-kiro", "c-claude", "c-review"), base, both, ""},
+		{"outside evidence alone", add("c-review"), base, both, ""},
+		{"evidence recorded before refs named a harness", add("c-kiro", "c-old"), base, both, ""},
+		{"a reword stays where its rule lives", Proposal{Kind: "reword", Candidates: []string{"c-kiro"}}, base, both, ""},
+		{"repo scope applies first", add("c-repo"), local, both, ""},
+	}
+	for _, c := range cases {
+		got := harnessScope(c.p, c.target, []Repo{repo}, e, c.readers, own, home)
+		if (c.want == "") != (got == "") || !strings.Contains(got, c.want) {
+			t.Errorf("%s: harnessScope = %q, want %q", c.name, got, c.want)
+		}
+	}
+	// A harness whose default file another harness loads too gets pointed
+	// at a file only it loads.
+	shared := map[string][]string{"claude": {claudeMD, steering}, "kiro": {steering}}
+	if got := harnessScope(add("c-kiro"), steering, nil, e, shared, own, home); !strings.Contains(got, "it belongs in a file only kiro loads") {
+		t.Errorf("shared own file = %q", got)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -127,7 +128,7 @@ func (r *Reducer) BuildInput(window []SessionObservations) string {
 func (r *Reducer) CandidatesText(window []SessionObservations) string {
 	var b strings.Builder
 	open, used := r.clusters(window)
-	renderCandidates(&b, open, used)
+	renderCandidates(&b, open, used, len(r.Readers) > 1)
 	return b.String()
 }
 
@@ -143,7 +144,7 @@ func (r *Reducer) buildInput(open []Cluster, used int) string {
 		b.WriteString("Global, loaded in every session:\n")
 	}
 	for _, t := range r.Targets {
-		fmt.Fprintf(&b, "- %s%s\n", t, r.size(t))
+		fmt.Fprintf(&b, "- %s%s%s\n", t, r.size(t), r.loadedBy(t))
 	}
 	for _, repo := range r.Repos {
 		name := repo.Remote
@@ -206,7 +207,7 @@ func (r *Reducer) buildInput(open []Cluster, used int) string {
 	}
 
 	b.WriteString("\n# CANDIDATES\n\n")
-	renderCandidates(&b, open, used)
+	renderCandidates(&b, open, used, len(r.Readers) > 1)
 
 	retireDays := r.retireDays()
 	aging := r.Ledger.Age(r.Clock.Now(), retireDays)
@@ -431,6 +432,9 @@ func (r *Reducer) checks(out string, props []Proposal, evidence RunEvidence) []r
 					fs = append(fs, reduceFinding{title: p.Title,
 						line: fmt.Sprintf("- %q targets a global file, and every session behind it ran in %s; "+
 							"it belongs in that repo's own context file, and the apply holds it back.", p.Title, homeRelative(repo.Root, r.Home))})
+				} else if why := r.harnessScope(p, target, evidence); why != "" {
+					fs = append(fs, reduceFinding{title: p.Title,
+						line: fmt.Sprintf("- %q: %s; the apply holds it back.", p.Title, why)})
 				}
 			}
 			return fs
@@ -538,4 +542,28 @@ func OffTargets(proposals string, targets []string, home string) []OffTarget {
 		}
 	}
 	return out
+}
+
+// loadedBy names the harnesses that load a global target, when more than
+// one harness is enabled, so the reduce can place a lesson only one
+// harness's sessions show.
+func (r *Reducer) loadedBy(target string) string {
+	if len(r.Readers) < 2 {
+		return ""
+	}
+	path := normReader(target, r.Home)
+	var names []string
+	for name, files := range r.Readers {
+		for _, f := range files {
+			if normReader(f, r.Home) == path {
+				names = append(names, name)
+				break
+			}
+		}
+	}
+	if len(names) == 0 {
+		return " (loaded by no enabled harness)"
+	}
+	sort.Strings(names)
+	return " (loaded by " + strings.Join(names, " and ") + ")"
 }

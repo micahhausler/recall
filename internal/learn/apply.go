@@ -459,6 +459,9 @@ func (a *Applier) Plan(ctx context.Context, dir string) (*Plan, error) {
 			}
 		}
 		if r.Skip == "" {
+			r.Skip = a.harnessScope(prop, a.norm(prop.Target), evidence)
+		}
+		if r.Skip == "" {
 			a.route(&r, targets, taken, rootOf, ignoredAt)
 		}
 		if r.Skip == "" && a.textMode() {

@@ -542,3 +542,49 @@ func TestLoadSetupValidation(t *testing.T) {
 		}
 	}
 }
+
+// An import's job is a job like any other: it plans into the crontab and
+// runs its command with recur.env's PATH, where a bare-named recall and
+// plugin are found.
+func TestImportJobPlansAndRuns(t *testing.T) {
+	home := t.TempDir()
+	bin := filepath.Join(home, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fakeBin(t, bin, "recall", "#!/bin/sh\necho \"recall $*\"\n")
+	base := filepath.Join(home, ".config", "recall", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(base), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	toml := "[harness.chat]\nformat = \"events\"\n\n[harness.chat.import]\ncommand = [\"chat-history\"]\n\n" +
+		"[recur]\nenv = [\"PATH=" + bin + ":/usr/bin:/bin\"]\n\n" +
+		"[recur.jobs.import-chat]\nschedule = \"0 6 * * *\"\ncommand = \"recall import chat\"\n"
+	if err := os.WriteFile(base, []byte(toml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := config.Load(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err := c.Settings(home, "laptop-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadSetup(settings, "/x/bin/recall", base, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fakeCrontab(t, "")
+	plan, out := syncCron(t, s, settings.Recur.Jobs, true)
+	if len(plan) == 0 || !strings.Contains(out, "recur run import-chat") {
+		t.Errorf("plan = %v, output %q", plan, out)
+	}
+	if rc, err := s.Run("import-chat", settings.Recur.Jobs, nil); err != nil || rc != 0 {
+		t.Fatalf("run = %d, %v", rc, err)
+	}
+	data, err := os.ReadFile(filepath.Join(StateDir(home), "import-chat.log"))
+	if err != nil || !strings.Contains(string(data), "recall import chat") {
+		t.Errorf("log = %q, %v", data, err)
+	}
+}

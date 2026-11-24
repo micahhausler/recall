@@ -30,9 +30,15 @@ var codeBlockRE = regexp.MustCompile("(?s)```.*?```")
 // Mechanical, not model-driven: code blocks collapse to [code block], tool
 // calls to [tool: name], failures keep what was run and a short tail of its
 // output, and owner messages stay whole.
+// A session whose events carry message ids renders as a tree, depth
+// first, with each fork marked.
 func Render(evs []events.Event) string {
+	evs, marks := linearize(evs)
 	var b strings.Builder
 	for i, e := range evs {
+		for _, m := range marks[i] {
+			b.WriteString(m)
+		}
 		if e.Sidechain {
 			continue // subagent chatter; the main thread carries the owner
 		}
@@ -73,7 +79,114 @@ func Render(evs []events.Event) string {
 			b.WriteString("[earlier turns compacted]\n")
 		}
 	}
+	for _, m := range marks[len(evs)] {
+		b.WriteString(m)
+	}
 	return b.String()
+}
+
+// Fork markers.
+const (
+	markEdited      = "[the owner edited the prompt above; what follows replaces it]\n"
+	markRegenerated = "[the answer above was regenerated; what follows replaces it]\n"
+	markBranch      = "[another branch from the same point]\n"
+	markAbandoned   = "[abandoned branch]\n"
+	markAbandonEnd  = "[end of abandoned branch]\n"
+)
+
+// node is one message in a session's tree.
+type node struct {
+	evs  []events.Event
+	kids []*node
+}
+
+// prompt reports whether the message is an owner's prompt.
+func (n *node) prompt() bool {
+	for _, e := range n.evs {
+		if e.Kind == events.UserPrompt {
+			return true
+		}
+	}
+	return false
+}
+
+// linearize orders a session's events for rendering, with the markers to
+// write before each index. A session with no message ids comes back as it
+// is. Otherwise each message follows its parent, siblings in file order,
+// and an event with no message id stays with the message before it. A
+// sibling replaces the earlier one of its own type: a prompt is an edit,
+// an answer a regeneration.
+func linearize(evs []events.Event) ([]events.Event, map[int][]string) {
+	tree := false
+	for _, e := range evs {
+		if e.MessageID != "" {
+			tree = true
+			break
+		}
+	}
+	if !tree {
+		return evs, nil
+	}
+	root := &node{}
+	nodes := map[string]*node{}
+	cur := root
+	for _, e := range evs {
+		if e.MessageID == "" {
+			cur.evs = append(cur.evs, e)
+			continue
+		}
+		n := nodes[e.MessageID]
+		if n == nil {
+			n = &node{}
+			nodes[e.MessageID] = n
+			parent := nodes[e.ParentID]
+			if parent == nil {
+				parent = root
+			}
+			parent.kids = append(parent.kids, n)
+		}
+		n.evs = append(n.evs, e)
+		cur = n
+	}
+	out := make([]events.Event, 0, len(evs))
+	marks := map[int][]string{}
+	mark := func(m string) { marks[len(out)] = append(marks[len(out)], m) }
+	var walk func(n *node)
+	walk = func(n *node) {
+		out = append(out, n.evs...)
+		for i, k := range n.kids {
+			if i > 0 {
+				switch {
+				case sameType(n.kids[:i], k) && k.prompt():
+					mark(markEdited)
+				case sameType(n.kids[:i], k):
+					mark(markRegenerated)
+				default:
+					mark(markBranch)
+				}
+			}
+			replaced := sameType(n.kids[i+1:], k)
+			if replaced {
+				mark(markAbandoned)
+			}
+			walk(k)
+			if replaced {
+				mark(markAbandonEnd)
+			}
+		}
+	}
+	walk(root)
+	return out, marks
+}
+
+// sameType reports whether any of sibs is a prompt exactly when n is.
+func sameType(sibs []*node, n *node) bool {
+	for _, s := range sibs {
+		if s.prompt() == n.prompt() {
+			return true
+		}
+	}
+	return false
 }
 
 // Shell commands whose nonzero exit is an answer, not a mistake: grep and rg

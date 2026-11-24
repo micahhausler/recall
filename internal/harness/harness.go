@@ -98,13 +98,28 @@ func Register(name string, f Factory) {
 	registry[name] = f
 }
 
-// Open opens one named harness.
+// Open opens one named harness. A name recall doesn't know opens the
+// adapter its settings' Format names, under that name; the events format
+// is recall's own.
 func Open(name string, s config.HarnessSettings) (Harness, error) {
-	f, ok := registry[name]
-	if !ok {
-		return nil, fmt.Errorf("unknown harness %q", name)
+	if f, ok := registry[name]; ok {
+		return f(s)
 	}
-	return f(s)
+	if s.Format == "" {
+		return nil, fmt.Errorf("unknown harness %q; set harness.%s.format to the known harness whose transcript format it shares", name, name)
+	}
+	if s.Format == config.FormatEvents {
+		return openEvents(name, s), nil
+	}
+	f, ok := registry[s.Format]
+	if !ok {
+		return nil, fmt.Errorf("harness %q: unknown format %q", name, s.Format)
+	}
+	h, err := f(s)
+	if err != nil {
+		return nil, err
+	}
+	return &formatted{Harness: h, name: name}, nil
 }
 
 // Enabled opens every enabled harness in the settings, sorted by name.

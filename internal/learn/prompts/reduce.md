@@ -48,6 +48,9 @@ Place each new rule in the narrowest target that holds it:
 - A lesson seen in several repos, or in sessions outside any repo, is global.
 - A lesson that holds in only one repo, when that repo isn't listed under TARGETS, has no home: don't put it in a global file.
   Leave it out of the proposals and name it under "Repo lessons without a home".
+- With more than one harness, a candidate names the harness its sessions came from, and TARGETS says which harnesses load each global file.
+  A new rule all of whose sessions came from one harness goes in a global file only that harness loads; the binary rejects one aimed at a file another harness loads too, and one from a harness that loads no file of its own.
+  Repo placement comes first, and a reword, retirement, or graduation stays where its rule lives.
 
 Never propose again what REVIEWS lists as pending; the owner hasn't decided yet.
 A rejected proposal was the owner saying no: propose it again only when a candidate's note counts sessions since the rejection, reworded to meet the objection, and say so in its why.

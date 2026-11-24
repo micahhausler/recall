@@ -1,0 +1,8 @@
+{"harness":"example","session":"chat-c-0001","timestamp":"2026-03-02T12:00:00Z","message_id":"u-1","kind":"user_prompt","role":"user","text":"summarize the failing check on my pull request"}
+{"harness":"example","session":"chat-c-0001","timestamp":"2026-03-02T12:00:03Z","message_id":"a-1","parent_id":"u-1","kind":"tool_call","role":"assistant","tool":"WebFetch","input":"https://example.com/you/example/checks"}
+{"harness":"example","session":"chat-c-0001","timestamp":"2026-03-02T12:00:03Z","message_id":"a-1","parent_id":"u-1","kind":"tool_result","role":"assistant","text":"403 Forbidden","tool":"WebFetch","input":"https://example.com/you/example/checks","ok":false}
+{"harness":"example","session":"chat-c-0001","timestamp":"2026-03-02T12:00:03Z","message_id":"a-1","parent_id":"u-1","kind":"assistant_text","role":"assistant","text":"I can't read that page without a login."}
+{"harness":"example","session":"chat-c-0001","timestamp":"2026-03-02T12:01:00Z","message_id":"u-2","kind":"user_prompt","role":"user","text":"summarize the failing check; the log is pasted below"}
+{"harness":"example","session":"chat-c-0001","timestamp":"2026-03-02T12:01:05Z","message_id":"a-2","parent_id":"u-2","kind":"skill_invoked","role":"assistant","skill":"summarize-logs"}
+{"harness":"example","session":"chat-c-0001","timestamp":"2026-03-02T12:01:08Z","message_id":"a-2","parent_id":"u-2","kind":"assistant_text","role":"assistant","text":"The check fails because TestParse panics on an empty line."}
+{"harness":"example","session":"chat-c-0001","timestamp":"2026-03-02T12:05:00Z","message_id":"u-3","parent_id":"a-2","kind":"user_prompt","role":"user","text":"make the summary one sentence"}

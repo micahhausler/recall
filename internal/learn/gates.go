@@ -41,6 +41,12 @@ type Gates struct {
 	// sessions (learn.repeat_evidence_sessions).
 	RequireOwnerEvidence   bool
 	RepeatEvidenceSessions int
+	// Readers maps each enabled harness to every file it loads: its
+	// context files and what they pull in, by lint's resolution. Own maps
+	// a harness to the context file its own lessons go in. With fewer than
+	// two harnesses, harness scope checks nothing.
+	Readers map[string][]string
+	Own     map[string]string
 }
 
 // rules are the ledger's rules, which the budget and scope checks read.
@@ -107,6 +113,12 @@ func (g *Gates) scopeProblem(p Proposal, target string, e RunEvidence) string {
 // file.
 func (g *Gates) narrowScope(p Proposal, target string, e RunEvidence) *Repo {
 	return narrowScope(p, target, g.Repos, e, g.Home)
+}
+
+// harnessScope says why an add can't go to its target by harness scope,
+// if it can't.
+func (g *Gates) harnessScope(p Proposal, target string, e RunEvidence) string {
+	return harnessScope(p, target, g.Repos, e, g.Readers, g.Own, g.Home)
 }
 
 // unsupported reports whether the gates hold p back for citing no

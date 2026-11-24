@@ -22,6 +22,7 @@ import (
 	"github.com/micahhausler/recall/internal/extension"
 	"github.com/micahhausler/recall/internal/harness"
 	"github.com/micahhausler/recall/internal/learn"
+	"github.com/micahhausler/recall/internal/lint"
 	"github.com/micahhausler/recall/internal/model"
 	"github.com/micahhausler/recall/internal/review"
 	"github.com/micahhausler/recall/internal/store"
@@ -566,14 +567,15 @@ func learnMap(ctx context.Context, env *archiveEnv, runner model.Runner, since s
 	scoping := &learn.Scoping{Repos: repos, Home: env.home}
 	run := &mapRun{}
 	var mappers []*learn.Mapper
-	mapper := func(host string) *learn.Mapper {
+	mapper := func(host string, h harness.Harness) *learn.Mapper {
 		m := &learn.Mapper{
 			Store: st, Runner: runner, Model: env.settings.Learn.MapModel,
 			Host: host, Rules: ledger.Rules, Clock: env.clk, Out: os.Stdout, Scoping: scoping,
 			Redact: env.settings.Archive.Redact,
 		}
-		if host == env.settings.Host {
-			// Only this machine's sessions name paths that exist here.
+		if host == env.settings.Host && env.settings.Harnesses[h.Name()].Format != config.FormatEvents {
+			// Only this machine's own sessions name paths that exist here;
+			// an events harness's ran elsewhere.
 			m.Home, m.Locate = env.home, learn.LocateCheckout(env.home)
 		}
 		mappers = append(mappers, m)
@@ -581,7 +583,7 @@ func learnMap(ctx context.Context, env *archiveEnv, runner model.Runner, since s
 	}
 	var jobs []mapJob
 	for _, h := range env.harnesses {
-		m := mapper(env.settings.Host)
+		m := mapper(env.settings.Host, h)
 		sessions, err := h.Sessions()
 		if err != nil {
 			return fail(err)
@@ -618,7 +620,8 @@ func learnMap(ctx context.Context, env *archiveEnv, runner model.Runner, since s
 			}
 		}
 		if fromArchives {
-			archived, err := archiveJobs(ctx, env, st, h, cutoffTime, cutoff, mapper, onDisk, &undatedSkipped)
+			archived, err := archiveJobs(ctx, env, st, h, cutoffTime, cutoff,
+				func(host string) *learn.Mapper { return mapper(host, h) }, onDisk, &undatedSkipped)
 			if err != nil {
 				return fail(err)
 			}
@@ -1225,7 +1228,17 @@ func takenList(ctx context.Context, env *archiveEnv) ([]string, error) {
 // same rules. The ledger supplies the rules and reviews the checks read.
 func learnGates(env *archiveEnv, repos []learn.Repo, taken []string, ledger *learn.Ledger) learn.Gates {
 	l := env.settings.Learn
+	// Each enabled harness's files, includes followed, for harness scope.
+	readers, own := map[string][]string{}, map[string]string{}
+	linter := &lint.Linter{Home: env.home}
+	for _, h := range env.harnesses {
+		readers[h.Name()] = linter.Reach(h.ContextFiles())
+		if t := config.DefaultTarget(h.Name(), env.home); t != "" {
+			own[h.Name()] = t
+		}
+	}
 	return learn.Gates{
+		Readers: readers, Own: own,
 		Targets: l.Targets, Repos: repos, Home: env.home,
 		Skills: l.Skills, Bin: l.Bin, Settings: l.Settings,
 		Taken: taken, Budget: l.Budget,
