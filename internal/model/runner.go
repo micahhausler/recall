@@ -87,18 +87,6 @@ func RegisterEditor(name string, f func() Editor) {
 	editors[name] = f
 }
 
-// Binary is the CLI the runner named name execs by default, or "" for a
-// runner recall doesn't know.
-func Binary(name string) string {
-	switch name {
-	case config.HarnessClaude:
-		return config.HarnessClaude
-	case config.HarnessKiro:
-		return (&Kiro{}).command()
-	}
-	return ""
-}
-
 // ErrNoEditor is OpenEditor's error for a known runner that has no editor.
 var ErrNoEditor = errors.New("can't confine file edits to the apply worktrees")
 
@@ -118,8 +106,8 @@ func OpenEditor(name string) (Editor, error) {
 }
 
 func init() {
-	Register(config.HarnessClaude, func() Runner { return &CLI{Command: "claude"} })
-	RegisterEditor(config.HarnessClaude, func() Editor { return &CLI{Command: "claude"} })
+	Register(config.HarnessClaude, func() Runner { return &CLI{} })
+	RegisterEditor(config.HarnessClaude, func() Editor { return &CLI{} })
 }
 
 // CLI runs a harness command headless: `<command> -p --model <model>` with
@@ -127,7 +115,7 @@ func init() {
 // writes stdout and nothing else. JSON output carries the result text plus
 // the cost the harness reports.
 type CLI struct {
-	// Command is the harness binary, default "claude".
+	// Command is the harness binary, default Claude Code's.
 	Command string
 }
 
@@ -194,7 +182,7 @@ func (c *CLI) Edit(ctx context.Context, model, input string, dirs []string) (str
 func (c *CLI) run(ctx context.Context, dir, input string, args ...string) (string, Usage, error) {
 	command := c.Command
 	if command == "" {
-		command = "claude"
+		command = config.DefaultCLI(config.HarnessClaude)
 	}
 	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Dir = dir

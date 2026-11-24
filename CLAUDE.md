@@ -14,6 +14,8 @@ Examples and tests use placeholders like `you`, `example.com`, and `laptop-a`.
 
 - `cmd/recall/main.go`: flag parsing and subcommand dispatch only; logic lives in `internal/`.
 - `internal/config`: the layered TOML loader and the `config get|set|show` writer.
+  `harness.go` holds the table of what recall knows about each harness before any config: its CLI, paths, trailer, models, and whether its session-end hook can run the loop.
+  A new harness is a constant and an entry there, plus an adapter in `internal/harness` and a runner in `internal/model` registered under that constant.
 - `internal/store`: the archive store interface, with `fs` and `s3` backends and an in-memory fake.
 - `internal/recur`: recurring jobs reconciled into cron (Linux) or LaunchAgents (macOS).
 - `internal/archive`: the weekly transcript archive.

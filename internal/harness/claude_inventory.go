@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 
+	"github.com/micahhausler/recall/internal/config"
 	"github.com/micahhausler/recall/internal/hook"
 )
 
@@ -21,7 +22,7 @@ type Inventory struct {
 }
 
 // claudeCLI is the Claude Code binary the inventory runs.
-var claudeCLI = "claude"
+var claudeCLI = config.DefaultCLI(config.HarnessClaude)
 
 // Inventory starts a headless session in dir and reads the skills and slash
 // commands from its init event, the harness's own list, then stops it before
