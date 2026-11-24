@@ -10,7 +10,7 @@ import (
 )
 
 func init() {
-	Register("claude", func(s config.HarnessSettings) (Harness, error) {
+	Register(config.HarnessClaude, func(s config.HarnessSettings) (Harness, error) {
 		return &Claude{source: s.Source}, nil
 	})
 }
@@ -21,7 +21,7 @@ type Claude struct {
 	source string
 }
 
-func (c *Claude) Name() string      { return "claude" }
+func (c *Claude) Name() string      { return config.HarnessClaude }
 func (c *Claude) SourceDir() string { return c.source }
 
 func (c *Claude) WeekFiles(start, end time.Time) ([]string, error) {

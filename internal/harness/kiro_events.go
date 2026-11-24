@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/micahhausler/recall/internal/config"
 	"github.com/micahhausler/recall/internal/events"
 )
 
@@ -124,7 +125,7 @@ type kiroParser struct {
 }
 
 func (p *kiroParser) event(kind events.Kind, role, ts string) events.Event {
-	return events.Event{Harness: "kiro", Host: p.host, Session: p.session, Timestamp: ts,
+	return events.Event{Harness: config.HarnessKiro, Host: p.host, Session: p.session, Timestamp: ts,
 		Kind: kind, Role: role}
 }
 

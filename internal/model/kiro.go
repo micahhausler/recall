@@ -11,10 +11,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/micahhausler/recall/internal/config"
 )
 
 func init() {
-	Register("kiro", func() Runner { return &Kiro{} })
+	Register(config.HarnessKiro, func() Runner { return &Kiro{} })
 }
 
 // Kiro runs Kiro CLI headless: `kiro-cli chat --no-interactive
