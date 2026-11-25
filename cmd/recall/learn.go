@@ -438,6 +438,19 @@ type mapRun struct {
 	// rules, their observations already cached.
 	mapped, judged, cached, skipped, failed, partial, streak int
 	cancel                                                   context.CancelFunc
+	// done of total sessions are finished; progress, when set, hears each
+	// one, outside mu.
+	done, total int
+	progress    func(done, total int)
+}
+
+// step is the progress prefix of a session's line: how many of the pass's
+// sessions are finished, this one included. Called under mu.
+func (r *mapRun) step() string {
+	if r.total == 0 {
+		return ""
+	}
+	return fmt.Sprintf("[%d/%d] ", r.done, r.total)
 }
 
 // inWindow reports whether any of a session's events fall at or after
@@ -508,7 +521,17 @@ func (r *mapRun) dryRun(ctx context.Context, j mapJob) {
 func (r *mapRun) work(ctx context.Context, j mapJob) {
 	res, err := j.m.MapSession(ctx, j.harness, j.session, j.evs)
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.done++
+	done := r.done
+	r.record(ctx, j, res, err)
+	r.mu.Unlock()
+	if r.progress != nil && ctx.Err() == nil {
+		r.progress(done, r.total)
+	}
+}
+
+// record counts and reports one mapped session. Called under mu.
+func (r *mapRun) record(ctx context.Context, j mapJob, res *learn.Mapped, err error) {
 	if err != nil {
 		if ctx.Err() != nil {
 			return // stopped on purpose; not this session's failure
@@ -538,11 +561,11 @@ func (r *mapRun) work(ctx context.Context, j mapJob) {
 			note = fmt.Sprintf("; %s: read the first %d of %d prompts", p.Reason, p.Prompts, p.Of)
 			r.partial++
 		}
-		fmt.Printf("observed %s: %d observation(s), %d rule hit(s) (%s%s)\n",
-			j.label, len(res.Observations.Observations), hits, res.Usage, note)
+		fmt.Printf("%sobserved %s: %d observation(s), %d rule hit(s) (%s%s)\n",
+			r.step(), j.label, len(res.Observations.Observations), hits, res.Usage, note)
 	case res.Judged:
 		r.judged++
-		fmt.Printf("judged %s: %d rule hit(s) (%s)\n", j.label, hits, res.Usage)
+		fmt.Printf("%sjudged %s: %d rule hit(s) (%s)\n", r.step(), j.label, hits, res.Usage)
 	default:
 		r.cached++
 	}
@@ -583,35 +606,63 @@ feed:
 // once a day, while a map run by hand (nil) always scans.
 func learnMap(ctx context.Context, env *archiveEnv, runner model.Runner, since string, limit int, dryRun, fromArchives bool,
 	idle time.Duration, evidenceGate func(name string) bool) int {
-	cutoffTime, err := parseSince(since, env.clk.Now())
+	p, err := planMap(ctx, env, runner, since, limit, fromArchives, idle)
 	if err != nil {
 		return fail(err)
 	}
+	if dryRun {
+		return p.dryRun(ctx)
+	}
+	return p.execute(ctx, evidenceGate, nil)
+}
+
+// mapPass is one learn map pass, planned: the sessions it would read and
+// what it reads beside them, before any model call.
+type mapPass struct {
+	env          *archiveEnv
+	st           store.Store
+	repos        []learn.Repo
+	run          *mapRun
+	mappers      []*learn.Mapper
+	jobs         []mapJob
+	notes        []harness.Memory
+	noteHarness  map[string]string
+	cutoffTime   time.Time
+	fromArchives bool
+}
+
+// planMap lists the sessions a map over since would read, calling no model.
+func planMap(ctx context.Context, env *archiveEnv, runner model.Runner, since string, limit int, fromArchives bool,
+	idle time.Duration) (*mapPass, error) {
+	cutoffTime, err := parseSince(since, env.clk.Now())
+	if err != nil {
+		return nil, err
+	}
 	l := env.settings.Learn
 	if err := model.Check(runner, model.Call{Model: l.MapModel, Effort: l.MapEffort}); err != nil {
-		return fail(fmt.Errorf("learn.map_effort: %w", err))
+		return nil, fmt.Errorf("learn.map_effort: %w", err)
 	}
 	cutoff := cutoffTime.UTC().Format("2006-01-02T15:04:05Z")
 	allWindow := cutoffTime.IsZero() // --since all
 	undatedSkipped := 0
 	st, _, err := openStore(ctx, env)
 	if err != nil {
-		return fail(err)
+		return nil, err
 	}
 	// The store's ledger first, so the rule ids this host shows the model
 	// are the reducer's, whichever host this is. A map only shows rules, so
 	// a failure folding other hosts' reviews degrades to a warning.
 	ledger, err := syncedLedger(ctx, env, st, false)
 	if err != nil {
-		return fail(err)
+		return nil, err
 	}
 	repos, err := loadRepos(ctx, env)
 	if err != nil {
-		return fail(err)
+		return nil, err
 	}
 	scoping := &learn.Scoping{Repos: repos, Home: env.home}
-	run := &mapRun{}
-	var mappers []*learn.Mapper
+	p := &mapPass{env: env, st: st, repos: repos, run: &mapRun{}, cutoffTime: cutoffTime, fromArchives: fromArchives,
+		noteHarness: map[string]string{}}
 	mapper := func(host string, h harness.Harness) *learn.Mapper {
 		m := &learn.Mapper{
 			Store: st, Runner: runner, Model: env.settings.Learn.MapModel, Effort: env.settings.Learn.MapEffort,
@@ -623,15 +674,14 @@ func learnMap(ctx context.Context, env *archiveEnv, runner model.Runner, since s
 			// an events harness's ran elsewhere.
 			m.Home, m.Locate = env.home, learn.LocateCheckout(env.home)
 		}
-		mappers = append(mappers, m)
+		p.mappers = append(p.mappers, m)
 		return m
 	}
-	var jobs []mapJob
 	for _, h := range env.harnesses {
 		m := mapper(env.settings.Host, h)
 		sessions, err := h.Sessions()
 		if err != nil {
-			return fail(err)
+			return nil, err
 		}
 		// Sessions still on disk read from disk; the archives fill in only
 		// this host's sessions that are gone (dedupe by session id).
@@ -656,63 +706,91 @@ func learnMap(ctx context.Context, env *archiveEnv, runner model.Runner, since s
 			evs, err := h.ReadSessionFile(s, env.settings.Host)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "recall: %s: %v (skipped)\n", s, err)
-				run.skipped++
+				p.run.skipped++
 				continue
 			}
 			if takeSession(evs, cutoff, allWindow, &undatedSkipped) {
 				session, _ := h.SessionID(s)
-				jobs = append(jobs, newJob(m, h.Name(), session, evs))
+				p.jobs = append(p.jobs, newJob(m, h.Name(), session, evs))
 			}
 		}
 		if fromArchives {
 			archived, err := archiveJobs(ctx, env, st, h, cutoffTime, cutoff,
 				func(host string) *learn.Mapper { return mapper(host, h) }, onDisk, &undatedSkipped)
 			if err != nil {
-				return fail(err)
+				return nil, err
 			}
-			jobs = append(jobs, archived...)
+			p.jobs = append(p.jobs, archived...)
 		}
 	}
 	if undatedSkipped > 0 {
 		fmt.Fprintf(os.Stderr, "recall: warning: %d session(s) whose events carry no timestamps were skipped, since a bounded window can't place them; `recall learn map --since all` reads them\n", undatedSkipped)
 	}
-	if limit > 0 && len(jobs) > limit {
-		jobs = jobs[:limit]
+	if limit > 0 && len(p.jobs) > limit {
+		p.jobs = p.jobs[:limit]
 	}
 	// Each harness's own memory notes are evidence too, and reading them
 	// calls no model.
-	var notes []harness.Memory
-	noteHarness := map[string]string{}
 	for _, h := range env.harnesses {
 		mems, err := h.Memories()
 		if err != nil {
-			return fail(err)
+			return nil, err
 		}
 		for _, m := range mems {
-			noteHarness[m.Path] = h.Name()
+			p.noteHarness[m.Path] = h.Name()
 		}
-		notes = append(notes, mems...)
+		p.notes = append(p.notes, mems...)
 	}
-	if dryRun {
-		for _, j := range jobs {
-			run.dryRun(ctx, j)
+	return p, nil
+}
+
+// calls counts the model calls the pass would make: sessions to observe,
+// and sessions already observed that only need judging against rules.
+func (p *mapPass) calls(ctx context.Context) (observe, judge int) {
+	for _, j := range p.jobs {
+		o, jd, err := j.m.WouldCall(ctx, j.harness, j.session, j.evs)
+		switch {
+		case err != nil:
+		case o:
+			observe++
+		case jd:
+			judge++
 		}
-		if len(notes) > 0 {
-			fmt.Printf("map --dry-run: %d native memory note(s) would be read, with no model call\n", len(notes))
-		}
-		if srcs := env.settings.Learn.Evidence; len(srcs) > 0 {
-			fmt.Printf("map --dry-run: evidence source(s) %s would be read, with no model call\n", strings.Join(srcs, ", "))
-		}
-		fmt.Printf("map --dry-run: %d session(s) would be observed and %d judged against rules they haven't seen; %d are cached or have no prompts\n",
-			run.mapped, run.judged, run.cached)
-		return 0
 	}
-	run.runAll(ctx, jobs, env.settings.Learn.MapWorkers)
+	return observe, judge
+}
+
+// dryRun prints what the pass would do and what it would cost.
+func (p *mapPass) dryRun(ctx context.Context) int {
+	run := p.run
+	for _, j := range p.jobs {
+		run.dryRun(ctx, j)
+	}
+	if len(p.notes) > 0 {
+		fmt.Printf("map --dry-run: %d native memory note(s) would be read, with no model call\n", len(p.notes))
+	}
+	if srcs := p.env.settings.Learn.Evidence; len(srcs) > 0 {
+		fmt.Printf("map --dry-run: evidence source(s) %s would be read, with no model call\n", strings.Join(srcs, ", "))
+	}
+	fmt.Printf("map --dry-run: %d session(s) would be observed and %d judged against rules they haven't seen; %d are cached or have no prompts\n",
+		run.mapped, run.judged, run.cached)
+	if n := run.mapped + run.judged; n > 0 {
+		fmt.Printf("map --dry-run: %s\n", mapEstimate(p.env.settings, n))
+	}
+	return 0
+}
+
+// execute runs the pass. progress, when set, is called after each session
+// with how many of the pass's sessions are done.
+func (p *mapPass) execute(ctx context.Context, evidenceGate func(name string) bool, progress func(done, total int)) int {
+	env, st, run := p.env, p.st, p.run
+	run.total, run.progress = len(p.jobs), progress
+	run.runAll(ctx, p.jobs, env.settings.Learn.MapWorkers)
 	added := 0
 	for _, h := range env.harnesses {
 		var mine []harness.Memory
-		for _, m := range notes {
-			if noteHarness[m.Path] == h.Name() {
+		for _, m := range p.notes {
+			if p.noteHarness[m.Path] == h.Name() {
 				mine = append(mine, m)
 			}
 		}
@@ -722,8 +800,8 @@ func learnMap(ctx context.Context, env *archiveEnv, runner model.Runner, since s
 		}
 		added += n
 	}
-	if len(notes) > 0 {
-		fmt.Printf("memory: %d native note(s) read, %d new or changed\n", len(notes), added)
+	if len(p.notes) > 0 {
+		fmt.Printf("memory: %d native note(s) read, %d new or changed\n", len(p.notes), added)
 	}
 	// Evidence from outside the chat: review comments and failed checks on
 	// agent-authored changes, read with no model call. A source that can't
@@ -732,13 +810,13 @@ func learnMap(ctx context.Context, env *archiveEnv, runner model.Runner, since s
 		if evidenceGate != nil && !evidenceGate(name) {
 			continue
 		}
-		src, err := evidence.Open(name, evidence.Options{Repos: evidenceRepos(repos), Trailer: env.settings.Learn.EvidenceTrailer, Credentials: env.credentials()})
+		src, err := evidence.Open(name, evidence.Options{Repos: evidenceRepos(p.repos), Trailer: env.settings.Learn.EvidenceTrailer, Credentials: env.credentials()})
 		if err != nil {
 			return fail(err)
 		}
 		// A source may answer partially: items from the repos that worked,
 		// plus an error for the ones that didn't. The items still count.
-		items, err := src.Items(ctx, cutoffTime)
+		items, err := src.Items(ctx, p.cutoffTime)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "recall: warning: evidence %s: %v\n", name, err)
 			if len(items) == 0 {
@@ -752,7 +830,7 @@ func learnMap(ctx context.Context, env *archiveEnv, runner model.Runner, since s
 		fmt.Printf("evidence %s: %d item(s) read, %d new or changed pull request(s)\n", name, len(items), n)
 	}
 	var usage model.Usage
-	for _, m := range mappers {
+	for _, m := range p.mappers {
 		usage = usage.Add(m.Usage)
 	}
 	fmt.Printf("map: %d observed, %d cached", run.mapped, run.cached)
@@ -772,13 +850,35 @@ func learnMap(ctx context.Context, env *archiveEnv, runner model.Runner, since s
 		fmt.Printf(" (%s)", usage)
 	}
 	fmt.Println()
-	if !fromArchives {
+	if !p.fromArchives {
 		warnUnobservedHosts(ctx, env, st)
 	}
 	if run.failed > 0 {
 		return 1
 	}
 	return 0
+}
+
+// mapCallSeconds is about how long one headless map call takes.
+const mapCallSeconds = 10
+
+// mapEstimate says what n map calls cost and how long they take at
+// learn.map_workers at once.
+func mapEstimate(s *config.Settings, n int) string {
+	workers := max(s.Learn.MapWorkers, 1)
+	minutes := max((n+workers-1)/workers*mapCallSeconds/60, 1)
+	per, unit := config.MapCost(s.Learn.Runner)
+	if per == 0 {
+		return fmt.Sprintf("%d map call(s), about %d minute(s) at %d at a time", n, minutes, workers)
+	}
+	total := fmt.Sprintf("$%.2f", per*float64(n))
+	each := fmt.Sprintf("$%.2f", per)
+	if unit != "" {
+		total = fmt.Sprintf("%.1f %s", per*float64(n), unit)
+		each = fmt.Sprintf("%.1f %s", per, unit)
+	}
+	return fmt.Sprintf("%d map call(s), about %s (%s each on %s) and %d minute(s) at %d at a time",
+		n, total, each, s.Learn.MapModel, minutes, workers)
 }
 
 // archiveJobs reads archived sessions from the store, for weeks that overlap

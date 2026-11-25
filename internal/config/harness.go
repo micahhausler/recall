@@ -55,6 +55,10 @@ type harnessDefaults struct {
 	mapModel, reduceModel, applyModel string
 	// efforts are the levels its CLI's --effort takes, lowest first.
 	efforts []string
+	// mapCost is about what one map call costs through its CLI on the
+	// default map model, in costUnit, or in dollars when that is empty.
+	mapCost  float64
+	costUnit string
 	// hookRunsLoop says its session-end hook can start the detached worker
 	// that runs the loop. Without one, recur jobs run the loop instead.
 	hookRunsLoop bool
@@ -82,6 +86,7 @@ var harnesses = []harnessDefaults{
 		reduceModel:    "opus",
 		applyModel:     "sonnet",
 		efforts:        []string{"low", "medium", "high", "xhigh", "max"},
+		mapCost:        0.03,
 		hookRunsLoop:   true,
 		loadsRepoNotes: true,
 	},
@@ -98,7 +103,9 @@ var harnesses = []harnessDefaults{
 		reduceModel: "auto",
 		applyModel:  "auto",
 		// GPT models also take none.
-		efforts: []string{"none", "low", "medium", "high", "xhigh", "max"},
+		efforts:  []string{"none", "low", "medium", "high", "xhigh", "max"},
+		mapCost:  0.1,
+		costUnit: "credits",
 		// Kiro's session-end hook kills every process it starts, the
 		// detached worker included. recall installs no session-start hook
 		// for Kiro, so it loads no repo notes.
@@ -141,6 +148,14 @@ func under(home string, rel []string) string {
 		return ""
 	}
 	return filepath.Join(append([]string{home}, rel...)...)
+}
+
+// MapCost is about what one map call costs through the named runner's CLI,
+// in unit, or in dollars when unit is empty; 0 for a runner recall has no
+// figure for.
+func MapCost(runner string) (per float64, unit string) {
+	h, _ := defaultsFor(runner)
+	return h.mapCost, h.costUnit
 }
 
 // PrimaryHarness is the enabled harness whose CLI and home the loop's

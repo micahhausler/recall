@@ -10,7 +10,8 @@ For a machine that needs none of the choices below, offer the short path first: 
 Init turns the weekly reduce (`hooks.learn_every`) on only for the first machine on a store; a later machine sees the first's claim under `learn/reducer` in the store and leaves the reduce to it.
 Pin the `host` key in a drop-in under `~/.config/recall/config.d/` on every machine before its first init: the reducer claim and every archive key use that name, and macOS hostnames drift after a name clash on the network.
 If the claim names a machine that is retired, reimaged, or renamed, `recall learn reducer --take` moves it to this one.
-If I take the short path, skip to step 5's first map, and review with `recall learn reviews` and a merge of each `learn-<date>` branch.
+Init ends by offering to map the last 30 days now, and on the store's reducer to reduce and apply right after; a shell with no input declines it, so run `recall learn map --since 30d --dry-run` first, say the estimate it prints, and on my yes run `recall init --backfill yes`, or `recall init --backfill no` to skip it.
+If I take the short path, skip to step 5's first map unless the backfill ran, and review with `recall learn reviews` and a merge of each `learn-<date>` branch.
 
 1. **Binary.** Run `recall --version`.
    If it's missing, offer, in order: Homebrew when `brew` is installed (`brew tap micahhausler/recall https://github.com/micahhausler/recall`, then `brew install --cask recall`); `go install github.com/micahhausler/recall/cmd/recall@latest` when Go is installed; otherwise the release archive for this OS and architecture from the repo's releases page, checked against `checksums.txt`, with `recall` put on PATH.

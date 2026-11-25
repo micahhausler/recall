@@ -180,6 +180,7 @@ Session end does nothing until `recall init` turns its steps on under `[hooks]`,
 - **A failing step waits a day,** so a reduce that keeps failing can't become a paid model call per session.
 - **No recursion.** Every harness run recall starts carries `RECALL_HOOK=1`, and recall's hooks do nothing when they see it.
 - **One reducer per store.** A reduce on every machine would send duplicate proposals, so the first `recall init` claims the store. `recall learn reducer --take` moves the claim.
+- **Init backfills on request.** `recall init` offers to map the last 30 days at once, under the worker's lock, with the map calls and their cost shown before it asks. On the store's reducer the reduce and apply follow, and the learn step counts as run, so the hook's next reduce is `hooks.learn_every` days out. Another machine maps only.
 - **Kiro's session-end hook can't run the loop.** It fires when an interactive session exits, but Kiro kills every process the hook started, detached or not, so the worker never finishes. With `harness.claude` off, `recall init` declares the same three steps as recur jobs, and copies its `PATH` into `recur.env` so the scheduler finds `recall` and `kiro-cli`.
 
 ## Why apply is a separate stage
