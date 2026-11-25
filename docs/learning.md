@@ -68,13 +68,16 @@ A small model then reads the session and records corrections, repeated context, 
 
 ## Report: what recall noticed
 
-`recall learn report` shows the owner what the map found, before any proposal and with no model call.
+`recall learn report` shows the owner what the map found and how the rules they already have fare, before any proposal and with no model call.
 It groups the window's observations the way the reduce does, on a copy of the candidate ledger, so a lesson keeps the candidate id a reduce gave it and the report saves nothing.
 
 - **A finding is a lesson two or more sessions showed.** Each gives its session count, the days it spans, and the newest quote the binary found in the owner's own prompts.
 - **The owner's words rank first.** Findings with more owner-typed sessions come first, then more sessions.
 - **Only the owner's sessions count.** Native memory notes, outside evidence, and counted repeats stay out.
 - **A cited lesson says what became of it:** proposed, waiting for review, merged, or closed.
+- **The report card scores the rules already on the ledger.** The map judges every session against the rules in force when it ran (`hits/`), so each rule shows as broken, followed, or never relevant, with how many sessions were judged against it, how many it mattered in, and how many followed or broke it.
+  A session judged more than once counts once, at its worst, and a hit on a wording the rule has since replaced doesn't count.
+  A rule never relevant for `learn.retire_days` is the one aging proposes to retire.
 - **The backfill prints it twice.** `recall init`'s backfill shows the findings so far halfway through the map, and the full report once the map, and on the reducer the reduce and apply, finish.
 
 ## Reduce: one weekly pass

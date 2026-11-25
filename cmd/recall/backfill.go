@@ -112,8 +112,8 @@ func initBackfill(ctx context.Context, env *archiveEnv, in io.Reader, mode strin
 	if r, err := buildReport(ctx, env, since); err != nil {
 		fmt.Fprintf(os.Stderr, "recall: report: %v\n", err)
 	} else {
-		r.WriteFindings(os.Stdout, 10)
-		fmt.Println("recall learn report shows this again any time.")
+		r.Write(os.Stdout, 10)
+		fmt.Println("\nrecall learn report shows this again any time.")
 	}
 	return true
 }

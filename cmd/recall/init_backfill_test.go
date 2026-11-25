@@ -14,8 +14,9 @@ import (
 )
 
 // initRunner stands in for the harness CLI during init: the map observes
-// the go vet correction with the owner's words and judges every rule it
-// is shown as followed, and the reduce proposes a rule citing the first
+// the go vet correction with the owner's words and judges the rules it is
+// shown (the force push rule broken where the owner pushed, the commit
+// subject rule never relevant, the rest followed), and the reduce proposes a rule citing the first
 // candidate it reads.
 type initRunner struct {
 	mu    sync.Mutex
@@ -55,7 +56,17 @@ func (r *initRunner) Run(ctx context.Context, _ model.Call, input string) (strin
 	}
 	if _, rules, ok := strings.Cut(input, "# CURRENT RULES"); ok {
 		for _, line := range strings.Split(rules, "\n") {
-			if id, _, ok := strings.Cut(strings.TrimPrefix(line, "Rule["), "]"); ok && strings.HasPrefix(line, "Rule[") {
+			id, text, ok := strings.Cut(strings.TrimPrefix(line, "Rule["), "]")
+			if !ok || !strings.HasPrefix(line, "Rule[") {
+				continue
+			}
+			switch {
+			case strings.Contains(text, "commit subjects"):
+				// never comes up
+			case strings.Contains(text, "force push") && strings.Contains(input, "then push"):
+				out = append(out, "Rule["+id+"]: violated - pushed without asking")
+			case strings.Contains(text, "force push"):
+			default:
 				out = append(out, "Rule["+id+"]: followed")
 			}
 		}
@@ -87,7 +98,7 @@ func newInitHome(t *testing.T, sessions map[string]string) *initHome {
 	if err := os.MkdirAll(filepath.Join(dot, "projects", "p"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	rules := "# Rules\n\n- Ask before any force push.\n- Keep commit subjects under 72 characters.\n"
+	rules := "# Rules\n\n- Ask before any force push.\n- Keep commit subjects under 72 characters.\n- Run the tests before committing.\n"
 	if err := os.WriteFile(filepath.Join(dot, "CLAUDE.md"), []byte(rules), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -188,6 +199,7 @@ var vetSessions = map[string]string{
 func TestInitBackfillMapsAndReduces(t *testing.T) {
 	h := newInitHome(t, vetSessions)
 	out := h.runInit(t, "y\n")
+	t.Log(out)
 	for _, want := range []string{
 		"backfill: 6 session(s) from the last 30 days are unmapped; mapping them is 6 map call(s), about $0.18",
 		"this machine is the store's reducer",
@@ -206,6 +218,10 @@ func TestInitBackfillMapsAndReduces(t *testing.T) {
 		`proposed 20`,
 		`as "Run go vet before done", waiting for review`,
 		"recall learn report shows this again any time.",
+		"Your rules, by what the same sessions show (3):",
+		"  broken (1):\n    r-0001 ~/.claude/CLAUDE.md: Ask before any force push.\n      broken in 1, followed in 0, of 1 relevant session(s)\n",
+		"  followed (1):\n    r-0003 ~/.claude/CLAUDE.md: Run the tests before committing.\n      followed in 6 of 6 relevant session(s)\n",
+		"  never relevant (1):\n    r-0002 ~/.claude/CLAUDE.md: Keep commit subjects under 72 characters.\n      relevant in none of 6 judged session(s)\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("init output misses %q:\n%s", want, out)

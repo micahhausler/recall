@@ -40,17 +40,139 @@ type Report struct {
 	// sessions first; Once counts the lessons only one session showed.
 	Findings []Finding
 	Once     int
+	// Rules is the report card: every rule on the ledger with what the
+	// window's rule hits say about it. Home shortens their paths.
+	Rules []RuleCard
+	Home  string
+}
+
+// RuleCard is one rule's record over a report's window, in its current
+// wording: how many sessions were judged against it, how many it mattered
+// in, and how many of those followed it or broke it.
+type RuleCard struct {
+	Rule
+	Judged, Relevant, Followed, Broken int
+}
+
+// Standing sorts a rule into the report card's groups.
+func (c RuleCard) Standing() string {
+	switch {
+	case c.Broken > 0:
+		return "broken"
+	case c.Relevant > 0:
+		return "followed"
+	case c.Judged > 0:
+		return "never relevant"
+	default:
+		return "not judged yet"
+	}
+}
+
+// standings are the report card's groups, in the order it prints them.
+var standings = []string{"broken", "followed", "never relevant", "not judged yet"}
+
+// RuleCards scores each rule against the rule hits of the window's
+// sessions: a session judged against a rule's current wording counts once,
+// at its worst (broken over followed over relevant). A hit on a wording
+// the rule has since replaced doesn't count, the way aging reads a rule as
+// it reads now.
+func RuleCards(rules []Rule, observed []SessionObservations, judged []SessionHits, cutoff string) []RuleCard {
+	const (
+		seen = iota + 1
+		relevant
+		followed
+		broken
+	)
+	rank := map[string]int{"relevant": relevant, "followed": followed, "violated": broken}
+	worst := map[string]map[string]int{} // rule id -> session -> rank
+	mark := func(id, session string, r int) {
+		if worst[id] == nil {
+			worst[id] = map[string]int{}
+		}
+		if r > worst[id][session] {
+			worst[id][session] = r
+		}
+	}
+	current := map[string]string{}
+	for _, r := range rules {
+		current[r.ID] = r.TextHash
+	}
+	wording := func(id, hash string) bool {
+		want, ok := current[id]
+		return ok && (hash == "" || hash == want)
+	}
+	for _, sh := range judged {
+		if sh.Day() < cutoff || sh.Refused {
+			continue
+		}
+		session := sh.Harness + "\x00" + sh.Host + "\x00" + sh.Session
+		for _, ref := range sh.Rules {
+			if wording(ref.ID, ref.TextHash) {
+				mark(ref.ID, session, seen)
+			}
+		}
+		for _, hit := range sh.Hits {
+			if wording(hit.ID, hit.TextHash) {
+				mark(hit.ID, session, rank[hit.Status])
+			}
+		}
+	}
+	for _, so := range observed { // judgments stored with the observations
+		if so.Day() < cutoff {
+			continue
+		}
+		session := so.Harness + "\x00" + so.Host + "\x00" + so.Session
+		for _, hit := range so.RuleHits {
+			if wording(hit.ID, hit.TextHash) {
+				mark(hit.ID, session, rank[hit.Status])
+			}
+		}
+	}
+	cards := make([]RuleCard, 0, len(rules))
+	for _, r := range rules {
+		c := RuleCard{Rule: r}
+		for _, rk := range worst[r.ID] {
+			c.Judged++
+			if rk >= relevant {
+				c.Relevant++
+			}
+			switch rk {
+			case followed:
+				c.Followed++
+			case broken:
+				c.Broken++
+			}
+		}
+		cards = append(cards, c)
+	}
+	sort.SliceStable(cards, func(i, j int) bool {
+		a, b := cards[i], cards[j]
+		if sa, sb := slices.Index(standings, a.Standing()), slices.Index(standings, b.Standing()); sa != sb {
+			return sa < sb
+		}
+		if a.Broken != b.Broken {
+			return a.Broken > b.Broken
+		}
+		return a.Relevant > b.Relevant
+	})
+	return cards
 }
 
 // maxQuote is how much of a quote a report shows.
 const maxQuote = 100
 
-// BuildReport groups the window's observations the way the reduce does,
+// BuildReport scores the ledger's rules against the window's rule hits,
+// and groups the window's observations the way the reduce does,
 // on a copy of the candidate ledger, so a finding keeps the id a reduce
 // gave it and nothing is saved. Native memory notes, outside evidence, and
 // counted repeats aren't the owner's words, so they stay out.
-func BuildReport(window []SessionObservations, cl *CandidateLedger, reviews []Review, cutoff, today string) Report {
+func BuildReport(window []SessionObservations, judged []SessionHits, ledger *Ledger, cl *CandidateLedger, cutoff, today string) Report {
 	r := Report{Cutoff: cutoff}
+	var reviews []Review
+	if ledger != nil {
+		reviews = ledger.Reviews
+		r.Rules = RuleCards(ledger.Rules, window, judged, cutoff)
+	}
 	var sessions []SessionObservations
 	for _, so := range window {
 		if so.Day() < cutoff || strings.HasPrefix(so.Session, "memory:") || strings.HasPrefix(so.Harness, "evidence-") {
@@ -153,6 +275,76 @@ func (r Report) WriteFindings(w io.Writer, limit int) {
 	if r.Once > 0 {
 		fmt.Fprintf(w, "  %d more lesson(s) showed up in one session each\n", r.Once)
 	}
+}
+
+// Write prints the findings, at most limit of them (0 for all), and then
+// the rule report card.
+func (r Report) Write(w io.Writer, limit int) {
+	r.WriteFindings(w, limit)
+	fmt.Fprintln(w)
+	r.WriteRules(w)
+}
+
+// WriteRules prints the rule report card, one group per standing.
+func (r Report) WriteRules(w io.Writer) {
+	if len(r.Rules) == 0 {
+		fmt.Fprintln(w, "Your rules: none on the ledger yet; recall learn rules sync reads them from learn.targets")
+		return
+	}
+	fmt.Fprintf(w, "Your rules, by what the same sessions show (%d):\n", len(r.Rules))
+	for _, standing := range standings {
+		var group []RuleCard
+		for _, c := range r.Rules {
+			if c.Standing() == standing {
+				group = append(group, c)
+			}
+		}
+		if len(group) == 0 {
+			continue
+		}
+		fmt.Fprintf(w, "  %s (%d):\n", standing, len(group))
+		for _, c := range group {
+			var record string
+			switch standing {
+			case "broken":
+				record = fmt.Sprintf("broken in %d, followed in %d, of %d relevant session(s)", c.Broken, c.Followed, c.Relevant)
+			case "followed":
+				record = fmt.Sprintf("followed in %d of %d relevant session(s)", c.Followed, c.Relevant)
+			case "never relevant":
+				record = fmt.Sprintf("relevant in none of %d judged session(s)", c.Judged)
+			default:
+				record = "no session in the window was judged against it"
+			}
+			where := ""
+			if c.Target != "" {
+				where = " " + tildeHome(c.Target, r.Home)
+			}
+			fmt.Fprintf(w, "    %s%s: %s\n      %s\n", c.ID, where, shorten(c.Text, 90), record)
+		}
+	}
+	if n := countStanding(r.Rules, "never relevant"); n > 0 {
+		fmt.Fprintf(w, "  A rule never relevant for learn.retire_days is proposed for retirement; recall learn age lists them.\n")
+	}
+}
+
+func countStanding(cards []RuleCard, standing string) int {
+	n := 0
+	for _, c := range cards {
+		if c.Standing() == standing {
+			n++
+		}
+	}
+	return n
+}
+
+// tildeHome writes a path under home with a leading ~.
+func tildeHome(path, home string) string {
+	if home != "" {
+		if rest, ok := strings.CutPrefix(path, home+"/"); ok {
+			return "~/" + rest
+		}
+	}
+	return path
 }
 
 // clone copies the ledger deeply enough that clustering the copy leaves

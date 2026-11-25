@@ -44,7 +44,9 @@ const learnUsage = `Usage:
         read them: alike observations grouped and counted, no model call
   recall learn report [--since 30d|all]
         say what recall noticed: the lessons the window's sessions repeat,
-        with session counts, dates, and your own words; no model call
+        with session counts, dates, and your own words, then a report card
+        of your rules: broken, followed, or never relevant, with counts;
+        no model call
   recall learn rules sync
         reconcile the rule ledger with the bullets in learn.targets and in the
         context files of each learn.repos checkout
@@ -1256,19 +1258,19 @@ func learnCandidates(ctx context.Context, env *archiveEnv) int {
 	return 0
 }
 
-// learnReport prints what recall noticed over since, from the observations
-// and ledgers it already stores; limit caps the findings shown (0 for all).
+// learnReport prints what recall noticed over since and the rule report
+// card, from the observations, rule hits, and ledgers it already stores; limit caps the findings shown (0 for all).
 func learnReport(ctx context.Context, env *archiveEnv, since string, limit int) int {
 	r, err := buildReport(ctx, env, since)
 	if err != nil {
 		return fail(err)
 	}
-	r.WriteFindings(os.Stdout, limit)
+	r.Write(os.Stdout, limit)
 	return 0
 }
 
 // buildReport reads what a report needs: every enabled harness's
-// observations, the candidate ledger, and the ledger's reviews.
+// observations and rule hits, the candidate ledger, and the rule ledger.
 func buildReport(ctx context.Context, env *archiveEnv, since string) (learn.Report, error) {
 	cutoffTime, err := parseSince(since, env.clk.Now())
 	if err != nil {
@@ -1287,18 +1289,26 @@ func buildReport(ctx context.Context, env *archiveEnv, since string) (learn.Repo
 		return learn.Report{}, err
 	}
 	var window []learn.SessionObservations
+	var judged []learn.SessionHits
 	for _, h := range env.harnesses {
 		w, err := learn.ListObservations(ctx, st, h.Name())
 		if err != nil {
 			return learn.Report{}, err
 		}
 		window = append(window, w...)
+		j, err := learn.ListHits(ctx, st, h.Name())
+		if err != nil {
+			return learn.Report{}, err
+		}
+		judged = append(judged, j...)
 	}
 	candidates, err := learn.LoadCandidates(env.settings.Learn.Candidates)
 	if err != nil {
 		return learn.Report{}, err
 	}
-	return learn.BuildReport(window, candidates, ledger.Reviews, cutoff, env.clk.Now().Format("2006-01-02")), nil
+	r := learn.BuildReport(window, judged, ledger, candidates, cutoff, env.clk.Now().Format("2006-01-02"))
+	r.Home = env.home
+	return r, nil
 }
 
 // learnReducer prints or moves the store's reduce claim. Without --take it

@@ -34,7 +34,7 @@ func TestBuildReport(t *testing.T) {
 			Observations: []Observation{{Category: "correction", Text: vet}}},
 	}
 	cl := &CandidateLedger{}
-	r := BuildReport(window, cl, nil, "2026-10-26", "2026-11-08")
+	r := BuildReport(window, nil, nil, cl, "2026-10-26", "2026-11-08")
 	if len(cl.Candidates) != 0 || len(cl.Assigned) != 0 {
 		t.Errorf("BuildReport changed the candidate ledger: %+v", cl)
 	}
@@ -81,7 +81,7 @@ func TestBuildReportProposalStatus(t *testing.T) {
 		review.Closed:  `proposed 2026-11-04 as "Run go vet", closed 2026-11-06`,
 	} {
 		reviews := []Review{{Proposed: "2026-11-04", Title: "Run go vet", Verdict: verdict, Decided: "2026-11-06"}}
-		r := BuildReport(window, cl, reviews, "2026-10-26", "2026-11-08")
+		r := BuildReport(window, nil, &Ledger{Reviews: reviews}, cl, "2026-10-26", "2026-11-08")
 		if len(r.Findings) != 1 || r.Findings[0].ID != "c-0001" || r.Findings[0].Status != want {
 			t.Errorf("%s: findings = %+v, want status %q", verdict, r.Findings, want)
 		}
@@ -111,5 +111,85 @@ func TestShorten(t *testing.T) {
 	}
 	if got := shorten(strings.Repeat("é", 20), 5); got != "éé…" {
 		t.Errorf("multibyte cut = %q", got)
+	}
+}
+
+func TestRuleCards(t *testing.T) {
+	rules := []Rule{
+		{ID: "r-0001", Target: "/home/you/.claude/CLAUDE.md", Text: "Ask before any force push.", TextHash: "h1"},
+		{ID: "r-0002", Text: "Keep commit subjects short.", TextHash: "h2"},
+		{ID: "r-0003", Text: "Run the tests.", TextHash: "h3", Supersedes: []Version{{TextHash: "h3-old"}}},
+		{ID: "r-0004", Text: "Added after every session ran.", TextHash: "h4"},
+	}
+	all := []RuleRef{{ID: "r-0001", TextHash: "h1"}, {ID: "r-0002", TextHash: "h2"}, {ID: "r-0003", TextHash: "h3"}}
+	sh := func(session, day string, hits ...RuleHit) SessionHits {
+		return SessionHits{Harness: "claude", Host: "laptop-a", Session: session, LastEvent: day + "T12:00:00Z", Rules: all, Hits: hits}
+	}
+	judged := []SessionHits{
+		sh("s1", "2026-11-01", RuleHit{ID: "r-0001", TextHash: "h1", Status: "followed"}, RuleHit{ID: "r-0003", TextHash: "h3", Status: "followed"}),
+		// Judged twice, once followed and once broken: the session counts once, broken.
+		sh("s2", "2026-11-02", RuleHit{ID: "r-0001", TextHash: "h1", Status: "followed"}),
+		sh("s2", "2026-11-02", RuleHit{ID: "r-0001", TextHash: "h1", Status: "violated"}),
+		sh("s3", "2026-11-03", RuleHit{ID: "r-0003", TextHash: "h3", Status: "relevant"}),
+		// A hit on a wording the rule replaced, a refused judgment, and one
+		// outside the window don't count.
+		sh("s4", "2026-11-04", RuleHit{ID: "r-0003", TextHash: "h3-old", Status: "violated"}),
+		{Harness: "claude", Session: "s5", LastEvent: "2026-11-05T00:00:00Z", Rules: all, Refused: true},
+		sh("s0", "2026-09-01", RuleHit{ID: "r-0002", TextHash: "h2", Status: "violated"}),
+	}
+	// A judgment stored with the observations still counts.
+	observed := []SessionObservations{{Harness: "claude", Host: "laptop-a", Session: "s6", LastEvent: "2026-11-06T00:00:00Z",
+		RuleHits: []RuleHit{{ID: "r-0003", TextHash: "h3", Status: "violated"}}}}
+
+	cards := RuleCards(rules, observed, judged, "2026-10-26")
+	got := map[string]RuleCard{}
+	var order []string
+	for _, c := range cards {
+		got[c.ID] = c
+		order = append(order, c.ID+" "+c.Standing())
+	}
+	want := "r-0003 broken,r-0001 broken,r-0002 never relevant,r-0004 not judged yet"
+	if strings.Join(order, ",") != want {
+		t.Errorf("order = %v, want %s", order, want)
+	}
+	for id, w := range map[string][4]int{
+		"r-0001": {4, 2, 1, 1}, // s1 followed, s2 broken, s3 and s4 seen
+		"r-0002": {4, 0, 0, 0}, // s1 to s4 judged, none relevant
+		"r-0003": {5, 3, 1, 1}, // s1 followed, s3 relevant, s6 broken, s2 and s4 seen
+		"r-0004": {0, 0, 0, 0},
+	} {
+		c := got[id]
+		if have := [4]int{c.Judged, c.Relevant, c.Followed, c.Broken}; have != w {
+			t.Errorf("%s judged, relevant, followed, broken = %v, want %v", id, have, w)
+		}
+	}
+
+	var b strings.Builder
+	Report{Rules: cards, Home: "/home/you"}.WriteRules(&b)
+	for _, want := range []string{
+		"Your rules, by what the same sessions show (4):",
+		"    r-0001 ~/.claude/CLAUDE.md: Ask before any force push.\n      broken in 1, followed in 1, of 2 relevant session(s)\n",
+		"  broken (2):\n    r-0003: Run the tests.\n      broken in 1, followed in 1, of 3 relevant session(s)\n",
+		"  never relevant (1):\n    r-0002: Keep commit subjects short.\n      relevant in none of 4 judged session(s)\n",
+		"  not judged yet (1):\n",
+		"recall learn age lists them",
+	} {
+		if !strings.Contains(b.String(), want) {
+			t.Errorf("report card misses %q:\n%s", want, b.String())
+		}
+	}
+	b.Reset()
+	Report{}.WriteRules(&b)
+	if !strings.Contains(b.String(), "none on the ledger yet") {
+		t.Errorf("empty card = %q", b.String())
+	}
+}
+
+func TestTildeHome(t *testing.T) {
+	if got := tildeHome("/home/you/.claude/CLAUDE.md", "/home/you"); got != "~/.claude/CLAUDE.md" {
+		t.Errorf("got %q", got)
+	}
+	if got := tildeHome("/srv/x.md", "/home/you"); got != "/srv/x.md" {
+		t.Errorf("got %q", got)
 	}
 }
