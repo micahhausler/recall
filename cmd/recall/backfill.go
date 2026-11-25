@@ -43,14 +43,15 @@ func initBackfill(ctx context.Context, env *archiveEnv, in io.Reader, mode strin
 		fmt.Printf("backfill: %v\n", err)
 		return false
 	}
-	p, err := planMap(ctx, env, runner, fmt.Sprintf("%dd", mapWindowDays), 0, false, 0)
+	since := fmt.Sprintf("%dd", mapWindowDays)
+	p, err := planMap(ctx, env, runner, since, 0, false, 0)
 	if err != nil {
 		fmt.Printf("backfill: %v\n", err)
 		return false
 	}
 	observe, judge := p.calls(ctx)
 	if observe+judge == 0 {
-		fmt.Printf("\nbackfill: no session from the last %d days needs mapping\n", mapWindowDays)
+		fmt.Printf("\nbackfill: no session from the last %d days needs mapping; recall learn report says what recall noticed\n", mapWindowDays)
 		return false
 	}
 	reduces := reducesHere(ctx, env)
@@ -84,7 +85,18 @@ func initBackfill(ctx context.Context, env *archiveEnv, in io.Reader, mode strin
 	}
 	defer release()
 	start := env.clk.Now()
-	if code := p.execute(ctx, nil, nil); code != 0 {
+	// Halfway through, a first look at what the map has found so far.
+	halfway := func(done, total int) {
+		if total < 4 || done != (total+1)/2 {
+			return
+		}
+		if r, err := buildReport(ctx, env, since); err == nil && len(r.Findings) > 0 {
+			fmt.Printf("\nbackfill: halfway there.\n")
+			r.WriteFindings(os.Stdout, 3)
+			fmt.Println()
+		}
+	}
+	if code := p.execute(ctx, nil, halfway); code != 0 {
 		fmt.Fprintln(os.Stderr, "recall: backfill: the map didn't finish; the session hook retries what it missed")
 	}
 	if reduces {
@@ -96,7 +108,13 @@ func initBackfill(ctx context.Context, env *archiveEnv, in io.Reader, mode strin
 			_ = hook.Touch(filepath.Join(dir, "hook-learn.stamp"), env.clk.Now())
 		}
 	}
-	fmt.Printf("backfill: done in %s\n", env.clk.Now().Sub(start).Round(time.Second))
+	fmt.Printf("backfill: done in %s\n\n", env.clk.Now().Sub(start).Round(time.Second))
+	if r, err := buildReport(ctx, env, since); err != nil {
+		fmt.Fprintf(os.Stderr, "recall: report: %v\n", err)
+	} else {
+		r.WriteFindings(os.Stdout, 10)
+		fmt.Println("recall learn report shows this again any time.")
+	}
 	return true
 }
 

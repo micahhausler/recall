@@ -66,6 +66,17 @@ A small model then reads the session and records corrections, repeated context, 
 - **Every machine maps its own sessions.** The reduce reads every host's observations from the shared store, so transcripts never move.
 - **A refused session is mapped as far as the model accepts,** and the same content is never retried on another model.
 
+## Report: what recall noticed
+
+`recall learn report` shows the owner what the map found, before any proposal and with no model call.
+It groups the window's observations the way the reduce does, on a copy of the candidate ledger, so a lesson keeps the candidate id a reduce gave it and the report saves nothing.
+
+- **A finding is a lesson two or more sessions showed.** Each gives its session count, the days it spans, and the newest quote the binary found in the owner's own prompts.
+- **The owner's words rank first.** Findings with more owner-typed sessions come first, then more sessions.
+- **Only the owner's sessions count.** Native memory notes, outside evidence, and counted repeats stay out.
+- **A cited lesson says what became of it:** proposed, waiting for review, merged, or closed.
+- **The backfill prints it twice.** `recall init`'s backfill shows the findings so far halfway through the map, and the full report once the map, and on the reducer the reduce and apply, finish.
+
 ## Reduce: one weekly pass
 
 Once a week, one model call reads the window's candidates, the targets, and the ledger.

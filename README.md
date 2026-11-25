@@ -43,6 +43,7 @@ recall runs in four steps:
 - **Propose:** stage each proposal as its own commit in a git worktree, never a live file, and send each changed repo to you for review as a pull request or a local branch.
 
 The model calls go through your harness's own command-line tool, so they use the login and billing you already have.
+`recall learn report` shows what the map found with no model call: each lesson your sessions repeat, with how many sessions, when, and a short quote of your own words.
 
 Read more: the [learning loop design](docs/learning.md), and [`config.example.toml`](config.example.toml) for every key.
 

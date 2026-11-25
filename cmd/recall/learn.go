@@ -42,6 +42,9 @@ const learnUsage = `Usage:
   recall learn candidates
         list the lessons the window's sessions showed, as the reduce will
         read them: alike observations grouped and counted, no model call
+  recall learn report [--since 30d|all]
+        say what recall noticed: the lessons the window's sessions repeat,
+        with session counts, dates, and your own words; no model call
   recall learn rules sync
         reconcile the rule ledger with the bullets in learn.targets and in the
         context files of each learn.repos checkout
@@ -87,7 +90,7 @@ const mapWindowDays = 30
 
 func cmdLearn(args []string) int {
 	fs := flag.NewFlagSet("learn", flag.ContinueOnError)
-	since := fs.String("since", fmt.Sprintf("%dd", mapWindowDays), "map: only sessions with events in this window")
+	since := fs.String("since", fmt.Sprintf("%dd", mapWindowDays), "map: only sessions with events in this window; report: the window it reports on")
 	limit := fs.Int("limit", 0, "map: at most this many sessions, newest first")
 	fromArchives := fs.Bool("archives", false, "map: also map other hosts' archived sessions from the store (downloads their weeks)")
 	idle := fs.Duration("idle", 0, "map: skip a session whose transcript changed more recently than this")
@@ -132,6 +135,8 @@ func cmdLearn(args []string) int {
 		return learnObservations(ctx, env, name)
 	case "candidates":
 		return learnCandidates(ctx, env)
+	case "report":
+		return learnReport(ctx, env, *since, 0)
 	case "rules-sync":
 		return learnRulesSync(ctx, env)
 	case "targets":
@@ -1249,6 +1254,51 @@ func learnCandidates(ctx context.Context, env *archiveEnv) int {
 	}
 	fmt.Print(r.CandidatesText(window))
 	return 0
+}
+
+// learnReport prints what recall noticed over since, from the observations
+// and ledgers it already stores; limit caps the findings shown (0 for all).
+func learnReport(ctx context.Context, env *archiveEnv, since string, limit int) int {
+	r, err := buildReport(ctx, env, since)
+	if err != nil {
+		return fail(err)
+	}
+	r.WriteFindings(os.Stdout, limit)
+	return 0
+}
+
+// buildReport reads what a report needs: every enabled harness's
+// observations, the candidate ledger, and the ledger's reviews.
+func buildReport(ctx context.Context, env *archiveEnv, since string) (learn.Report, error) {
+	cutoffTime, err := parseSince(since, env.clk.Now())
+	if err != nil {
+		return learn.Report{}, err
+	}
+	cutoff := ""
+	if !cutoffTime.IsZero() {
+		cutoff = cutoffTime.UTC().Format("2006-01-02")
+	}
+	st, _, err := openStore(ctx, env)
+	if err != nil {
+		return learn.Report{}, err
+	}
+	ledger, err := syncedLedger(ctx, env, st, false)
+	if err != nil {
+		return learn.Report{}, err
+	}
+	var window []learn.SessionObservations
+	for _, h := range env.harnesses {
+		w, err := learn.ListObservations(ctx, st, h.Name())
+		if err != nil {
+			return learn.Report{}, err
+		}
+		window = append(window, w...)
+	}
+	candidates, err := learn.LoadCandidates(env.settings.Learn.Candidates)
+	if err != nil {
+		return learn.Report{}, err
+	}
+	return learn.BuildReport(window, candidates, ledger.Reviews, cutoff, env.clk.Now().Format("2006-01-02")), nil
 }
 
 // learnReducer prints or moves the store's reduce claim. Without --take it

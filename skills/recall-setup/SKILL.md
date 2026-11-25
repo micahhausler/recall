@@ -31,7 +31,7 @@ If I take the short path, skip to step 5's first map unless the backfill ran, an
    `recall archive-chats info` should list this host's uploads.
 5. **Learning.** Confirm `learn.targets` points at my context files (`recall config get learn.targets`), then `recall learn rules sync` to put their bullets on the ledger.
    Offer a first map over every session on disk, which needs no download: `recall learn map --since all --dry-run` counts the sessions that would call the model; at about $0.03 each with the default sonnet map model (through Kiro, about 0.1 credits each), say the estimate and ask.
-   After it runs, show the cost it printed, then offer `recall learn reduce` for a first set of proposals, and say where they landed.
+   After it runs, show the cost it printed and what `recall learn report` says it noticed, then offer `recall learn reduce` for a first set of proposals, and say where they landed.
    Each machine maps its own sessions; the reduce reads every machine's observations from the store, and warns about a machine whose archives have none.
    `recall learn map --archives` also maps archived weeks from here, other machines' and this one's weeks whose transcripts are gone from disk, at the cost of downloading them; offer it when a machine can't run the map itself or history needs recomputing.
    The session hook runs the map after each session once `recall init` sets `hooks.map`; a weekly `recall learn map` job through the recur skill is the alternative, and the reduce is better run by hand until its proposals have earned trust.

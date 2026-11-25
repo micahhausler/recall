@@ -171,10 +171,14 @@ func (h *initHome) runInit(t *testing.T, answer string, args ...string) string {
 	return string(data)
 }
 
+// vetSessions has five sessions with the same correction and one without,
+// so halfway through any map order at least two of them are observed.
 var vetSessions = map[string]string{
 	"sess-a": "run go vet before you say it's done",
 	"sess-b": "again: run go vet before you say it's done",
 	"sess-c": "please run go vet before you say it's done, every time",
+	"sess-e": "you forgot again; run go vet before you say it's done",
+	"sess-f": "run go vet before you say it's done, then push",
 	"sess-d": "an unrelated question about the weather",
 }
 
@@ -185,15 +189,23 @@ func TestInitBackfillMapsAndReduces(t *testing.T) {
 	h := newInitHome(t, vetSessions)
 	out := h.runInit(t, "y\n")
 	for _, want := range []string{
-		"backfill: 4 session(s) from the last 30 days are unmapped; mapping them is 4 map call(s), about $0.12",
+		"backfill: 6 session(s) from the last 30 days are unmapped; mapping them is 6 map call(s), about $0.18",
 		"this machine is the store's reducer",
 		"Map them now? [Y/n]",
-		"/4] observed claude/",
-		"map: 4 observed",
+		"/6] observed claude/",
+		"map: 6 observed",
 		"proposals: ",
 		"apply: 1 change(s) for review",
 		"backfill: done in",
 		"2. The last 30 days are mapped",
+		"backfill: halfway there.",
+		"What recall noticed in 6 session(s) since ",
+		"  correction, in 5 sessions, ",
+		"    Run go vet before saying a change is done.",
+		`    you said: "run go vet before you say it's done"`,
+		`proposed 20`,
+		`as "Run go vet before done", waiting for review`,
+		"recall learn report shows this again any time.",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("init output misses %q:\n%s", want, out)
@@ -202,8 +214,8 @@ func TestInitBackfillMapsAndReduces(t *testing.T) {
 	if strings.Contains(out, "recall learn map --since 30d --dry-run") {
 		t.Errorf("init still printed the map commands after the backfill:\n%s", out)
 	}
-	if h.runner.maps != 4 {
-		t.Errorf("map calls = %d, want 4", h.runner.maps)
+	if h.runner.maps != 6 {
+		t.Errorf("map calls = %d, want 6", h.runner.maps)
 	}
 	// The reduce ran here, so the hook's next reduce is a period away.
 	if _, err := os.Stat(filepath.Join(h.home, ".local", "state", "recall", "hook-learn.stamp")); err != nil {
@@ -248,7 +260,7 @@ func TestInitBackfillFlag(t *testing.T) {
 
 	h = newInitHome(t, vetSessions)
 	out = h.runInit(t, "", "--backfill", "yes")
-	if strings.Contains(out, "Map them now?") || h.runner.maps != 4 {
+	if strings.Contains(out, "Map them now?") || h.runner.maps != 6 {
 		t.Errorf("--backfill yes asked or didn't map (%d calls):\n%s", h.runner.maps, out)
 	}
 
@@ -272,8 +284,8 @@ func TestInitBackfillMapsOnlyOffTheReducer(t *testing.T) {
 	if !strings.Contains(out, "another machine reduces for this store, so this one maps only") {
 		t.Errorf("no maps-only note:\n%s", out)
 	}
-	if h.runner.maps != 4 || h.runner.other != 0 {
-		t.Errorf("map calls %d, other calls %d; want 4 and 0", h.runner.maps, h.runner.other)
+	if h.runner.maps != 6 || h.runner.other != 0 {
+		t.Errorf("map calls %d, other calls %d; want 6 and 0", h.runner.maps, h.runner.other)
 	}
 	if strings.Contains(out, "proposals: ") {
 		t.Errorf("a non-reducer reduced:\n%s", out)
