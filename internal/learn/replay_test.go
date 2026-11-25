@@ -2,6 +2,7 @@ package learn
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,10 +51,10 @@ func addProposal(target string) string {
 // and each replay arm after, and returns it with the run directory.
 func replayReducer(t *testing.T, base, target string, fake *model.Fake) (*Reducer, string) {
 	t.Helper()
-	r := &Reducer{Runner: fake, Model: "opus", Ledger: &Ledger{}, Home: base,
+	r := &Reducer{Runner: fake, Model: "opus", Effort: "max", Ledger: &Ledger{}, Home: base,
 		Targets: []string{target},
 		Clock:   &clock.Fake{T: time.Date(2026, 11, 11, 0, 0, 0, 0, time.UTC)},
-		Replay:  &Replayer{Runner: fake, Model: "sonnet", Load: loadReplaySession},
+		Replay:  &Replayer{Runner: fake, Model: "sonnet", Effort: "high", Load: loadReplaySession},
 	}
 	return r, filepath.Join(base, "state", "2026-11-11")
 }
@@ -68,7 +69,7 @@ func TestReplayHoldsBackAddWithNoDifference(t *testing.T) {
 		addProposal(target),
 		"Next: reformat the file with spaces\nVerdict: avoids",
 		"Next: reformat the file with spaces\nVerdict: avoids",
-	}}
+	}, Usage: model.Usage{ModelID: "claude-full-id"}}
 	r, dir := replayReducer(t, base, target, fake)
 	path, _, err := r.Run(context.Background(), replayWindow(), dir)
 	if err != nil {
@@ -77,9 +78,21 @@ func TestReplayHoldsBackAddWithNoDifference(t *testing.T) {
 	if len(fake.Calls) != 3 {
 		t.Fatalf("calls = %d, want the reduce and the replay's two arms", len(fake.Calls))
 	}
+	var run ReduceRecord
+	if data, err := os.ReadFile(filepath.Join(dir, reduceFile)); err != nil || json.Unmarshal(data, &run) != nil ||
+		run != (ReduceRecord{Model: "opus", Effort: "max", ModelID: "claude-full-id",
+			ReplayModel: "sonnet", ReplayEffort: "high", ReplayModelID: "claude-full-id"}) {
+		t.Errorf("reduce.json = %+v (%v)", run, err)
+	}
+	if recs, err := LoadReplays(dir); err != nil || len(recs) != 1 || recs[0].ModelID != "claude-full-id" {
+		t.Errorf("replay records = %+v (%v), want the resolved model ID", recs, err)
+	}
+	if call := fake.Calls[0]; call.Model != "opus" || call.Effort != "max" {
+		t.Errorf("reduce ran on %q at %q, want the reducer's model and effort", call.Model, call.Effort)
+	}
 	for i, call := range fake.Calls[1:] {
-		if call.Model != "sonnet" {
-			t.Errorf("replay arm %d ran on %q, want the replayer's model", i, call.Model)
+		if call.Model != "sonnet" || call.Effort != "high" {
+			t.Errorf("replay arm %d ran on %q at %q, want the replayer's model and effort", i, call.Model, call.Effort)
 		}
 		if !strings.Contains(call.Input, "[owner] please format the sample config file") {
 			t.Errorf("replay arm %d misses the prefix prompt:\n%s", i, call.Input)

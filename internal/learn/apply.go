@@ -192,9 +192,12 @@ type Applier struct {
 	// Editor makes the edits with file tools confined to the worktrees.
 	// When it is nil, Runner answers with no tools, and the binary writes
 	// the files its answer returns (apply_text.go).
-	Editor    model.Editor
-	Runner    model.Runner
-	Model     string
+	Editor model.Editor
+	Runner model.Runner
+	Model  string
+	// Effort is the level the apply model runs at; empty for the harness
+	// default.
+	Effort    string
 	Publisher review.Publisher
 	// Public lists live paths shared publicly (keep.public).
 	Public []string
@@ -345,8 +348,13 @@ type Landed struct {
 }
 
 // ApplyResult is a finished apply, saved as apply.json beside proposals.md.
+// Model and Effort are what the apply asked for, and ModelID the model the
+// harness resolved.
 type ApplyResult struct {
 	Date     string      `json:"date"`
+	Model    string      `json:"model,omitempty"`
+	Effort   string      `json:"effort,omitempty"`
+	ModelID  string      `json:"model_id,omitempty"`
 	Changes  []Landed    `json:"changes"`
 	Outcomes []Outcome   `json:"outcomes"`
 	Usage    model.Usage `json:"-"`
@@ -1041,7 +1049,7 @@ func (s *settingsSession) reapply(ctx context.Context, plan *Plan, res *ApplyRes
 // It writes apply-input.md, apply.md (the model's output), and apply.json
 // (the result) into the plan's directory.
 func (a *Applier) Run(ctx context.Context, plan *Plan) (*ApplyResult, error) {
-	res := &ApplyResult{Date: plan.Date, Changes: []Landed{}}
+	res := &ApplyResult{Date: plan.Date, Model: a.Model, Effort: a.Effort, Changes: []Landed{}}
 	for _, r := range plan.Routes {
 		if r.Skip != "" {
 			res.Outcomes = append(res.Outcomes, Outcome{Kind: r.Kind, Title: r.Title, Route: r.ID, Detail: r.Skip})
@@ -1206,8 +1214,8 @@ func (a *Applier) runEditor(ctx context.Context, plan *Plan, wts []*review.Workt
 	if err := os.WriteFile(filepath.Join(plan.Dir, "apply-input.md"), []byte(input), 0o644); err != nil {
 		return nil, err
 	}
-	out, usage, err := a.Editor.Edit(ctx, a.Model, input, dirs)
-	res.Usage = usage
+	out, usage, err := a.Editor.Edit(ctx, a.call(), input, dirs)
+	res.Usage, res.ModelID = usage, usage.ModelID
 	if err != nil {
 		return nil, fmt.Errorf("apply model: %w", err)
 	}
@@ -1228,8 +1236,8 @@ func (a *Applier) runText(ctx context.Context, plan *Plan, wts []*review.Worktre
 	if err := os.WriteFile(filepath.Join(plan.Dir, "apply-input.md"), []byte(input), 0o644); err != nil {
 		return nil, err
 	}
-	out, usage, err := a.Runner.Run(ctx, a.Model, input)
-	res.Usage = usage
+	out, usage, err := a.Runner.Run(ctx, a.call(), input)
+	res.Usage, res.ModelID = usage, usage.ModelID
 	if err != nil {
 		return nil, fmt.Errorf("apply model: %w", err)
 	}
@@ -1771,3 +1779,6 @@ func (a *Applier) out() io.Writer {
 	}
 	return io.Discard
 }
+
+// call is the model and effort the apply runs.
+func (a *Applier) call() model.Call { return model.Call{Model: a.Model, Effort: a.Effort} }

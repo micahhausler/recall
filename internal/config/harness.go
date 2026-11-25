@@ -53,6 +53,8 @@ type harnessDefaults struct {
 	trailer string
 	// The models the loop asks its CLI for, by step.
 	mapModel, reduceModel, applyModel string
+	// efforts are the levels its CLI's --effort takes, lowest first.
+	efforts []string
 	// hookRunsLoop says its session-end hook can start the detached worker
 	// that runs the loop. Without one, recur jobs run the loop instead.
 	hookRunsLoop bool
@@ -75,6 +77,7 @@ var harnesses = []harnessDefaults{
 		mapModel:     "sonnet",
 		reduceModel:  "opus",
 		applyModel:   "sonnet",
+		efforts:      []string{"low", "medium", "high", "xhigh", "max"},
 		hookRunsLoop: true,
 	},
 	{
@@ -89,6 +92,8 @@ var harnesses = []harnessDefaults{
 		mapModel:    "auto",
 		reduceModel: "auto",
 		applyModel:  "auto",
+		// GPT models also take none.
+		efforts: []string{"none", "low", "medium", "high", "xhigh", "max"},
 		// Kiro's session-end hook kills every process it starts, the
 		// detached worker included.
 	},
@@ -113,6 +118,16 @@ func defaultsFor(name string) (harnessDefaults, bool) {
 		}
 	}
 	return harnessDefaults{}, false
+}
+
+// Efforts are the effort levels the named runner takes, lowest first; a
+// runner recall has no defaults for gets the first known harness's.
+func Efforts(runner string) []string {
+	h, ok := defaultsFor(runner)
+	if !ok {
+		h = harnesses[0]
+	}
+	return h.efforts
 }
 
 func under(home string, rel []string) string {

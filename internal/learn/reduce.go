@@ -2,6 +2,7 @@ package learn
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -24,6 +25,9 @@ type Reducer struct {
 	Gates
 	Runner model.Runner
 	Model  string
+	// Effort is the level the reduce model runs at; empty for the harness
+	// default.
+	Effort string
 	// RetireDays is the aging window, default 90.
 	RetireDays int
 	// WindowDays is how far back the reduce reads observations
@@ -258,10 +262,11 @@ func (r *Reducer) Run(ctx context.Context, window []SessionObservations, outDir 
 	open, used := r.clusters(window)
 	r.OpenCandidates = len(open)
 	input := r.buildInput(open, used)
-	out, usage, err := r.Runner.Run(ctx, r.Model, input)
+	out, usage, err := r.Runner.Run(ctx, model.Call{Model: r.Model, Effort: r.Effort}, input)
 	if err != nil {
 		return "", usage, err
 	}
+	run := ReduceRecord{Model: r.Model, Effort: r.Effort, ModelID: usage.ModelID}
 	// The reduce cites candidates; spell out the sessions behind each, and
 	// mark the cited candidates as used.
 	out = ExpandEvidence(out, open)
@@ -312,11 +317,39 @@ func (r *Reducer) Run(ctx context.Context, window []SessionObservations, outDir 
 		}
 		usage = usage.Add(r.Replay.Usage)
 	}
+	if r.Replay != nil {
+		run.ReplayModel, run.ReplayEffort, run.ReplayModelID = r.Replay.Model, r.Replay.Effort, r.Replay.Usage.ModelID
+	}
+	if err := run.save(outDir); err != nil {
+		return "", usage, err
+	}
 	proposals := filepath.Join(outDir, "proposals.md")
 	if err := os.WriteFile(proposals, []byte(out), 0o644); err != nil {
 		return "", usage, err
 	}
 	return proposals, usage, nil
+}
+
+// ReduceRecord is what answered a reduce run, saved as reduce.json beside
+// proposals.md: the model and effort each call asked for, and the model the
+// harness resolved, for the reduce and, with learn.replay on, its replays.
+type ReduceRecord struct {
+	Model         string `json:"model"`
+	Effort        string `json:"effort,omitempty"`
+	ModelID       string `json:"model_id,omitempty"`
+	ReplayModel   string `json:"replay_model,omitempty"`
+	ReplayEffort  string `json:"replay_effort,omitempty"`
+	ReplayModelID string `json:"replay_model_id,omitempty"`
+}
+
+const reduceFile = "reduce.json"
+
+func (rr ReduceRecord) save(dir string) error {
+	data, err := json.MarshalIndent(rr, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, reduceFile), append(data, '\n'), 0o644)
 }
 
 // A reduceFinding is one proposal a post-model check holds back: the title

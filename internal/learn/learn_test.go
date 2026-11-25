@@ -821,7 +821,7 @@ func TestNameCollisions(t *testing.T) {
 // refuser refuses any input containing a flagged word, like a safeguard.
 type refuser struct{ calls int }
 
-func (r *refuser) Run(ctx context.Context, model_, input string) (string, model.Usage, error) {
+func (r *refuser) Run(ctx context.Context, _ model.Call, input string) (string, model.Usage, error) {
 	r.calls++
 	if strings.Contains(input, "FLAGGED") {
 		return "", model.Usage{CostUSD: 0.01}, fmt.Errorf("claude -p: %w: flagged", model.ErrRefusal)

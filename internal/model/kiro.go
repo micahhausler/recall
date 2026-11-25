@@ -21,8 +21,10 @@ func init() {
 
 // Kiro runs Kiro CLI headless: `kiro-cli chat --no-interactive
 // --output-format stream-json --trust-tools= --agent recall-headless
-// --agent-engine v3 [--model <model>]` with the input on stdin, from a
-// scratch dir whose agent has no tools.
+// --agent-engine v3 [--model <model>] [--effort <level>]` with the input
+// on stdin, from a scratch dir whose agent has no tools. In the v3 engine
+// --effort holds for that session only and outranks the owner's saved
+// defaults.
 // Kiro saves every run as a session, so the runner deletes it afterward;
 // otherwise recall would read its own runs back as transcripts. The cleanup
 // deletes only the session the stream named, the one session known to be
@@ -78,10 +80,16 @@ const kiroAgent = `{
 // chat.agentEngine setting; the stream parser reads both engines.
 const kiroEngine = "v3"
 
-// Run sends input to model; an empty model or "auto" lets Kiro choose. It
-// runs in an empty scratch dir, never the caller's (under recur, $HOME),
-// holding only the agent file.
-func (k *Kiro) Run(ctx context.Context, model, input string) (string, Usage, error) {
+// Check refuses an effort level kiro-cli doesn't take.
+func (k *Kiro) Check(call Call) error { return validEffort(config.HarnessKiro, call.Effort) }
+
+// Run sends input to call's model; an empty model or "auto" lets Kiro
+// choose. It runs in an empty scratch dir, never the caller's (under recur,
+// $HOME), holding only the agent file.
+func (k *Kiro) Run(ctx context.Context, call Call, input string) (string, Usage, error) {
+	if err := k.Check(call); err != nil {
+		return "", Usage{}, err
+	}
 	command := k.command()
 	dir, err := os.MkdirTemp("", "recall-run-")
 	if err != nil {
@@ -97,8 +105,11 @@ func (k *Kiro) Run(ctx context.Context, model, input string) (string, Usage, err
 	}
 	args := []string{"chat", "--no-interactive", "--output-format", "stream-json", "--trust-tools=",
 		"--agent", kiroAgentName, "--agent-engine", kiroEngine}
-	if model != "" && model != "auto" {
-		args = append(args, "--model", model)
+	if call.Model != "" && call.Model != "auto" {
+		args = append(args, "--model", call.Model)
+	}
+	if call.Effort != "" {
+		args = append(args, "--effort", call.Effort)
 	}
 	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Dir = dir

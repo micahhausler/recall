@@ -14,7 +14,7 @@ import (
 // runnerFunc is a Runner whose answer depends on its input.
 type runnerFunc func(input string) (string, error)
 
-func (f runnerFunc) Run(_ context.Context, _, input string) (string, model.Usage, error) {
+func (f runnerFunc) Run(_ context.Context, _ model.Call, input string) (string, model.Usage, error) {
 	out, err := f(input)
 	return out, model.Usage{}, err
 }

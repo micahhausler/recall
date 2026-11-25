@@ -66,7 +66,7 @@ const scriptedProposal = `## Proposals
 - why: the owner asked for it
 `
 
-func (r *scriptedRunner) Run(ctx context.Context, modelName, input string) (string, model.Usage, error) {
+func (r *scriptedRunner) Run(ctx context.Context, _ model.Call, input string) (string, model.Usage, error) {
 	r.calls = append(r.calls, input)
 	if strings.Contains(input, "# CANDIDATES") {
 		if strings.Contains(input, "Candidate[") {

@@ -17,7 +17,7 @@ import (
 // shows, so two same-day runs propose different rules.
 type lessonRunner struct{}
 
-func (lessonRunner) Run(ctx context.Context, modelName, input string) (string, model.Usage, error) {
+func (lessonRunner) Run(ctx context.Context, _ model.Call, input string) (string, model.Usage, error) {
 	title, rule := "Run go vet before done", "Run go vet before saying a change is done."
 	if strings.Contains(input, "force push") {
 		title, rule = "Ask before a force push", "Ask the owner before any force push."
@@ -276,9 +276,9 @@ type textApplyRunner struct {
 	applyInputs *[]string
 }
 
-func (r textApplyRunner) Run(ctx context.Context, modelName, input string) (string, model.Usage, error) {
+func (r textApplyRunner) Run(ctx context.Context, call model.Call, input string) (string, model.Usage, error) {
 	if !strings.Contains(input, "\n# FILES\n") {
-		return r.lessonRunner.Run(ctx, modelName, input)
+		return r.lessonRunner.Run(ctx, call, input)
 	}
 	*r.applyInputs = append(*r.applyInputs, input)
 	var out []string
