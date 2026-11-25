@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/micahhausler/recall/internal/model"
 	"github.com/micahhausler/recall/internal/store"
 )
 
@@ -37,9 +38,14 @@ type SessionHits struct {
 	Session     string `json:"session"`
 	// Content is the hash of the rendered session that was judged, Prompt
 	// the hash of the rule-hit prompt; a judgment counts only for both.
-	Content    string  `json:"content"`
-	Prompt     string  `json:"prompt"`
+	Content string `json:"content"`
+	Prompt  string `json:"prompt"`
+	// Model is the map model as configured, Effort the level it ran at
+	// (empty for the harness default), and ModelID the model the harness
+	// resolved Model to, when it reports one.
 	Model      string  `json:"model"`
+	Effort     string  `json:"effort,omitempty"`
+	ModelID    string  `json:"model_id,omitempty"`
 	JudgedAt   string  `json:"judged_at"`
 	FirstEvent string  `json:"first_event,omitempty"`
 	LastEvent  string  `json:"last_event,omitempty"`
@@ -94,8 +100,8 @@ func hitsPrefix(harness, session string) string {
 }
 
 // HitsKey is where one judgment lives in the store.
-func HitsKey(harness, session, content, mapModel string, shown []RuleRef) string {
-	parts := []string{content, hitsPromptHash(), mapModel}
+func HitsKey(harness, session, content string, mapCall model.Call, shown []RuleRef) string {
+	parts := withEffort([]string{content, hitsPromptHash(), mapCall.Model}, mapCall.Effort)
 	for _, r := range shown {
 		parts = append(parts, r.ID+":"+r.TextHash)
 	}
@@ -103,8 +109,8 @@ func HitsKey(harness, session, content, mapModel string, shown []RuleRef) string
 }
 
 // priorHits loads the judgments already made of this session content with
-// this model and prompt.
-func priorHits(ctx context.Context, st store.Store, harness, session, content, mapModel string) ([]SessionHits, error) {
+// this model, effort, and prompt.
+func priorHits(ctx context.Context, st store.Store, harness, session, content string, mapCall model.Call) ([]SessionHits, error) {
 	keys, err := st.List(ctx, hitsPrefix(harness, session))
 	if err != nil {
 		return nil, err
@@ -115,7 +121,7 @@ func priorHits(ctx context.Context, st store.Store, harness, session, content, m
 		if err != nil {
 			return nil, err
 		}
-		if ok && sh.Session == session && sh.Content == content && sh.Model == mapModel && sh.Prompt == hitsPromptHash() {
+		if ok && sh.Session == session && sh.Content == content && sh.Model == mapCall.Model && sh.Effort == mapCall.Effort && sh.Prompt == hitsPromptHash() {
 			out = append(out, sh)
 		}
 	}

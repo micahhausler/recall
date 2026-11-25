@@ -6,12 +6,15 @@ package model
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
+	"slices"
 	"sort"
 	"strings"
 
@@ -28,6 +31,9 @@ type Usage struct {
 	// Credits is what a harness that bills in credits, like Kiro, reports
 	// instead of tokens and dollars.
 	Credits float64
+	// ModelID is the model the harness resolved the call to, such as a full
+	// model ID for an alias; empty when the harness doesn't report it.
+	ModelID string
 }
 
 // Add accumulates another call's usage.
@@ -37,6 +43,7 @@ func (u Usage) Add(o Usage) Usage {
 		OutputTokens: u.OutputTokens + o.OutputTokens,
 		CostUSD:      u.CostUSD + o.CostUSD,
 		Credits:      u.Credits + o.Credits,
+		ModelID:      cmp.Or(o.ModelID, u.ModelID),
 	}
 }
 
@@ -51,11 +58,45 @@ func (u Usage) String() string {
 	return s
 }
 
+// validEffort refuses a level the runner's CLI doesn't take. Empty is
+// valid: it passes no level, and the harness default applies.
+func validEffort(runner, effort string) error {
+	levels := config.Efforts(runner)
+	if effort == "" || slices.Contains(levels, effort) {
+		return nil
+	}
+	return fmt.Errorf("%s: unknown effort %q; want one of %s, or empty for the harness default",
+		runner, effort, strings.Join(levels, ", "))
+}
+
+// Call names what answers a prompt: the model, and the effort it runs at.
+type Call struct {
+	Model string
+	// Effort is one of the runner's config.Efforts, or empty for the
+	// harness default.
+	Effort string
+}
+
 // Runner answers one prompt with one completion.
 type Runner interface {
-	// Run sends input to the model named by model and returns its text and
+	// Run sends input to the model call names and returns its text and
 	// what the call cost.
-	Run(ctx context.Context, model, input string) (string, Usage, error)
+	Run(ctx context.Context, call Call, input string) (string, Usage, error)
+}
+
+// Checker is a Runner or Editor that can refuse a call before making it,
+// such as an effort level its CLI doesn't take.
+type Checker interface {
+	Check(call Call) error
+}
+
+// Check refuses a call r's harness can't make, before anything is spent
+// on it.
+func Check(r any, call Call) error {
+	if c, ok := r.(Checker); ok {
+		return c.Check(call)
+	}
+	return nil
 }
 
 var registry = map[string]func() Runner{}
@@ -110,8 +151,8 @@ func init() {
 	RegisterEditor(config.HarnessClaude, func() Editor { return &CLI{} })
 }
 
-// CLI runs a harness command headless: `<command> -p --model <model>` with
-// the input on stdin. Every tool is disallowed, so the run reads stdin and
+// CLI runs a harness command headless: `<command> -p --model <model>
+// [--effort <level>]` with the input on stdin. Every tool is disallowed, so the run reads stdin and
 // writes stdout and nothing else. JSON output carries the result text plus
 // the cost the harness reports.
 type CLI struct {
@@ -128,7 +169,11 @@ type cliResult struct {
 	StopReason   string  `json:"stop_reason"`
 	Result       string  `json:"result"`
 	TotalCostUSD float64 `json:"total_cost_usd"`
-	Usage        struct {
+	// ModelUsage is keyed by the full ID of each model the run called.
+	ModelUsage map[string]struct {
+		OutputTokens int `json:"outputTokens"`
+	} `json:"modelUsage"`
+	Usage struct {
 		InputTokens              int `json:"input_tokens"`
 		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
@@ -136,7 +181,22 @@ type cliResult struct {
 	} `json:"usage"`
 }
 
-func (c *CLI) Run(ctx context.Context, model, input string) (string, Usage, error) {
+// Check refuses an effort level claude doesn't take.
+func (c *CLI) Check(call Call) error { return validEffort(config.HarnessClaude, call.Effort) }
+
+// callArgs are the model and effort flags for call.
+func callArgs(call Call) []string {
+	args := []string{"--model", call.Model}
+	if call.Effort != "" {
+		args = append(args, "--effort", call.Effort)
+	}
+	return args
+}
+
+func (c *CLI) Run(ctx context.Context, call Call, input string) (string, Usage, error) {
+	if err := c.Check(call); err != nil {
+		return "", Usage{}, err
+	}
 	// An empty scratch dir, not the caller's: the harness scans its working
 	// directory at startup, and from $HOME that touches TCC-protected folders
 	// (Photos, OneDrive) and prompts for access under recall's name. This run
@@ -147,18 +207,19 @@ func (c *CLI) Run(ctx context.Context, model, input string) (string, Usage, erro
 	}
 	defer os.RemoveAll(dir)
 	// Unsaved: a saved run would land in the transcripts recall reads.
-	return c.run(ctx, dir, input, "-p", "--model", model, "--disallowedTools", "*", "--output-format", "json",
-		"--no-session-persistence")
+	args := append([]string{"-p"}, callArgs(call)...)
+	args = append(args, "--disallowedTools", "*", "--output-format", "json", "--no-session-persistence")
+	return c.run(ctx, dir, call, input, args...)
 }
 
 // Editor answers one prompt with file tools confined to a set of
 // directories. Only the apply step uses one: every other model call reads
 // stdin and writes stdout and nothing else.
 type Editor interface {
-	// Edit sends input to the model named by model, lets it read and edit
+	// Edit sends input to the model call names, lets it read and edit
 	// files in dirs (the first is its working directory), and returns its
 	// final text and what the call cost.
-	Edit(ctx context.Context, model, input string, dirs []string) (string, Usage, error)
+	Edit(ctx context.Context, call Call, input string, dirs []string) (string, Usage, error)
 }
 
 // EditTools are the only tools an Edit run gets: no shell, no network.
@@ -167,26 +228,44 @@ const EditTools = "Read Edit Write Glob Grep"
 // Edit runs the harness headless in dirs[0] with only EditTools, edits
 // accepted without a prompt, and every other dir added. The harness accepts
 // edits only inside those dirs, so a write anywhere else is refused.
-func (c *CLI) Edit(ctx context.Context, model, input string, dirs []string) (string, Usage, error) {
+func (c *CLI) Edit(ctx context.Context, call Call, input string, dirs []string) (string, Usage, error) {
 	if len(dirs) == 0 {
 		return "", Usage{}, errors.New("edit: no directories to edit in")
 	}
-	args := []string{"-p", "--model", model, "--tools", EditTools, "--permission-mode", "acceptEdits",
-		"--output-format", "json", "--no-session-persistence"}
+	if err := c.Check(call); err != nil {
+		return "", Usage{}, err
+	}
+	args := append([]string{"-p"}, callArgs(call)...)
+	args = append(args, "--tools", EditTools, "--permission-mode", "acceptEdits",
+		"--output-format", "json", "--no-session-persistence")
 	for _, d := range dirs[1:] {
 		args = append(args, "--add-dir", d)
 	}
-	return c.run(ctx, dirs[0], input, args...)
+	return c.run(ctx, dirs[0], call, input, args...)
 }
 
-func (c *CLI) run(ctx context.Context, dir, input string, args ...string) (string, Usage, error) {
+// EffortEnv is the environment variable that sets Claude Code's effort. It
+// outranks --effort, so a run that sets effort leaves it out.
+const EffortEnv = "CLAUDE_CODE_EFFORT_LEVEL"
+
+// runEnv is the environment of a harness run: recall's own, the hook
+// guard, and without envDrop when the call sets effort.
+func runEnv(call Call, envDrop string) []string {
+	env := os.Environ()
+	if call.Effort != "" {
+		env = slices.DeleteFunc(env, func(kv string) bool { return strings.HasPrefix(kv, envDrop+"=") })
+	}
+	return append(env, HookGuard)
+}
+
+func (c *CLI) run(ctx context.Context, dir string, call Call, input string, args ...string) (string, Usage, error) {
 	command := c.Command
 	if command == "" {
 		command = config.DefaultCLI(config.HarnessClaude)
 	}
 	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), HookGuard)
+	cmd.Env = runEnv(call, EffortEnv)
 	cmd.Stdin = strings.NewReader(input)
 	var out, errOut bytes.Buffer
 	cmd.Stdout = &out
@@ -228,6 +307,7 @@ func parseResult(command string, stdout []byte, stderr string, runErr error) (st
 		InputTokens:  res.Usage.InputTokens + res.Usage.CacheCreationInputTokens + res.Usage.CacheReadInputTokens,
 		OutputTokens: res.Usage.OutputTokens,
 		CostUSD:      res.TotalCostUSD,
+		ModelID:      res.modelID(),
 	}
 	if res.StopReason == "refusal" {
 		return "", usage, fmt.Errorf("%s -p: %w: %s", command, ErrRefusal, strings.TrimSpace(res.Result))
@@ -248,6 +328,19 @@ func parseResult(command string, stdout []byte, stderr string, runErr error) (st
 	return res.Result, usage, nil
 }
 
+// modelID is the model that answered: the one model the run called, or the
+// one that wrote the most when it called several.
+func (r cliResult) modelID() string {
+	ids := slices.Sorted(maps.Keys(r.ModelUsage))
+	best := ""
+	for _, id := range ids {
+		if best == "" || r.ModelUsage[id].OutputTokens > r.ModelUsage[best].OutputTokens {
+			best = id
+		}
+	}
+	return best
+}
+
 // Fake is a Runner for tests: canned responses, recorded inputs.
 type Fake struct {
 	// Response answers every call; Responses, when set, answers by call index.
@@ -260,12 +353,13 @@ type Fake struct {
 }
 
 type FakeCall struct {
-	Model string
-	Input string
+	Model  string
+	Effort string
+	Input  string
 }
 
-func (f *Fake) Run(ctx context.Context, model, input string) (string, Usage, error) {
-	f.Calls = append(f.Calls, FakeCall{Model: model, Input: input})
+func (f *Fake) Run(ctx context.Context, call Call, input string) (string, Usage, error) {
+	f.Calls = append(f.Calls, FakeCall{Model: call.Model, Effort: call.Effort, Input: input})
 	if f.Err != nil {
 		return "", Usage{}, f.Err
 	}
@@ -287,13 +381,14 @@ type FakeEditor struct {
 }
 
 type FakeEdit struct {
-	Model string
-	Input string
-	Dirs  []string
+	Model  string
+	Effort string
+	Input  string
+	Dirs   []string
 }
 
-func (f *FakeEditor) Edit(ctx context.Context, model, input string, dirs []string) (string, Usage, error) {
-	f.Calls = append(f.Calls, FakeEdit{Model: model, Input: input, Dirs: dirs})
+func (f *FakeEditor) Edit(ctx context.Context, call Call, input string, dirs []string) (string, Usage, error) {
+	f.Calls = append(f.Calls, FakeEdit{Model: call.Model, Effort: call.Effort, Input: input, Dirs: dirs})
 	if f.Apply == nil {
 		return "", f.Usage, nil
 	}

@@ -99,7 +99,7 @@ exit 1
 `, sessions, sessions, sessions, sessions, sessions))
 	var leak strings.Builder
 	k := &Kiro{Command: script, SessionsDir: sessions, Log: &leak}
-	if _, _, err := k.Run(context.Background(), "auto", "in"); err == nil {
+	if _, _, err := k.Run(context.Background(), Call{Model: "auto"}, "in"); err == nil {
 		t.Fatal("Run succeeded, want an error")
 	}
 	for _, p := range []string{
@@ -134,7 +134,7 @@ printf '%%s\n' '{"type":"runFinished","data":{"sessionId":"sess_a","status":"suc
 exit 0
 `, own, owner, filepath.Join(own, "messages.jsonl"), filepath.Join(owner, "messages.jsonl")))
 	k := &Kiro{Command: script, SessionsDir: sessions}
-	text, _, err := k.Run(context.Background(), "auto", "in")
+	text, _, err := k.Run(context.Background(), Call{Model: "auto"}, "in")
 	if err != nil || text != "ok" {
 		t.Fatalf("Run = %q, %v", text, err)
 	}
@@ -163,7 +163,7 @@ printf '%%s\n' '{"type":"runFinished","data":{"sessionId":"run1","status":"succe
 exit 0
 `, sessions, sessions, sessions))
 	k := &Kiro{Command: script, SessionsDir: sessions}
-	if text, _, err := k.Run(context.Background(), "auto", "in"); err != nil || text != "ok" {
+	if text, _, err := k.Run(context.Background(), Call{Model: "auto"}, "in"); err != nil || text != "ok" {
 		t.Fatalf("Run = %q, %v", text, err)
 	}
 	for _, p := range []string{
@@ -207,8 +207,8 @@ exit 0
 	kA := &Kiro{Command: scriptA, SessionsDir: sessions}
 	kB := &Kiro{Command: scriptB, SessionsDir: sessions}
 	errA, errB := make(chan error, 1), make(chan error, 1)
-	go func() { _, _, err := kA.Run(context.Background(), "auto", "in"); errA <- err }()
-	go func() { _, _, err := kB.Run(context.Background(), "auto", "in"); errB <- err }()
+	go func() { _, _, err := kA.Run(context.Background(), Call{Model: "auto"}, "in"); errA <- err }()
+	go func() { _, _, err := kB.Run(context.Background(), Call{Model: "auto"}, "in"); errB <- err }()
 	if err := <-errA; err != nil {
 		t.Fatalf("run A: %v", err)
 	}
@@ -289,7 +289,7 @@ printf '%%s\n' '{"type":"runFinished","data":{"sessionId":"sess_x","status":"suc
 exit 0
 `, seen, seen))
 	k := &Kiro{Command: script, SessionsDir: sessions}
-	if text, _, err := k.Run(context.Background(), "auto", "in"); err != nil || text != "ok" {
+	if text, _, err := k.Run(context.Background(), Call{Model: "auto"}, "in"); err != nil || text != "ok" {
 		t.Fatalf("Run = %q, %v", text, err)
 	}
 	args, _ := os.ReadFile(log)
@@ -314,5 +314,40 @@ exit 0
 	}
 	if _, err := os.Stat(strings.TrimSpace(dir)); !os.IsNotExist(err) {
 		t.Errorf("scratch dir %s left behind (stat err %v)", dir, err)
+	}
+}
+
+// A set effort goes on the command line, with auto too; an unset one adds
+// no flag, and a level kiro-cli doesn't take fails before Kiro runs.
+func TestKiroRunEffort(t *testing.T) {
+	script, log := fakeKiro(t, `printf '{"type":"runFinished","data":{"sessionId":"s","status":"success","finalText":"%s"}}\n' "$*"
+`)
+	k := &Kiro{Command: script, SessionsDir: t.TempDir()}
+	for _, c := range []struct {
+		call       Call
+		want, deny string
+	}{
+		{Call{Model: "claude-sonnet-x", Effort: "high"}, "--model claude-sonnet-x --effort high", ""},
+		{Call{Model: "gpt-x", Effort: "none"}, "--model gpt-x --effort none", ""},
+		{Call{Model: "auto", Effort: "max"}, "--agent-engine v3 --effort max", "--model"},
+		{Call{Model: "claude-sonnet-x"}, "--model claude-sonnet-x", "--effort"},
+	} {
+		got, _, err := k.Run(context.Background(), c.call, "in")
+		if err != nil {
+			t.Fatalf("%+v: %v", c.call, err)
+		}
+		if !strings.HasSuffix(got, c.want) || (c.deny != "" && strings.Contains(got, c.deny)) {
+			t.Errorf("%+v args = %q, want them to end %q without %q", c.call, got, c.want, c.deny)
+		}
+	}
+	if err := os.Remove(log); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := k.Run(context.Background(), Call{Model: "auto", Effort: "minimal"}, "in"); err == nil ||
+		!strings.Contains(err.Error(), "minimal") {
+		t.Errorf("effort minimal: err = %v", err)
+	}
+	if data, err := os.ReadFile(log); err == nil {
+		t.Errorf("Kiro ran: %s", data)
 	}
 }

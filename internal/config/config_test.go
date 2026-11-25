@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1006,5 +1007,68 @@ func TestHarnessImportErrors(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), tc.line) {
 			t.Errorf("%q: err = %v, want %q at %s", tc.toml, err, tc.want, tc.line)
 		}
+	}
+}
+
+func TestEffortLevels(t *testing.T) {
+	for _, level := range []string{"low", "medium", "high", "xhigh", "max"} {
+		b := base(t)
+		write(t, b, fmt.Sprintf("[learn]\nmap_effort = %q\nreduce_effort = %q\napply_effort = %q\n", level, level, level))
+		c, err := Load(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := c.Settings("/home/you", "laptop-a")
+		if err != nil {
+			t.Fatalf("%s: %v", level, err)
+		}
+		if l := s.Learn; l.MapEffort != level || l.ReduceEffort != level || l.ApplyEffort != level {
+			t.Errorf("%s: efforts = %q, %q, %q", level, l.MapEffort, l.ReduceEffort, l.ApplyEffort)
+		}
+	}
+	b := base(t)
+	write(t, b, "")
+	c, err := Load(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.Settings("/home/you", "laptop-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l := s.Learn; l.MapEffort != "" || l.ReduceEffort != "" || l.ApplyEffort != "" {
+		t.Errorf("default efforts = %q, %q, %q; want empty", l.MapEffort, l.ReduceEffort, l.ApplyEffort)
+	}
+}
+
+// Each effort key takes the runner's own levels, and names the runner and
+// its levels when it doesn't.
+func TestEffortUnknownLevel(t *testing.T) {
+	for _, c := range []struct{ runner, level, want string }{
+		{"claude", "extreme", "claude runner takes; want one of low, medium, high, xhigh, max"},
+		{"claude", "none", "claude runner takes"},
+		{"kiro", "minimal", "kiro runner takes; want one of none, low, medium, high, xhigh, max"},
+	} {
+		for _, key := range []string{"map_effort", "reduce_effort", "apply_effort"} {
+			b := base(t)
+			write(t, b, fmt.Sprintf("[learn]\nrunner = %q\n%s = %q\n", c.runner, key, c.level))
+			cfg, err := Load(b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = cfg.Settings("/home/you", "laptop-a")
+			if err == nil || !strings.Contains(err.Error(), "learn."+key) || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("%s %s = %q: err = %v, want %q", c.runner, key, c.level, err, c.want)
+			}
+		}
+	}
+	b := base(t)
+	write(t, b, "[learn]\nrunner = \"kiro\"\nmap_effort = \"none\"\n")
+	cfg, err := Load(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s, err := cfg.Settings("/home/you", "laptop-a"); err != nil || s.Learn.MapEffort != "none" {
+		t.Errorf("kiro map_effort none: %v", err)
 	}
 }

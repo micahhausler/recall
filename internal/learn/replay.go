@@ -1,6 +1,7 @@
 package learn
 
 import (
+	"cmp"
 	"context"
 	_ "embed"
 	"encoding/json"
@@ -47,9 +48,11 @@ type SessionLoader func(harness, session string) ([]events.Event, bool)
 // add back; a replay that fails is logged and blocks nothing.
 type Replayer struct {
 	Runner model.Runner
-	// Model is the model the replay runs as the agent, learn.map_model.
-	Model string
-	Load  SessionLoader
+	// Model is the model the replay runs as the agent, learn.map_model, and
+	// Effort its level, learn.map_effort.
+	Model  string
+	Effort string
+	Load   SessionLoader
 	// Cap bounds the moments replayed in one run; 0 means maxReplays.
 	Cap int
 	Out io.Writer
@@ -63,11 +66,13 @@ type Replayer struct {
 type ReplayRecord struct {
 	Kind  string `json:"kind"`
 	Title string `json:"title"`
-	// Harness and Session name the replayed moment, and Model what played
-	// the agent.
+	// Harness and Session name the replayed moment, and Model and Effort
+	// what played the agent, and ModelID the model the harness resolved.
 	Harness string `json:"harness,omitempty"`
 	Session string `json:"session,omitempty"`
 	Model   string `json:"model,omitempty"`
+	Effort  string `json:"effort,omitempty"`
+	ModelID string `json:"model_id,omitempty"`
 	// Without is the verdict with the target file as it is, With the verdict
 	// with the proposed rule added; an ablation replay has only Without.
 	Without string `json:"without,omitempty"`
@@ -144,10 +149,11 @@ func parseVerdict(out string) (string, error) {
 	return strings.ToLower(ms[len(ms)-1][1]), nil
 }
 
-// run plays one arm of a replay and returns its verdict.
-func (rp *Replayer) run(ctx context.Context, input string) (string, error) {
-	out, usage, err := rp.Runner.Run(ctx, rp.Model, input)
+// run plays one arm of rec's replay and returns its verdict.
+func (rp *Replayer) run(ctx context.Context, rec *ReplayRecord, input string) (string, error) {
+	out, usage, err := rp.Runner.Run(ctx, model.Call{Model: rp.Model, Effort: rp.Effort}, input)
 	rp.Usage = rp.Usage.Add(usage)
+	rec.ModelID = cmp.Or(usage.ModelID, rec.ModelID)
 	if err != nil {
 		return "", err
 	}
@@ -269,7 +275,7 @@ func (rp *Replayer) AddReplays(ctx context.Context, proposals []Proposal, cluste
 		if p.Kind != "add" || flagged[p.Title] {
 			continue
 		}
-		rec := ReplayRecord{Kind: p.Kind, Title: p.Title, Model: rp.Model}
+		rec := ReplayRecord{Kind: p.Kind, Title: p.Title, Model: rp.Model, Effort: rp.Effort}
 		var m moment
 		found := false
 		for _, id := range p.Candidates {
@@ -293,10 +299,10 @@ func (rp *Replayer) AddReplays(ctx context.Context, proposals []Proposal, cluste
 			rules := targetText(normTarget(p.Target, home))
 			mistake := mistakeText(m.text, m.quote)
 			var err error
-			rec.Without, err = rp.run(ctx, replayInput(rendered, rules, mistake))
+			rec.Without, err = rp.run(ctx, &rec, replayInput(rendered, rules, mistake))
 			if err == nil {
 				withRule := strings.TrimRight(rules, "\n") + "\n- " + squashRule(p.Rule) + "\n"
-				rec.With, err = rp.run(ctx, replayInput(rendered, withRule, mistake))
+				rec.With, err = rp.run(ctx, &rec, replayInput(rendered, withRule, mistake))
 			}
 			switch {
 			case err != nil:
@@ -358,7 +364,7 @@ func (rp *Replayer) Ablation(ctx context.Context, outgrown []Rule, window []Sess
 		bySession[so.Session] = so
 	}
 	for _, rule := range outgrown {
-		rec := ReplayRecord{Kind: "retire", Title: ablationTitle(rule), Model: rp.Model}
+		rec := ReplayRecord{Kind: "retire", Title: ablationTitle(rule), Model: rp.Model, Effort: rp.Effort}
 		var moments []moment
 		for _, id := range rule.SourceSessions {
 			so, ok := bySession[id]
@@ -399,7 +405,7 @@ func (rp *Replayer) Ablation(ctx context.Context, outgrown []Rule, window []Sess
 				r.Error = fmt.Sprintf("replay cap reached (%d per run)", rp.limit())
 				avoided = false
 			} else {
-				verdict, err := rp.run(ctx, replayInput(Render(m.prefix), rules, mistakeText(m.text, m.quote)))
+				verdict, err := rp.run(ctx, &rec, replayInput(Render(m.prefix), rules, mistakeText(m.text, m.quote)))
 				if err != nil {
 					r.Error = err.Error()
 					avoided = false

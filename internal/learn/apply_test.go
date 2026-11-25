@@ -189,10 +189,10 @@ func newApplyFixture(t *testing.T, proposals string) *applyFixture {
 	writeFile(t, filepath.Join(base, "loose", "notes.md"), "- loose rule\n") // in no repo
 	f.run = filepath.Join(base, "state", "2026-11-11")
 	writeFile(t, filepath.Join(f.run, "proposals.md"), proposals)
-	f.editor = &model.FakeEditor{Apply: fakeApply("edited")}
+	f.editor = &model.FakeEditor{Apply: fakeApply("edited"), Usage: model.Usage{ModelID: "claude-full-id"}}
 	f.pub = &review.Fake{}
 	f.applier = &Applier{
-		Editor: f.editor, Model: "sonnet", Publisher: f.pub,
+		Editor: f.editor, Model: "sonnet", Effort: "xhigh", Publisher: f.pub,
 		Targets: []string{"~/dotfiles/.claude/CLAUDE.md", "~/loose/notes.md"},
 		Skills:  filepath.Join(f.kit, "skills"), Bin: filepath.Join(f.kit, "bin"),
 		Public: []string{f.kit}, Taken: []string{"Old"}, Home: base,
@@ -278,8 +278,11 @@ func TestApplyEndToEnd(t *testing.T) {
 	call := f.editor.Calls[0]
 	// The two worktrees, and the shadow folder the dotfiles' .claude
 	// directory is copied to, since the harness won't edit under one.
-	if call.Model != "sonnet" || len(call.Dirs) != 3 || filepath.Base(call.Dirs[2]) != shadowDir {
-		t.Errorf("edit call = model %s, dirs %v", call.Model, call.Dirs)
+	if call.Model != "sonnet" || call.Effort != "xhigh" || len(call.Dirs) != 3 || filepath.Base(call.Dirs[2]) != shadowDir {
+		t.Errorf("edit call = model %s, effort %s, dirs %v", call.Model, call.Effort, call.Dirs)
+	}
+	if res.Model != "sonnet" || res.Effort != "xhigh" || res.ModelID != "claude-full-id" {
+		t.Errorf("apply result = model %q, effort %q, model_id %q", res.Model, res.Effort, res.ModelID)
 	}
 	for _, l := range strings.Split(call.Input, "\n") {
 		if strings.HasPrefix(l, "- edit: ") && strings.Contains(l, "/.claude/") {

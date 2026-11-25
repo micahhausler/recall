@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -37,7 +38,9 @@ var schema = []string{
 	"recur.jobs.*.enabled",
 	"learn.runner",
 	"learn.map_model",
+	"learn.map_effort",
 	"learn.reduce_model",
+	"learn.reduce_effort",
 	"learn.targets",
 	"learn.repos",
 	"learn.ledger",
@@ -47,6 +50,7 @@ var schema = []string{
 	"learn.budget",
 	"learn.map_workers",
 	"learn.apply_model",
+	"learn.apply_effort",
 	"learn.skills",
 	"learn.bin",
 	"learn.settings",
@@ -183,6 +187,12 @@ type LearnSettings struct {
 	// MapModel reads one session; ReduceModel folds a window into proposals.
 	MapModel    string
 	ReduceModel string
+	// MapEffort, ReduceEffort, and ApplyEffort are the effort level each
+	// step's model runs at, one of the runner's Efforts; empty passes
+	// none, and the harness default applies. Replays run at MapEffort.
+	MapEffort    string
+	ReduceEffort string
+	ApplyEffort  string
 	// Targets are the context files rules live in.
 	Targets []string
 	// Repos are the checkouts whose own context files a repo-only lesson
@@ -405,6 +415,9 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 	str("learn.runner", &s.Learn.Runner)
 	str("learn.map_model", &s.Learn.MapModel)
 	str("learn.reduce_model", &s.Learn.ReduceModel)
+	str("learn.map_effort", &s.Learn.MapEffort)
+	str("learn.reduce_effort", &s.Learn.ReduceEffort)
+	str("learn.apply_effort", &s.Learn.ApplyEffort)
 	path("learn.ledger", &s.Learn.Ledger)
 	path("learn.candidates", &s.Learn.Candidates)
 	num("learn.retire_days", &s.Learn.RetireDays)
@@ -633,6 +646,15 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 	ifUnset("learn.map_model", &s.Learn.MapModel, runner.mapModel)
 	ifUnset("learn.reduce_model", &s.Learn.ReduceModel, runner.reduceModel)
 	ifUnset("learn.apply_model", &s.Learn.ApplyModel, runner.applyModel)
+	for _, e := range []struct{ key, level string }{
+		{"learn.map_effort", s.Learn.MapEffort}, {"learn.reduce_effort", s.Learn.ReduceEffort}, {"learn.apply_effort", s.Learn.ApplyEffort},
+	} {
+		if levels := Efforts(s.Learn.Runner); err == nil && e.level != "" && !slices.Contains(levels, e.level) {
+			o, _ := c.Origin(e.key)
+			err = fmt.Errorf("%s: %s %q is not an effort level the %s runner takes; want one of %s, or leave it unset for the harness default",
+				o, e.key, e.level, s.Learn.Runner, strings.Join(levels, ", "))
+		}
+	}
 	for _, name := range c.tableNames("recur.jobs") {
 		j := Job{Name: name}
 		enabled := true

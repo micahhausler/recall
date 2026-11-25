@@ -546,6 +546,10 @@ func learnMap(ctx context.Context, env *archiveEnv, runner model.Runner, since s
 	if err != nil {
 		return fail(err)
 	}
+	l := env.settings.Learn
+	if err := model.Check(runner, model.Call{Model: l.MapModel, Effort: l.MapEffort}); err != nil {
+		return fail(fmt.Errorf("learn.map_effort: %w", err))
+	}
 	cutoff := cutoffTime.UTC().Format("2006-01-02T15:04:05Z")
 	allWindow := cutoffTime.IsZero() // --since all
 	undatedSkipped := 0
@@ -569,7 +573,7 @@ func learnMap(ctx context.Context, env *archiveEnv, runner model.Runner, since s
 	var mappers []*learn.Mapper
 	mapper := func(host string, h harness.Harness) *learn.Mapper {
 		m := &learn.Mapper{
-			Store: st, Runner: runner, Model: env.settings.Learn.MapModel,
+			Store: st, Runner: runner, Model: env.settings.Learn.MapModel, Effort: env.settings.Learn.MapEffort,
 			Host: host, Rules: ledger.Rules, Clock: env.clk, Out: os.Stdout, Scoping: scoping,
 			Redact: env.settings.Archive.Redact,
 		}
@@ -1008,6 +1012,16 @@ func latestRun(root string) (string, error) {
 // names, which cost a harness start. allWindow reads every observation
 // (--window all) instead of the last learn.window_days.
 func newReducer(ctx context.Context, env *archiveEnv, st store.Store, runner model.Runner, allWindow bool) (*learn.Reducer, []learn.SessionObservations, error) {
+	if l := env.settings.Learn; runner != nil {
+		if err := model.Check(runner, model.Call{Model: l.ReduceModel, Effort: l.ReduceEffort}); err != nil {
+			return nil, nil, fmt.Errorf("learn.reduce_effort: %w", err)
+		}
+		if l.Replay {
+			if err := model.Check(runner, model.Call{Model: l.MapModel, Effort: l.MapEffort}); err != nil {
+				return nil, nil, fmt.Errorf("learn.map_effort: %w", err)
+			}
+		}
+	}
 	// Strict: a reduce proposes against the pending reviews, so a review
 	// missed here re-proposes a change that is still open (syncedLedger).
 	ledger, window, err := loadLedgerAndHits(ctx, env, st, true)
@@ -1039,7 +1053,7 @@ func newReducer(ctx context.Context, env *archiveEnv, st store.Store, runner mod
 	warnUnobservedHosts(ctx, env, st)
 	r := &learn.Reducer{
 		Gates:  learnGates(env, repos, taken, ledger),
-		Runner: runner, Model: env.settings.Learn.ReduceModel,
+		Runner: runner, Model: env.settings.Learn.ReduceModel, Effort: env.settings.Learn.ReduceEffort,
 		RetireDays: env.settings.Learn.RetireDays,
 		WindowDays: env.settings.Learn.WindowDays, AllWindow: allWindow,
 		Clock: env.clk, Out: os.Stdout,
@@ -1049,7 +1063,7 @@ func newReducer(ctx context.Context, env *archiveEnv, st store.Store, runner mod
 	if runner != nil && env.settings.Learn.Replay {
 		// Replays run headless with no tools on the map model, the one that
 		// reads sessions, in the run's own directory under the state root.
-		r.Replay = &learn.Replayer{Runner: runner, Model: env.settings.Learn.MapModel,
+		r.Replay = &learn.Replayer{Runner: runner, Model: env.settings.Learn.MapModel, Effort: env.settings.Learn.MapEffort,
 			Load: sessionLoader(env), Out: os.Stderr}
 	}
 	return r, window, nil
@@ -1273,9 +1287,16 @@ func newApplier(ctx context.Context, env *archiveEnv, ledger *learn.Ledger) (*le
 	if err != nil {
 		return nil, err
 	}
+	var applier any = editor
+	if editor == nil {
+		applier = runner
+	}
+	if err := model.Check(applier, model.Call{Model: l.ApplyModel, Effort: l.ApplyEffort}); err != nil {
+		return nil, fmt.Errorf("learn.apply_effort: %w", err)
+	}
 	return &learn.Applier{
 		Gates:  learnGates(env, repos, taken, ledger),
-		Editor: editor, Runner: runner, Model: l.ApplyModel, Publisher: pub,
+		Editor: editor, Runner: runner, Model: l.ApplyModel, Effort: l.ApplyEffort, Publisher: pub,
 		Public: env.settings.Keep.Public,
 		Check:  l.Check, Clock: env.clk, Out: os.Stderr,
 		OwnerInstructions: extension.Read(env.settings.Extensions["learn-apply"], os.Stderr),

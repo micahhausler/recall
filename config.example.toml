@@ -133,9 +133,25 @@ runner = "claude"
 # of observations into proposals (reduce). Measured on real sessions, haiku
 # missed plain corrections that sonnet caught, so the map defaults to sonnet
 # (a long session costs a few cents). With runner = "kiro" both default to
-# "auto"; `kiro-cli chat --list-models` lists the IDs Kiro accepts.
+# "auto"; `kiro-cli chat --list-models` lists the IDs Kiro accepts. An
+# alias like "sonnet" follows the family's newest release; a full ID like
+# "claude-sonnet-5-5" pins one version. Either way, each observation, rule
+# hit, reduce, replay, and apply records the model ID that answered.
 map_model = "sonnet"
 reduce_model = "opus"
+# The effort each model runs at, from the runner's own levels: "low",
+# "medium", "high", "xhigh", or "max" for claude, and those plus "none" for
+# kiro, where the model decides which levels it honors. Unset leaves the
+# harness default in charge, which differs by model and harness release and
+# follows CLAUDE_CODE_EFFORT_LEVEL and the harness's own settings, so two
+# runs of one config can think at different depths. Set, the runner passes
+# --effort, which in kiro holds for that run only, and claude ignores
+# CLAUDE_CODE_EFFORT_LEVEL, which would outrank the flag. Replays run at
+# map_effort. map_effort is part of each session's fingerprint, so changing
+# it maps every session again. A level the runner doesn't take fails at
+# config load. Default: unset.
+# map_effort = "high"
+# reduce_effort = "high"
 # How many sessions the map observes at once, each its own headless harness
 # run, 1 to 32. More finishes sooner until the harness's rate limits push back.
 map_workers = 4
@@ -178,6 +194,8 @@ budget = 2000
 # confined to fresh worktrees, and no shell. With runner = "kiro" it defaults
 # to "auto", like the map and reduce models.
 apply_model = "sonnet"
+# The effort the apply model runs at, like map_effort. Default: unset.
+# apply_effort = "high"
 # Where a proposed new skill lands, as <skills>/<name>/SKILL.md, and where a
 # graduated script lands. Like every target, each must sit in a git checkout:
 # apply stages its edits in a worktree of that checkout, never the live files.

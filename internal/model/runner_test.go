@@ -53,7 +53,7 @@ func TestCLIEditArgs(t *testing.T) {
 		t.Fatal(err)
 	}
 	a, b := t.TempDir(), t.TempDir()
-	got, _, err := (&CLI{Command: script}).Edit(context.Background(), "sonnet", "in", []string{a, b})
+	got, _, err := (&CLI{Command: script}).Edit(context.Background(), Call{Model: "sonnet"}, "in", []string{a, b})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestCLIEditArgs(t *testing.T) {
 	if strings.Contains(args, "--add-dir "+a) {
 		t.Errorf("args %q add the working dir again", args)
 	}
-	if _, _, err := (&CLI{Command: script}).Edit(context.Background(), "sonnet", "in", nil); err == nil {
+	if _, _, err := (&CLI{Command: script}).Edit(context.Background(), Call{Model: "sonnet"}, "in", nil); err == nil {
 		t.Error("Edit with no dirs succeeded")
 	}
 }
@@ -84,7 +84,7 @@ func TestCLIRunInEmptyScratchDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Chdir(bin) // a non-empty cwd the run must not inherit
-	got, _, err := (&CLI{Command: script}).Run(context.Background(), "haiku", "in")
+	got, _, err := (&CLI{Command: script}).Run(context.Background(), Call{Model: "haiku"}, "in")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,5 +97,85 @@ func TestCLIRunInEmptyScratchDir(t *testing.T) {
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Errorf("scratch dir %s left behind (stat err %v)", dir, err)
+	}
+}
+
+// fakeClaude writes a stub harness that echoes its args and the effort
+// variable back as the result text.
+func fakeClaude(t *testing.T) string {
+	t.Helper()
+	script := filepath.Join(t.TempDir(), "fake-harness")
+	body := "#!/bin/sh\nprintf '{\"type\":\"result\",\"result\":\"%s|env=%s\"}' \"$*\" \"${" + EffortEnv + "-unset}\"\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return script
+}
+
+// A set effort goes on the command line and the effort variable, which
+// outranks the flag, is dropped; an empty one passes neither change.
+func TestCLIEffort(t *testing.T) {
+	t.Setenv(EffortEnv, "low")
+	c := &CLI{Command: fakeClaude(t)}
+	ctx := context.Background()
+	runs := map[string]func(Call) (string, Usage, error){
+		"Run":  func(call Call) (string, Usage, error) { return c.Run(ctx, call, "in") },
+		"Edit": func(call Call) (string, Usage, error) { return c.Edit(ctx, call, "in", []string{t.TempDir()}) },
+	}
+	for name, run := range runs {
+		got, _, err := run(Call{Model: "sonnet", Effort: "high"})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !strings.Contains(got, "--model sonnet --effort high ") || !strings.HasSuffix(got, "|env=unset") {
+			t.Errorf("%s with effort = %q, want --effort high and %s unset", name, got, EffortEnv)
+		}
+		got, _, err = run(Call{Model: "sonnet"})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if strings.Contains(got, "--effort") || !strings.HasSuffix(got, "|env=low") {
+			t.Errorf("%s without effort = %q, want no --effort and %s kept", name, got, EffortEnv)
+		}
+		if _, _, err := run(Call{Model: "sonnet", Effort: "extreme"}); err == nil || !strings.Contains(err.Error(), "extreme") {
+			t.Errorf("%s with an unknown effort: err = %v", name, err)
+		}
+	}
+}
+
+func TestParseResultModelID(t *testing.T) {
+	out := `{"type":"result","result":"hi","modelUsage":{"claude-haiku-x":{"outputTokens":3},"claude-sonnet-x":{"outputTokens":40}}}`
+	_, u, err := parseResult("claude", []byte(out), "", nil)
+	if err != nil || u.ModelID != "claude-sonnet-x" {
+		t.Errorf("ModelID = %q, %v; want the model that wrote the most", u.ModelID, err)
+	}
+	_, u, _ = parseResult("claude", []byte(`{"type":"result","result":"hi"}`), "", nil)
+	if u.ModelID != "" {
+		t.Errorf("ModelID = %q without modelUsage", u.ModelID)
+	}
+}
+
+// Each runner takes its own CLI's effort levels; a runner without a check
+// of its own takes any.
+func TestCheckEffort(t *testing.T) {
+	for _, c := range []struct {
+		r      any
+		effort string
+		ok     bool
+	}{
+		{&CLI{}, "", true},
+		{&CLI{}, "xhigh", true},
+		{&CLI{}, "max", true},
+		{&CLI{}, "none", false},
+		{&CLI{}, "High", false},
+		{&Kiro{}, "none", true},
+		{&Kiro{}, "max", true},
+		{&Kiro{}, "minimal", false},
+		{&Fake{}, "anything", true},
+	} {
+		err := Check(c.r, Call{Model: "m", Effort: c.effort})
+		if (err == nil) != c.ok {
+			t.Errorf("Check(%T, %q) = %v, want ok %v", c.r, c.effort, err, c.ok)
+		}
 	}
 }

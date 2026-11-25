@@ -17,6 +17,13 @@ proposed edits -> apply (worktree per repo) -> a pull request or branch per repo
 ```
 
 - **Model calls go through the harness's own CLI.** recall runs it headless with no tools, text in on stdin and text out on stdout, as `claude -p --disallowedTools '*'` or `kiro-cli chat --no-interactive --trust-tools=`. No API client lives in the binary, so existing auth, billing, and model selection work unchanged. The session Kiro saves for such a run is deleted.
+- **Each step's effort is pinned by config, or left to the harness.** `learn.map_effort`, `learn.reduce_effort`, and `learn.apply_effort` set the effort level each step's model runs at, from the runner's own levels, and replays run at the map's.
+  Through claude the level is `--effort`, and `CLAUDE_CODE_EFFORT_LEVEL`, which outranks the flag, is dropped from the run's environment.
+  Through kiro the level is `--effort`, which holds for that run only, and `none` is a level too; which levels a given model honors is Kiro's to decide.
+  An unset level passes nothing, and the harness default applies.
+  A level the runner's CLI doesn't take fails at config load, before any model call.
+  Each observation and rule-hit record, and each reduce run's `reduce.json`, `replay.json`, and `apply.json`, stores the model and effort it asked for and, when the harness reports it, the full model ID that answered.
+  A model alias follows its family's newest release, and a full model ID pins one version; either way the records say which version produced each result.
 - **Only the apply step gets file tools.** It runs the same CLI with `Read Edit Write Glob Grep` and nothing else, confined to the apply step's worktrees.
   Kiro can't confine write tools to directories, so through kiro the apply gets no tools either, and the binary writes the files the model returns (text mode, under [Apply](#apply)).
 - **Every change reaches the owner as a pull request or a branch.** `learn.review` picks which. `pr` pushes and opens a pull request with `gh`, and `branch` leaves the branch in place, which works with any git host or none. With `review.credentials.command` set, `pr` and the `github` evidence source act as the credential that command prints per repository, in place of the machine's own login ([pr-credentials.md](pr-credentials.md)). `review.assignees` lists the logins `pr` assigns each pull request to once it is open; a login the forge won't assign is a warning, and the pull request stays open.
@@ -29,6 +36,7 @@ The structured output lines, the fingerprint cache, the compression before the m
 The prompts live in `internal/learn/prompts` and are compiled into the binary, so each release pins the wording every step runs on.
 Each prompt describes its input and fixes the shape of its output, which the binary parses.
 `apply-text.md` is a variant of `apply.md`, so the table counts it with apply. Changing `map.md` or either rule-hit prompt changes every session's fingerprint, so the next map reads each session again.
+The map model and `learn.map_effort` are part of the fingerprint too, so changing either maps every session again; an unset effort adds nothing to it.
 
 | Prompt | Step | What it asks for | What comes back |
 | --- | --- | --- | --- |
