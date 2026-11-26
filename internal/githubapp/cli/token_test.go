@@ -21,6 +21,7 @@ import (
 	"github.com/micahhausler/recall/internal/githubapp/appkey"
 	"github.com/micahhausler/recall/internal/githubapp/config"
 	"github.com/micahhausler/recall/internal/githubapp/ghapi"
+	"github.com/micahhausler/recall/internal/version"
 )
 
 var testKey = sync.OnceValue(func() *rsa.PrivateKey {
@@ -358,5 +359,21 @@ func TestTokenFailsAtOnceOnALongRateLimit(t *testing.T) {
 	}
 	if calls, minted := f.github.CallCount(mintCall), len(f.github.Requests); calls != 1 || minted != 0 {
 		t.Errorf("mint called %d times, %d minted; want 1 and 0", calls, minted)
+	}
+}
+
+// --version prints the command's name and the release tag as written.
+func TestVersionPrintsTheTag(t *testing.T) {
+	defer func(v string) { version.Version = v }(version.Version)
+	version.Version = "v1.2.3"
+	f := newFixture(t)
+	if code := f.run("", "--version"); code != 0 {
+		t.Fatalf("exit %d: %s", code, f.stderr)
+	}
+	if got, want := f.stdout.String(), testName+" v1.2.3\n"; got != want {
+		t.Errorf("stdout = %q, want %q", got, want)
+	}
+	if code := f.run("", "token", "--version"); code != 2 {
+		t.Errorf("token --version: exit %d, want 2", code)
 	}
 }

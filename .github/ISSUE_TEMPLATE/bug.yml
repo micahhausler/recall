@@ -6,7 +6,7 @@ body:
     id: version
     attributes:
       label: recall version
-      description: The output of `recall version`.
+      description: The output of `recall --version`.
       placeholder: recall v0.2.0
     validations:
       required: true

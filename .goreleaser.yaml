@@ -13,7 +13,7 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
     flags: [-trimpath]
     ldflags:
-      - -s -w -X github.com/micahhausler/recall/internal/version.Version={{ .Version }}
+      - -s -w -X github.com/micahhausler/recall/internal/version.Version={{ .Tag }}
   # The optional GitHub App credential command (docs/github-app.md).
   - id: recall-github-app
     main: ./cmd/recall-github-app
@@ -24,7 +24,7 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
     flags: [-trimpath]
     ldflags:
-      - -s -w -X github.com/micahhausler/recall/internal/version.Version={{ .Version }}
+      - -s -w -X github.com/micahhausler/recall/internal/version.Version={{ .Tag }}
 
 archives:
   - id: recall
