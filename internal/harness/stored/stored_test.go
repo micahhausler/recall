@@ -1,4 +1,4 @@
-package harness_test
+package stored_test
 
 import (
 	"bytes"
@@ -12,6 +12,7 @@ import (
 	"github.com/micahhausler/recall/internal/archive"
 	"github.com/micahhausler/recall/internal/config"
 	"github.com/micahhausler/recall/internal/harness"
+	"github.com/micahhausler/recall/internal/harness/stored"
 )
 
 const storedSession = `{"harness":"other","host":"laptop-z","session":"wrong","cwd":"/home/you/src/example","timestamp":"2026-03-02T12:00:00Z","kind":"user_prompt","role":"user","text":"run the tests","extra":"dropped"}
@@ -23,11 +24,7 @@ not json
 
 func eventsHarness(t *testing.T, source string) harness.Harness {
 	t.Helper()
-	h, err := harness.Open("chat", config.HarnessSettings{Source: source, Enabled: true, Format: config.FormatEvents})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return h
+	return stored.New("chat", config.HarnessSettings{Source: source, Enabled: true, Format: config.FormatEvents})
 }
 
 func TestEventsReadSession(t *testing.T) {

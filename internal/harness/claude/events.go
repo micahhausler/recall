@@ -1,4 +1,4 @@
-package harness
+package claude
 
 import (
 	"bufio"
@@ -11,6 +11,7 @@ import (
 
 	eventsv1 "github.com/micahhausler/recall/api/events/v1"
 	"github.com/micahhausler/recall/internal/events"
+	"github.com/micahhausler/recall/internal/harness"
 	"github.com/micahhausler/recall/internal/redact"
 )
 
@@ -58,8 +59,8 @@ var commandNameRE = regexp.MustCompile(`<command-name>\s*/?([^<\s]+)\s*</command
 var commandArgsRE = regexp.MustCompile(`(?s)<command-args>(.*?)</command-args>`)
 
 // Sessions lists this harness's transcript files on disk.
-func (c *Claude) Sessions() ([]string, error) {
-	files, err := WalkFiles(c.source)
+func (c *adapter) Sessions() ([]string, error) {
+	files, err := harness.WalkFiles(c.source)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +74,7 @@ func (c *Claude) Sessions() ([]string, error) {
 }
 
 // ReadSessionFile reads one transcript from disk.
-func (c *Claude) ReadSessionFile(path, host string) ([]events.Event, error) {
+func (c *adapter) ReadSessionFile(path, host string) ([]events.Event, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -86,7 +87,7 @@ func (c *Claude) ReadSessionFile(path, host string) ([]events.Event, error) {
 // ReadSession parses one transcript stream into normalized events.
 // A malformed line is skipped: transcripts are append-only and an active
 // session can have a torn last line.
-func (c *Claude) ReadSession(r io.Reader, session, host string) ([]events.Event, error) {
+func (c *adapter) ReadSession(r io.Reader, session, host string) ([]events.Event, error) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 1024*1024), 32*1024*1024)
 	var out []events.Event
@@ -213,7 +214,7 @@ func toolInput(name string, raw json.RawMessage) string {
 	return eventsv1.TrimInput(out)
 }
 
-func (c *Claude) userEvents(l *line, msg *message, base func(*line) events.Event, toolNames map[string]toolCall) []events.Event {
+func (c *adapter) userEvents(l *line, msg *message, base func(*line) events.Event, toolNames map[string]toolCall) []events.Event {
 	if l.IsMeta {
 		return nil // harness bookkeeping, not something a person said
 	}
@@ -273,7 +274,7 @@ func orCLI(entrypoint string) string {
 	return entrypoint
 }
 
-func (c *Claude) assistantEvents(l *line, msg *message, base func(*line) events.Event, toolNames map[string]toolCall) []events.Event {
+func (c *adapter) assistantEvents(l *line, msg *message, base func(*line) events.Event, toolNames map[string]toolCall) []events.Event {
 	model := msg.Model
 	if l.RequestedModel != "" {
 		model = l.RequestedModel

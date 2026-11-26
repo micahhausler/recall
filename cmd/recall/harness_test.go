@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/micahhausler/recall/internal/config"
-	"github.com/micahhausler/recall/internal/harness"
+	"github.com/micahhausler/recall/internal/harness/adapters"
 	"github.com/micahhausler/recall/internal/model"
 )
 
@@ -13,7 +13,7 @@ import (
 // same name, so a harness added to the table isn't half there.
 func TestKnownHarnessesAreWired(t *testing.T) {
 	for _, name := range config.KnownHarnesses {
-		h, err := harness.Open(name, config.HarnessSettings{Source: config.DefaultSource(name, "/home/you"), Enabled: true})
+		h, err := adapters.Open(name, config.HarnessSettings{Source: config.DefaultSource(name, "/home/you"), Enabled: true})
 		if err != nil {
 			t.Errorf("%s: no harness adapter: %v", name, err)
 		} else if h.Name() != name {

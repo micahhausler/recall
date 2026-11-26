@@ -1,4 +1,6 @@
-package harness
+// Package stored reads a harness whose transcripts are recall's own
+// normalized events, such as an import's stored sessions.
+package stored
 
 import (
 	"bufio"
@@ -14,29 +16,29 @@ import (
 	eventsv1 "github.com/micahhausler/recall/api/events/v1"
 	"github.com/micahhausler/recall/internal/config"
 	"github.com/micahhausler/recall/internal/events"
+	"github.com/micahhausler/recall/internal/harness"
 )
 
-// Events reads a harness whose transcripts are recall's own events, one
-// session per <id>.jsonl directly in its source, such as an import's
-// stored sessions. Its sessions ran on other machines, so it has no
+// New opens the events harness named name: one session per <id>.jsonl
+// directly in its source. Its sessions ran on other machines, so it has no
 // skills, context files, or memory here.
-type Events struct {
+func New(name string, s config.HarnessSettings) harness.Harness {
+	return &adapter{name: name, source: s.Source}
+}
+
+type adapter struct {
 	name, source string
 }
 
-func openEvents(name string, s config.HarnessSettings) *Events {
-	return &Events{name: name, source: s.Source}
-}
+func (e *adapter) Name() string      { return e.name }
+func (e *adapter) SourceDir() string { return e.source }
 
-func (e *Events) Name() string      { return e.name }
-func (e *Events) SourceDir() string { return e.source }
-
-func (e *Events) WeekFiles(start, end time.Time) ([]string, error) {
-	return weekFiles(e.source, start, end)
+func (e *adapter) WeekFiles(start, end time.Time) ([]string, error) {
+	return harness.WeekFiles(e.source, start, end)
 }
 
 // Sessions lists the regular *.jsonl files directly in the source.
-func (e *Events) Sessions() ([]string, error) {
+func (e *adapter) Sessions() ([]string, error) {
 	entries, err := os.ReadDir(e.source)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -56,7 +58,7 @@ func (e *Events) Sessions() ([]string, error) {
 
 // SessionID is a session file's name without .jsonl, for a file directly
 // in the source, on disk or as the archive names it.
-func (e *Events) SessionID(path string) (string, bool) {
+func (e *adapter) SessionID(path string) (string, bool) {
 	path = filepath.FromSlash(path)
 	if !strings.HasSuffix(path, ".jsonl") || filepath.Base(filepath.Dir(path)) != filepath.Base(e.source) {
 		return "", false
@@ -64,7 +66,7 @@ func (e *Events) SessionID(path string) (string, bool) {
 	return strings.TrimSuffix(filepath.Base(path), ".jsonl"), true
 }
 
-func (e *Events) ReadSessionFile(path, host string) ([]events.Event, error) {
+func (e *adapter) ReadSessionFile(path, host string) ([]events.Event, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -77,7 +79,7 @@ func (e *Events) ReadSessionFile(path, host string) ([]events.Event, error) {
 // ReadSession reads one session's events. The harness, host, and session
 // are recall's to write, whatever the file says. A malformed line, or an
 // event that fails eventsv1.Check, is skipped.
-func (e *Events) ReadSession(r io.Reader, session, host string) ([]events.Event, error) {
+func (e *adapter) ReadSession(r io.Reader, session, host string) ([]events.Event, error) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 1024*1024), 32*1024*1024)
 	var out []events.Event
@@ -92,6 +94,8 @@ func (e *Events) ReadSession(r io.Reader, session, host string) ([]events.Event,
 	return out, sc.Err()
 }
 
-func (e *Events) Inventory(context.Context, string) (Inventory, error) { return Inventory{}, nil }
-func (e *Events) ContextFiles() []string                               { return nil }
-func (e *Events) Memories() ([]Memory, error)                          { return nil, nil }
+func (e *adapter) Inventory(context.Context, string) (harness.Inventory, error) {
+	return harness.Inventory{}, nil
+}
+func (e *adapter) ContextFiles() []string              { return nil }
+func (e *adapter) Memories() ([]harness.Memory, error) { return nil, nil }

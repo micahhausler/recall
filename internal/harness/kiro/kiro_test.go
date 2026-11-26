@@ -1,4 +1,4 @@
-package harness_test
+package kiro_test
 
 import (
 	"archive/tar"
@@ -15,25 +15,26 @@ import (
 	"github.com/micahhausler/recall/internal/config"
 	"github.com/micahhausler/recall/internal/events"
 	"github.com/micahhausler/recall/internal/harness"
+	"github.com/micahhausler/recall/internal/harness/kiro"
 )
 
-func kiro(t *testing.T, source string) harness.Harness {
+func open(t *testing.T, source string) harness.Harness {
 	t.Helper()
-	h, err := harness.Open("kiro", config.HarnessSettings{Source: source, Enabled: true})
+	h, err := kiro.New(config.HarnessSettings{Source: source, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return h
 }
 
-func readKiroFixture(t *testing.T, name string) []events.Event {
+func readFixture(t *testing.T, name string) []events.Event {
 	t.Helper()
-	f, err := os.Open(filepath.Join("testdata", "kiro", name+".jsonl"))
+	f, err := os.Open(filepath.Join("testdata", name+".jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	evs, err := kiro(t, t.TempDir()).ReadSession(f, name, "laptop-a")
+	evs, err := open(t, t.TempDir()).ReadSession(f, name, "laptop-a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,8 +63,8 @@ func summary(evs []events.Event) []string {
 	return out
 }
 
-func TestKiroV2Events(t *testing.T) {
-	evs := readKiroFixture(t, "v2")
+func TestV2Events(t *testing.T) {
+	evs := readFixture(t, "v2")
 	want := []string{
 		"user_prompt:list the files in example.com's repo",
 		"assistant_text:Listing them.",
@@ -90,8 +91,8 @@ func TestKiroV2Events(t *testing.T) {
 	}
 }
 
-func TestKiroV3Events(t *testing.T) {
-	evs := readKiroFixture(t, "v3")
+func TestV3Events(t *testing.T) {
+	evs := readFixture(t, "v3")
 	want := []string{
 		"user_prompt:why is the build failing?",
 		"assistant_text:Let me check.",
@@ -110,8 +111,8 @@ func TestKiroV3Events(t *testing.T) {
 	}
 }
 
-func TestKiroSessionID(t *testing.T) {
-	h := kiro(t, t.TempDir())
+func TestSessionID(t *testing.T) {
+	h := open(t, t.TempDir())
 	cases := map[string]string{
 		"sessions/cli/abc.jsonl":                 "abc",
 		"/home/you/.kiro/sessions/cli/abc.jsonl": "abc",
@@ -139,11 +140,11 @@ func put(t *testing.T, path, text string) {
 	}
 }
 
-func TestKiroOnDisk(t *testing.T) {
+func TestOnDisk(t *testing.T) {
 	root := filepath.Join(t.TempDir(), ".kiro")
 	src := filepath.Join(root, "sessions")
-	v2, _ := os.ReadFile(filepath.Join("testdata", "kiro", "v2.jsonl"))
-	v3, _ := os.ReadFile(filepath.Join("testdata", "kiro", "v3.jsonl"))
+	v2, _ := os.ReadFile(filepath.Join("testdata", "v2.jsonl"))
+	v3, _ := os.ReadFile(filepath.Join("testdata", "v3.jsonl"))
 	put(t, filepath.Join(src, "cli", "abc.jsonl"), string(v2))
 	put(t, filepath.Join(src, "cli", "abc.json"), `{"cwd":"/work/a"}`)
 	put(t, filepath.Join(src, "0f0f", "sess_xyz", "messages.jsonl"), string(v3))
@@ -152,7 +153,7 @@ func TestKiroOnDisk(t *testing.T) {
 	put(t, filepath.Join(root, "steering", "AGENTS.md"), "- a rule\n")
 	put(t, filepath.Join(root, "steering", "team", "build.md"), "- another\n")
 	put(t, filepath.Join(root, "steering", "notes.txt"), "")
-	h := kiro(t, src)
+	h := open(t, src)
 
 	sessions, err := h.Sessions()
 	if err != nil {
@@ -190,9 +191,9 @@ func TestKiroOnDisk(t *testing.T) {
 // file archived beside the transcript, in both layouts and whichever order
 // the tar holds them; a session archived without metadata quietly keeps an
 // empty one.
-func TestKiroReadTarZstCWD(t *testing.T) {
-	v2, _ := os.ReadFile(filepath.Join("testdata", "kiro", "v2.jsonl"))
-	v3, _ := os.ReadFile(filepath.Join("testdata", "kiro", "v3.jsonl"))
+func TestReadTarZstCWD(t *testing.T) {
+	v2, _ := os.ReadFile(filepath.Join("testdata", "v2.jsonl"))
+	v3, _ := os.ReadFile(filepath.Join("testdata", "v3.jsonl"))
 	var buf bytes.Buffer
 	zw, _ := zstd.NewWriter(&buf)
 	tw := tar.NewWriter(zw)
@@ -210,7 +211,7 @@ func TestKiroReadTarZstCWD(t *testing.T) {
 	}
 	tw.Close()
 	zw.Close()
-	evs, err := harness.ReadTarZstFrom(kiro(t, t.TempDir()), &buf, "laptop-b")
+	evs, err := harness.ReadTarZstFrom(open(t, t.TempDir()), &buf, "laptop-b")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,8 +229,8 @@ func TestKiroReadTarZstCWD(t *testing.T) {
 }
 
 // An archived week names v3 sessions by their directory, not messages.jsonl.
-func TestKiroReadTarZst(t *testing.T) {
-	v3, _ := os.ReadFile(filepath.Join("testdata", "kiro", "v3.jsonl"))
+func TestReadTarZst(t *testing.T) {
+	v3, _ := os.ReadFile(filepath.Join("testdata", "v3.jsonl"))
 	var buf bytes.Buffer
 	zw, _ := zstd.NewWriter(&buf)
 	tw := tar.NewWriter(zw)
@@ -243,7 +244,7 @@ func TestKiroReadTarZst(t *testing.T) {
 	}
 	tw.Close()
 	zw.Close()
-	evs, err := harness.ReadTarZstFrom(kiro(t, t.TempDir()), &buf, "laptop-b")
+	evs, err := harness.ReadTarZstFrom(open(t, t.TempDir()), &buf, "laptop-b")
 	if err != nil {
 		t.Fatal(err)
 	}

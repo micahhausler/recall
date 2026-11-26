@@ -9,7 +9,7 @@ import (
 
 	"github.com/micahhausler/recall/internal/config"
 	"github.com/micahhausler/recall/internal/events"
-	"github.com/micahhausler/recall/internal/harness"
+	"github.com/micahhausler/recall/internal/harness/adapters"
 )
 
 var updateRender = flag.Bool("update-render", false, "rewrite testdata/render from the adapter fixtures")
@@ -17,21 +17,16 @@ var updateRender = flag.Bool("update-render", false, "rewrite testdata/render fr
 // A flat session renders byte for byte as the goldens, so no stored
 // fingerprint moves.
 func TestRenderAdapterFixtures(t *testing.T) {
-	fixtures, err := filepath.Glob(filepath.Join("..", "harness", "testdata", "*.jsonl"))
+	fixtures, err := filepath.Glob(filepath.Join("..", "harness", "*", "testdata", "*.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	kiro, _ := filepath.Glob(filepath.Join("..", "harness", "testdata", "kiro", "*.jsonl"))
-	fixtures = append(fixtures, kiro...)
 	if len(fixtures) == 0 {
 		t.Fatal("no fixtures")
 	}
 	for _, path := range fixtures {
-		name := config.HarnessClaude
-		if filepath.Base(filepath.Dir(path)) == "kiro" {
-			name = config.HarnessKiro
-		}
-		h, err := harness.Open(name, config.HarnessSettings{Source: t.TempDir(), Enabled: true})
+		name := filepath.Base(filepath.Dir(filepath.Dir(path)))
+		h, err := adapters.Open(name, config.HarnessSettings{Source: t.TempDir(), Enabled: true})
 		if err != nil {
 			t.Fatal(err)
 		}

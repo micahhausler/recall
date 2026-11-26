@@ -1,4 +1,4 @@
-package harness_test
+package adapters_test
 
 import (
 	"archive/tar"
@@ -13,6 +13,7 @@ import (
 
 	"github.com/micahhausler/recall/internal/config"
 	"github.com/micahhausler/recall/internal/harness"
+	"github.com/micahhausler/recall/internal/harness/adapters"
 )
 
 // A harness recall doesn't know reads through the adapter its format names
@@ -20,10 +21,10 @@ import (
 func TestFormattedHarness(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "other-config")
 	source := filepath.Join(root, "projects")
-	plain, _ := os.ReadFile(filepath.Join("testdata", "plain.jsonl"))
+	plain, _ := os.ReadFile(filepath.Join("..", "claude", "testdata", "plain.jsonl"))
 	put(t, filepath.Join(source, "-work-a", "abc.jsonl"), string(plain))
 	put(t, filepath.Join(root, "CLAUDE.md"), "- a rule\n")
-	h, err := harness.Open("work", config.HarnessSettings{Source: source, Enabled: true, Format: config.HarnessClaude})
+	h, err := adapters.Open("work", config.HarnessSettings{Source: source, Enabled: true, Format: config.HarnessClaude})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +52,7 @@ func TestFormattedHarness(t *testing.T) {
 // A Kiro-format harness still recovers each archived session's cwd from the
 // metadata beside it.
 func TestFormattedHarnessKeepsMetadata(t *testing.T) {
-	v2, _ := os.ReadFile(filepath.Join("testdata", "kiro", "v2.jsonl"))
+	v2, _ := os.ReadFile(filepath.Join("..", "kiro", "testdata", "v2.jsonl"))
 	var buf bytes.Buffer
 	zw, _ := zstd.NewWriter(&buf)
 	tw := tar.NewWriter(zw)
@@ -64,7 +65,7 @@ func TestFormattedHarnessKeepsMetadata(t *testing.T) {
 	}
 	tw.Close()
 	zw.Close()
-	h, err := harness.Open("kiro-b", config.HarnessSettings{Source: t.TempDir(), Enabled: true, Format: config.HarnessKiro})
+	h, err := adapters.Open("kiro-b", config.HarnessSettings{Source: t.TempDir(), Enabled: true, Format: config.HarnessKiro})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,9 +87,19 @@ func TestOpenUnknownHarness(t *testing.T) {
 		{"", "set harness.work.format"},
 		{"other", `unknown format "other"`},
 	} {
-		_, err := harness.Open("work", config.HarnessSettings{Source: t.TempDir(), Format: tc.format})
+		_, err := adapters.Open("work", config.HarnessSettings{Source: t.TempDir(), Format: tc.format})
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("format %q: err = %v, want %q", tc.format, err, tc.want)
 		}
+	}
+}
+
+func put(t *testing.T, path, text string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

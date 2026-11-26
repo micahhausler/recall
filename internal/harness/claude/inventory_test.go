@@ -1,4 +1,4 @@
-package harness
+package claude
 
 import (
 	"strings"

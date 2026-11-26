@@ -1,11 +1,11 @@
-package harness
+package kiro
 
 import (
 	"strings"
 	"testing"
 )
 
-func TestParseKiroCommands(t *testing.T) {
+func TestParseCommands(t *testing.T) {
 	stream := strings.Join([]string{
 		`{"type":"runStarted","data":{"payloadSchema":"acp"}}`,
 		`{"type":"sessionUpdate","data":{"sessionId":"sess_a","update":{"sessionUpdate":"available_commands_update","availableCommands":[{"name":"keep","_meta":{"kiro":{"type":"skill"}}}]}}}`,
@@ -13,7 +13,7 @@ func TestParseKiroCommands(t *testing.T) {
 		`{"type":"sessionUpdate","data":{"sessionId":"sess_a","update":{"sessionUpdate":"session_info_update","_meta":{"kiro":{"kind":"turn_start"}}}}}`,
 		`{"type":"sessionUpdate","data":{"sessionId":"sess_a","update":{"sessionUpdate":"available_commands_update","availableCommands":[]}}}`,
 	}, "\n")
-	inv, session, err := parseKiroCommands(strings.NewReader(stream))
+	inv, session, err := parseCommands(strings.NewReader(stream))
 	if err != nil || session != "sess_a" {
 		t.Fatalf("session %q, err %v", session, err)
 	}
@@ -25,8 +25,8 @@ func TestParseKiroCommands(t *testing.T) {
 	}
 }
 
-func TestParseKiroCommandsError(t *testing.T) {
-	_, _, err := parseKiroCommands(strings.NewReader(`{"type":"runError","data":{"sessionId":null,"stage":"auth","message":"Not logged in."}}`))
+func TestParseCommandsError(t *testing.T) {
+	_, _, err := parseCommands(strings.NewReader(`{"type":"runError","data":{"sessionId":null,"stage":"auth","message":"Not logged in."}}`))
 	if err == nil || err.Error() != "Not logged in." {
 		t.Errorf("err = %v", err)
 	}

@@ -1,4 +1,4 @@
-package harness_test
+package claude_test
 
 import (
 	"bufio"
@@ -9,42 +9,8 @@ import (
 	"testing"
 
 	eventsv1 "github.com/micahhausler/recall/api/events/v1"
-	"github.com/micahhausler/recall/internal/config"
-	"github.com/micahhausler/recall/internal/harness"
 	"github.com/micahhausler/recall/internal/redact"
 )
-
-// Every event an adapter emits from its fixtures passes the contract's
-// own check.
-func TestAdapterEventsCheck(t *testing.T) {
-	claude, _ := filepath.Glob(filepath.Join("testdata", "*.jsonl"))
-	kiro, _ := filepath.Glob(filepath.Join("testdata", "kiro", "*.jsonl"))
-	for name, paths := range map[string][]string{config.HarnessClaude: claude, config.HarnessKiro: kiro} {
-		if len(paths) == 0 {
-			t.Fatalf("no %s fixtures", name)
-		}
-		h, err := harness.Open(name, config.HarnessSettings{Source: t.TempDir(), Enabled: true})
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, path := range paths {
-			f, err := os.Open(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			evs, err := h.ReadSession(f, "s", "laptop-a")
-			f.Close()
-			if err != nil {
-				t.Fatal(err)
-			}
-			for i, e := range evs {
-				if err := eventsv1.Check(e); err != nil {
-					t.Errorf("%s event %d: %v", path, i+1, err)
-				}
-			}
-		}
-	}
-}
 
 // Summarize, redacted and trimmed, gives every Claude fixture's tool call
 // the summary the adapter wrote before the contract held it.
