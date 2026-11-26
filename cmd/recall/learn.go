@@ -497,11 +497,11 @@ func (r *mapRun) work(ctx context.Context, j mapJob) {
 			note = fmt.Sprintf("; %s: read the first %d of %d prompts", p.Reason, p.Prompts, p.Of)
 			r.partial++
 		}
-		fmt.Printf("observed %s: %d observation(s), %d rule hit(s) ($%.4f%s)\n",
-			j.label, len(res.Observations.Observations), hits, res.CostUSD, note)
+		fmt.Printf("observed %s: %d observation(s), %d rule hit(s) (%s%s)\n",
+			j.label, len(res.Observations.Observations), hits, res.Usage, note)
 	case res.Judged:
 		r.judged++
-		fmt.Printf("judged %s: %d rule hit(s) ($%.4f)\n", j.label, hits, res.CostUSD)
+		fmt.Printf("judged %s: %d rule hit(s) (%s)\n", j.label, hits, res.Usage)
 	default:
 		r.cached++
 	}

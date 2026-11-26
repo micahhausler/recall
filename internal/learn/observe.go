@@ -80,8 +80,8 @@ type SessionObservations struct {
 	Failures []Signal `json:"failures,omitempty"`
 	// Models are the models that answered in the session. A rule is earned
 	// against the model that needed it, and a later model may not.
-	Models       []string      `json:"models,omitempty"`
-	CostUSD      float64       `json:"cost_usd,omitempty"`
+	Models []string `json:"models,omitempty"`
+	Spend
 	Observations []Observation `json:"observations"`
 	// RuleHits is set only on records written before rule hits moved to
 	// their own records (SessionHits).
@@ -201,7 +201,19 @@ type Mapped struct {
 	// Observed and Judged report which model work this call did; both are
 	// false for a session answered wholly from the cache.
 	Observed, Judged bool
-	CostUSD          float64
+	Usage            model.Usage
+}
+
+// Spend is what a record's model calls cost, as the runner reported it.
+type Spend struct {
+	CostUSD      float64 `json:"cost_usd,omitempty"`
+	InputTokens  int     `json:"input_tokens,omitempty"`
+	OutputTokens int     `json:"output_tokens,omitempty"`
+	Credits      float64 `json:"credits,omitempty"`
+}
+
+func spendOf(u model.Usage) Spend {
+	return Spend{CostUSD: u.CostUSD, InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, Credits: u.Credits}
 }
 
 // Ran reports whether the model ran.
@@ -346,11 +358,10 @@ func (m *Mapper) MapSession(ctx context.Context, harnessName, session string, ev
 	observe := p.cached == nil
 	var partial *Partial
 	refused := false
-	var modelID string
-	out, err := m.call(ctx, m.input(p.rendered, observe, p.judge), &res.CostUSD, &modelID)
+	out, err := m.call(ctx, m.input(p.rendered, observe, p.judge), &res.Usage)
 	if errors.Is(err, model.ErrRefusal) {
 		if observe {
-			out, partial, err = m.salvage(ctx, evs, p.judge, &res.CostUSD, &modelID)
+			out, partial, err = m.salvage(ctx, evs, p.judge, &res.Usage)
 		} else {
 			// The observations are cached; record the refusal so later
 			// runs don't pay to be refused again.
@@ -374,9 +385,9 @@ func (m *Mapper) MapSession(ctx context.Context, harnessName, session string, ev
 		res.Observed = true
 		res.Observations = &SessionObservations{
 			Fingerprint: Fingerprint(p.rendered, m.mapCall()), Harness: harnessName, Host: m.Host, Session: session,
-			Model: m.Model, Effort: m.Effort, ModelID: modelID, ObservedAt: now, FirstEvent: p.first, LastEvent: p.last,
+			Model: m.Model, Effort: m.Effort, ModelID: res.Usage.ModelID, ObservedAt: now, FirstEvent: p.first, LastEvent: p.last,
 			Scope: p.scope, Prompts: p.prompts, Signals: p.signals, Failures: p.failures, Models: p.models,
-			CostUSD: res.CostUSD, Observations: obs, Partial: partial,
+			Spend: spendOf(res.Usage), Observations: obs, Partial: partial,
 		}
 		if err := putJSON(ctx, m.Store, p.obsKey, res.Observations); err != nil {
 			return nil, err
@@ -387,11 +398,11 @@ func (m *Mapper) MapSession(ctx context.Context, harnessName, session string, ev
 		res.Judged = true
 		res.Hits = &SessionHits{
 			Harness: harnessName, Host: m.Host, Session: session, Content: p.content, Prompt: hitsPromptHash(),
-			Model: m.Model, Effort: m.Effort, ModelID: modelID, JudgedAt: now, FirstEvent: p.first, LastEvent: p.last,
+			Model: m.Model, Effort: m.Effort, ModelID: res.Usage.ModelID, JudgedAt: now, FirstEvent: p.first, LastEvent: p.last,
 			Rules: shown, Hits: known(hits, p.judge), Partial: partial, Refused: refused,
 		}
 		if !observe {
-			res.Hits.CostUSD = res.CostUSD
+			res.Hits.Spend = spendOf(res.Usage)
 		}
 		key := HitsKey(harnessName, session, p.content, m.mapCall(), shown)
 		res.Hits.Fingerprint = strings.TrimSuffix(strings.TrimPrefix(key, hitsPrefix(harnessName, session)), ".json")
@@ -434,17 +445,14 @@ func (m *Mapper) input(rendered string, observe bool, judge []Rule) string {
 	return b.String()
 }
 
-// call runs the map model over one input, adding to the usage and to the
-// session's cost, and noting the model ID the harness reports.
-func (m *Mapper) call(ctx context.Context, input string, cost *float64, modelID *string) (string, error) {
+// call runs the map model over one input, adding to the run's usage and
+// the session's.
+func (m *Mapper) call(ctx context.Context, input string, session *model.Usage) (string, error) {
 	out, usage, err := m.Runner.Run(ctx, m.mapCall(), input)
 	m.mu.Lock()
 	m.Usage = m.Usage.Add(usage)
 	m.mu.Unlock()
-	*cost += usage.CostUSD
-	if usage.ModelID != "" {
-		*modelID = usage.ModelID
-	}
+	*session = session.Add(usage)
 	return out, err
 }
 
@@ -454,7 +462,7 @@ func (m *Mapper) call(ctx context.Context, input string, cost *float64, modelID 
 // one, then binary-searches down. A session with nothing salvageable is
 // still cached, so later runs don't pay to be refused again; a new map
 // model changes the fingerprint and retries it.
-func (m *Mapper) salvage(ctx context.Context, evs []events.Event, judge []Rule, cost *float64, modelID *string) (string, *Partial, error) {
+func (m *Mapper) salvage(ctx context.Context, evs []events.Event, judge []Rule, session *model.Usage) (string, *Partial, error) {
 	var prompts []int // index in evs of each owner prompt
 	firstRefusal := len(evs)
 	for i, e := range evs {
@@ -486,7 +494,7 @@ func (m *Mapper) salvage(ctx context.Context, evs []events.Event, judge []Rule, 
 	}
 	best, bestOut := 0, ""
 	try := func(k int) (bool, error) {
-		out, err := m.call(ctx, m.input(Render(prefix(k)), true, judge), cost, modelID)
+		out, err := m.call(ctx, m.input(Render(prefix(k)), true, judge), session)
 		if errors.Is(err, model.ErrRefusal) {
 			return false, nil
 		}

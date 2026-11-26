@@ -3,6 +3,7 @@ package learn
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -821,12 +822,14 @@ func TestNameCollisions(t *testing.T) {
 // refuser refuses any input containing a flagged word, like a safeguard.
 type refuser struct{ calls int }
 
+var refuserUsage = model.Usage{InputTokens: 100, OutputTokens: 10, CostUSD: 0.01, Credits: 0.5}
+
 func (r *refuser) Run(ctx context.Context, _ model.Call, input string) (string, model.Usage, error) {
 	r.calls++
 	if strings.Contains(input, "FLAGGED") {
-		return "", model.Usage{CostUSD: 0.01}, fmt.Errorf("claude -p: %w: flagged", model.ErrRefusal)
+		return "", refuserUsage, fmt.Errorf("claude -p: %w: flagged", model.ErrRefusal)
 	}
-	return "Observation[context]: saw " + fmt.Sprint(strings.Count(input, "[owner] ")) + " prompts\n", model.Usage{CostUSD: 0.01}, nil
+	return "Observation[context]: saw " + fmt.Sprint(strings.Count(input, "[owner] ")) + " prompts\n", refuserUsage, nil
 }
 
 func promptsSession(flagged int, refusalAfter int) []events.Event {
@@ -879,10 +882,72 @@ func TestMapSalvagesRefusedSession(t *testing.T) {
 			if so.CostUSD != 0.01*float64(tc.wantCalls) {
 				t.Errorf("cost = %v, want every attempt counted", so.CostUSD)
 			}
+			if so.InputTokens != 100*tc.wantCalls || so.OutputTokens != 10*tc.wantCalls || so.Credits != 0.5*float64(tc.wantCalls) {
+				t.Errorf("spend = %+v, want every attempt's tokens and credits counted", so.Spend)
+			}
 			if res, _ := m.MapSession(context.Background(), "claude", "s1", evs); res.Ran() {
 				t.Error("a salvaged session should be cached")
 			}
 		})
+	}
+}
+
+// Tokens and credits land in a session's records beside its cost.
+func TestMapRecordsSessionSpend(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMem()
+	fake := &model.Fake{Response: "Observation[context]: Repos live under a GOPATH-style tree.\n",
+		Usage: model.Usage{InputTokens: 1000, OutputTokens: 50, Credits: 0.25}}
+	m := mapper(st, fake, nil)
+	evs := []events.Event{ev(events.UserPrompt, "ship it")}
+	res, err := m.MapSession(ctx, "claude", "s1", evs)
+	if err != nil || !res.Observed {
+		t.Fatalf("map: err=%v res=%+v", err, res)
+	}
+	want := Spend{InputTokens: 1000, OutputTokens: 50, Credits: 0.25}
+	if res.Observations.Spend != want || res.Usage.InputTokens != 1000 {
+		t.Errorf("observation spend = %+v, usage = %+v", res.Observations.Spend, res.Usage)
+	}
+	m.Rules = []Rule{{ID: "r-0001", Text: "Ask first.", TextHash: textHash("Ask first."), Created: "2026-01-01"}}
+	fake.Response = "Rule[r-0001]: followed\n"
+	res, err = m.MapSession(ctx, "claude", "s1", evs)
+	if err != nil || res.Observed || !res.Judged || res.Hits.Spend != want {
+		t.Fatalf("judge: err=%v res=%+v", err, res)
+	}
+	keys, err := st.List(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := 0
+	for _, k := range keys {
+		r, err := st.Get(ctx, k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, _ := io.ReadAll(r)
+		r.Close()
+		for _, field := range []string{`"input_tokens": 1000`, `"output_tokens": 50`, `"credits": 0.25`} {
+			if !strings.Contains(string(data), field) {
+				t.Errorf("%s misses %s:\n%s", k, field, data)
+			}
+		}
+		if strings.Contains(string(data), "cost_usd") {
+			t.Errorf("%s records a cost the runner didn't report", k)
+		}
+		stored++
+	}
+	if stored != 2 {
+		t.Errorf("stored %d records, want an observation record and a hits record", stored)
+	}
+
+	old := `{"session":"s0","cost_usd":0.02,"observations":[]}`
+	var so SessionObservations
+	var sh SessionHits
+	if err := json.Unmarshal([]byte(old), &so); err != nil || so.Spend != (Spend{CostUSD: 0.02}) {
+		t.Errorf("old observation record = %+v, %v", so.Spend, err)
+	}
+	if err := json.Unmarshal([]byte(old), &sh); err != nil || sh.Spend != (Spend{CostUSD: 0.02}) {
+		t.Errorf("old hits record = %+v, %v", sh.Spend, err)
 	}
 }
 

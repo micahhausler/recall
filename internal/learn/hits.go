@@ -43,13 +43,13 @@ type SessionHits struct {
 	// Model is the map model as configured, Effort the level it ran at
 	// (empty for the harness default), and ModelID the model the harness
 	// resolved Model to, when it reports one.
-	Model      string  `json:"model"`
-	Effort     string  `json:"effort,omitempty"`
-	ModelID    string  `json:"model_id,omitempty"`
-	JudgedAt   string  `json:"judged_at"`
-	FirstEvent string  `json:"first_event,omitempty"`
-	LastEvent  string  `json:"last_event,omitempty"`
-	CostUSD    float64 `json:"cost_usd,omitempty"`
+	Model      string `json:"model"`
+	Effort     string `json:"effort,omitempty"`
+	ModelID    string `json:"model_id,omitempty"`
+	JudgedAt   string `json:"judged_at"`
+	FirstEvent string `json:"first_event,omitempty"`
+	LastEvent  string `json:"last_event,omitempty"`
+	Spend
 	// Rules are the wordings shown; a rule listed here with no hit was
 	// judged and not touched.
 	Rules []RuleRef `json:"rules"`

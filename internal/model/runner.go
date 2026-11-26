@@ -45,12 +45,22 @@ func (u Usage) Add(o Usage) Usage {
 // Zero reports whether the usage records nothing.
 func (u Usage) Zero() bool { return u == Usage{} }
 
+// String names only the parts the harness reported.
 func (u Usage) String() string {
-	s := fmt.Sprintf("%d in, %d out, $%.4f", u.InputTokens, u.OutputTokens, u.CostUSD)
-	if u.Credits > 0 {
-		s += fmt.Sprintf(", %.2f credits", u.Credits)
+	var parts []string
+	if u.InputTokens > 0 || u.OutputTokens > 0 {
+		parts = append(parts, fmt.Sprintf("%d in, %d out", u.InputTokens, u.OutputTokens))
 	}
-	return s
+	if u.CostUSD > 0 {
+		parts = append(parts, fmt.Sprintf("$%.4f", u.CostUSD))
+	}
+	if u.Credits > 0 {
+		parts = append(parts, fmt.Sprintf("%.2f credits", u.Credits))
+	}
+	if len(parts) == 0 {
+		return "no usage reported"
+	}
+	return strings.Join(parts, ", ")
 }
 
 // ValidEffort refuses a level the runner's CLI doesn't take. Empty is

@@ -8,6 +8,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/micahhausler/recall/internal/clock"
+	"github.com/micahhausler/recall/internal/events"
+	"github.com/micahhausler/recall/internal/learn"
+	"github.com/micahhausler/recall/internal/model"
+	"github.com/micahhausler/recall/internal/store"
 )
 
 // captureStderr runs fn with os.Stderr swapped for a pipe and returns what
@@ -89,5 +96,20 @@ func TestMapBoundedWindowNamesSkippedTimestamplessSessions(t *testing.T) {
 	}
 	if !strings.Contains(errOut, "1 session(s)") || !strings.Contains(errOut, "--since all") {
 		t.Errorf("the skip was never named with its remedy:\n%s", errOut)
+	}
+}
+
+// A session's line shows its tokens and credits, not only dollars.
+func TestMapLineShowsSessionSpend(t *testing.T) {
+	m := &learn.Mapper{Store: store.NewMem(), Model: "haiku", Host: "laptop-a",
+		Runner: &model.Fake{Response: "Observation[context]: Repos live under a GOPATH-style tree.\n",
+			Usage: model.Usage{InputTokens: 1000, OutputTokens: 50, Credits: 0.25}},
+		Clock: &clock.Fake{T: time.Date(2026, 11, 11, 0, 0, 0, 0, time.UTC)}}
+	evs := []events.Event{{Harness: "claude", Session: "s1", Timestamp: "2026-11-01T00:00:01Z", Kind: events.UserPrompt, Text: "ship it"}}
+	r := &mapRun{}
+	out := captureStdout(t, func() { r.work(context.Background(), newJob(m, "claude", "s1", evs)) })
+	want := "observed claude/s1 @laptop-a: 1 observation(s), 0 rule hit(s) (1000 in, 50 out, 0.25 credits)\n"
+	if out != want {
+		t.Errorf("line = %q, want %q", out, want)
 	}
 }
