@@ -7,23 +7,24 @@ builds:
   - id: recall
     main: ./cmd/recall
     binary: recall
-    env: &env [CGO_ENABLED=0]
-    goos: &goos [linux, darwin]
-    goarch: &goarch [amd64, arm64]
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
     mod_timestamp: "{{ .CommitTimestamp }}"
-    flags: &flags [-trimpath]
-    ldflags: &ldflags
+    flags: [-trimpath]
+    ldflags:
       - -s -w -X github.com/micahhausler/recall/internal/version.Version={{ .Version }}
   # The optional GitHub App credential command (docs/github-app.md).
   - id: recall-github-app
     main: ./cmd/recall-github-app
     binary: recall-github-app
-    env: *env
-    goos: *goos
-    goarch: *goarch
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
     mod_timestamp: "{{ .CommitTimestamp }}"
-    flags: *flags
-    ldflags: *ldflags
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/micahhausler/recall/internal/version.Version={{ .Version }}
 
 archives:
   - id: recall
@@ -32,28 +33,40 @@ archives:
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     # Commit time and a fixed owner on every entry, so an archive's checksum
     # depends only on the commit, not on who built it or when they checked out.
-    builds_info: &builds_info
+    builds_info:
       mtime: "{{ .CommitDate }}"
       owner: root
       group: root
     files:
       - src: LICENSE
-        info: &fixed
+        info:
           mtime: "{{ .CommitDate }}"
           owner: root
           group: root
       - src: README.md
-        info: *fixed
+        info:
+          mtime: "{{ .CommitDate }}"
+          owner: root
+          group: root
   - id: recall-github-app
     ids: [recall-github-app]
     formats: [tar.gz]
     name_template: "recall-github-app_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    builds_info: *builds_info
+    builds_info:
+      mtime: "{{ .CommitDate }}"
+      owner: root
+      group: root
     files:
       - src: LICENSE
-        info: *fixed
+        info:
+          mtime: "{{ .CommitDate }}"
+          owner: root
+          group: root
       - src: docs/github-app.md
-        info: *fixed
+        info:
+          mtime: "{{ .CommitDate }}"
+          owner: root
+          group: root
 
 checksum:
   name_template: checksums.txt
