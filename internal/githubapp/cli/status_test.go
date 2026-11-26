@@ -129,3 +129,18 @@ func TestStatusAsksForEachRevokeOnce(t *testing.T) {
 		t.Errorf("status printed a token:\n%s", f.stdout)
 	}
 }
+
+// A permission the config's extra_permissions name is expected: held, it
+// is no problem, and missing, it is one.
+func TestStatusExpectsTheConfigsExtraPermissions(t *testing.T) {
+	f := newFixture(t)
+	f.configured(config.Config{AppID: 7, Slug: "recall-you", BotUserID: 4242, Owner: "you",
+		ExtraPermissions: map[string]string{"issues": "write"}})
+	if code := f.run("", "status"); code != 1 || !strings.Contains(f.stdout.String(), "the App lacks issues: write") {
+		t.Errorf("exit %d, want 1 for the missing issues: write:\n%s", code, f.stdout)
+	}
+	f.github.Granted["issues"] = "write"
+	if code := f.run("", "status"); code != 0 {
+		t.Errorf("exit %d, want 0 with issues: write held:\n%s", code, f.stdout)
+	}
+}

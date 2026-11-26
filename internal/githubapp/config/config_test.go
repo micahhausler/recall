@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -10,7 +11,8 @@ import (
 func TestSaveThenLoad(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "recall-example", "config.toml")
 	want := &Config{ClientID: "Iv23liEXAMPLE", AppID: 123456, Slug: "recall-you", BotUserID: 234567,
-		Key: "tpm:~/.local/state/recall-example/app-key.blob"}
+		ExtraPermissions: map[string]string{"issues": "write"},
+		Key:              "tpm:~/.local/state/recall-example/app-key.blob"}
 	if err := want.Save(path); err != nil {
 		t.Fatal(err)
 	}
@@ -18,7 +20,7 @@ func TestSaveThenLoad(t *testing.T) {
 		t.Errorf("config mode = %v, %v; want 0600", st.Mode(), err)
 	}
 	got, err := Load(path)
-	if err != nil || *got != *want {
+	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Errorf("loaded %+v, %v; want %+v", got, err, want)
 	}
 	// Saving again replaces the file and leaves no temp file behind.

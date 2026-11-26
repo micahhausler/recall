@@ -34,6 +34,10 @@ type Config struct {
 	// lists it. It picks the key out of an SSH agent, and for any kind
 	// the key found must match it.
 	KeyFingerprint string `toml:"key_fingerprint,omitempty"`
+	// ExtraPermissions are what the App holds on purpose beyond what
+	// recall's tokens use, as name to read or write; `token --permission`
+	// may ask for them.
+	ExtraPermissions map[string]string `toml:"extra_permissions,omitempty"`
 }
 
 // Path is the config file's place under home, for the command name.
@@ -71,6 +75,11 @@ func Load(path string) (*Config, error) {
 	}
 	if c.Key == "" {
 		return nil, fmt.Errorf("%s: key isn't set", path)
+	}
+	for name, level := range c.ExtraPermissions {
+		if level != "read" && level != "write" {
+			return nil, fmt.Errorf("%s: extra_permissions.%s is %q; it is read or write", path, name, level)
+		}
 	}
 	return &c, nil
 }

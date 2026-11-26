@@ -7,6 +7,7 @@ import (
 	"encoding/pem"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -42,7 +43,7 @@ func TestImportKeyOnANewMachine(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := config.Config{ClientID: "Iv23liEXAMPLE", AppID: 7, Slug: "recall-you", BotUserID: 4242, Owner: "you", Key: "file:~/keys/app.pem", KeyFingerprint: keyFingerprint()}
-	if *cfg != want {
+	if !reflect.DeepEqual(*cfg, want) {
 		t.Errorf("config = %+v, want %+v", *cfg, want)
 	}
 	// The machine now answers credential requests.
@@ -145,7 +146,7 @@ func TestImportKeyThatAnSSHAgentHolds(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := config.Config{ClientID: "Iv23liEXAMPLE", AppID: 7, Slug: "recall-you", BotUserID: 4242, Owner: "you", Key: keyRef, KeyFingerprint: keyFingerprint()}
-	if *cfg != want {
+	if !reflect.DeepEqual(*cfg, want) {
 		t.Errorf("config = %+v, want %+v", *cfg, want)
 	}
 	if code := f.token(request); code != 0 {

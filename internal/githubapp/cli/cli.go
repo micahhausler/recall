@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"os/signal"
@@ -51,6 +52,9 @@ Usage:
   NAME --version          print the release tag
 
   --config PATH       the config file (default ~/.config/NAME/config.toml)
+  --permission PERM=LEVEL
+                      token: also ask for PERM at LEVEL, read or write; the
+                      config's extra_permissions must hold it. Repeatable
   --key KIND:PATH     create, import-key: where the key goes. tpm wraps it
                       with this machine's TPM; file writes a PEM file;
                       ssh-agent (import-key only) is the socket of an SSH
@@ -79,6 +83,32 @@ var tokenPermissions = map[string]string{
 	"statuses":      "read",
 }
 
+// permissionFlag collects --permission NAME=LEVEL, one per use.
+type permissionFlag map[string]string
+
+func (p permissionFlag) String() string { return permissionList(p) }
+
+func (p permissionFlag) Set(v string) error {
+	name, level, ok := strings.Cut(v, "=")
+	if !ok || name == "" || (level != "read" && level != "write") {
+		return fmt.Errorf("%q isn't NAME=read or NAME=write", v)
+	}
+	p[name] = level
+	return nil
+}
+
+// expectedPermissions are what the App should hold: what every token uses,
+// and what the config says it holds on purpose besides.
+func expectedPermissions(cfg *config.Config) map[string]string {
+	want := maps.Clone(tokenPermissions)
+	for name, level := range cfg.ExtraPermissions {
+		if !app.Grants(want[name], level) {
+			want[name] = level
+		}
+	}
+	return want
+}
+
 // usage is the help text, with the command's name.
 func usage(name string) string { return strings.ReplaceAll(usageText, "NAME", name) }
 
@@ -92,7 +122,7 @@ const httpTimeout = 30 * time.Second
 // flagsFor names the flags each command takes, beyond --config. A flag a
 // command would ignore is a usage error, not a silent no-op.
 var flagsFor = map[string][]string{
-	"token":      nil,
+	"token":      {"permission"},
 	"status":     nil,
 	"help":       nil,
 	"create":     {"key", "name", "description", "homepage", "port"},
@@ -160,6 +190,8 @@ func (e *env) run(ctx context.Context, args []string) int {
 	homepage := fs.String("homepage", defaultHomepage, "")
 	port := fs.Int("port", 8765, "")
 	showVersion := fs.Bool("version", false, "")
+	asked := permissionFlag{}
+	fs.Var(asked, "permission", "")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -219,7 +251,7 @@ func (e *env) run(ctx context.Context, args []string) int {
 	var err error
 	switch cmd {
 	case "token":
-		err = e.token(ctx)
+		err = e.token(ctx, asked)
 	case "status":
 		err = e.status(ctx)
 	case "create":
