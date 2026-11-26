@@ -9,9 +9,11 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.10
 	github.com/aws/aws-sdk-go-v2/service/sts v1.52.0
 	github.com/aws/smithy-go v1.28.9
+	github.com/google/go-tpm v0.9.8
 	github.com/klauspost/compress v1.20.4
 	github.com/micahhausler/aws-iam-policy v0.4.4
 	github.com/pelletier/go-toml/v2 v2.4.3
+	golang.org/x/crypto v0.59.0
 	golang.org/x/term v0.48.0
 )
 
@@ -28,5 +30,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/signin v1.13.1 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sso v1.39.5 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.44.5 // indirect
+	github.com/google/go-tpm-tools v0.4.11 // indirect
 	golang.org/x/sys v0.50.0 // indirect
 )

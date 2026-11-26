@@ -39,6 +39,8 @@ jobs:
           go-version: stable
       - run: go vet ./...
       - run: go test ./...
+      # Releases build without cgo; only the TPM simulator tests use it.
+      - run: CGO_ENABLED=0 go build ./...
       - name: gofmt
         run: |
           out="$(gofmt -l .)"
@@ -90,9 +92,9 @@ jobs:
           distribution: goreleaser
           version: ${{ steps.goreleaser.outputs.version }}
           args: release --snapshot --clean
-      - name: brew style on the rendered cask
+      - name: brew style on the rendered casks
         run: |
           mkdir -p "$RUNNER_TEMP/tap/Casks"
-          cp dist/homebrew/Casks/recall.rb "$RUNNER_TEMP/tap/Casks/"
+          cp dist/homebrew/Casks/recall.rb dist/homebrew/Casks/recall-github-app.rb "$RUNNER_TEMP/tap/Casks/"
           # ubuntu-latest ships Homebrew here, off PATH.
-          /home/linuxbrew/.linuxbrew/bin/brew style "$RUNNER_TEMP/tap/Casks/recall.rb"
+          /home/linuxbrew/.linuxbrew/bin/brew style "$RUNNER_TEMP/tap/Casks/recall.rb" "$RUNNER_TEMP/tap/Casks/recall-github-app.rb"

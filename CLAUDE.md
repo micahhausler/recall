@@ -47,10 +47,13 @@ Examples and tests use placeholders like `you`, `example.com`, and `laptop-a`.
   Like the credential packages, add to their JSON and exported names, never rename or remove one, and nothing recall's binary is built from imports `command`.
 - `api/events/v1`: the event schema as a contract (`recall.events/v1`): `Event`, the `Kind` constants, `Check`, `CheckSession`, and `Summarize`, standard library only.
   Events grow by optional fields and new kinds, never a rename or a removal.
-- `examples/credential-github-app`: an example credential command built on `api/credentials/v1/command`, which mints a GitHub App installation token per repository.
-  It is a `main` package in recall's module, so CI builds and tests it against the current contract, and GoReleaser, which builds only `cmd/recall`, never ships it.
+- `cmd/recall-github-app`: `main` for `recall-github-app`, the credential command that mints a GitHub App installation token per repository (`docs/github-app.md`); GoReleaser ships it as its own archive and cask.
+- `internal/githubapp`: everything `recall-github-app` is built from; nothing outside it and `cmd/recall-github-app` imports it, so `recall` links none of it.
+  `cli` holds flags and dispatch in `cli.go`, one file per command beside it, and `token.go` supplies only the token to `command.Run`; a new flag goes in `flagsFor`, and tests run as `testName`, so a name hardcoded outside `Name` fails them.
+  `app` is the App (JWT, installation, token, bot user), with `apptest.Fake`, the in-memory GitHub every test uses; `ghapi` is one REST call with its retries; `appkey` parses a key and computes GitHub's fingerprint; `manifest` is GitHub's manifest flow.
+  `keys` turns a `<kind>:<path>` reference into a signer: `file`, `tpm` (only `device_linux.go` touches a real TPM; tests use a simulator), and `ssh-agent` (`agenttest.Fake` is an in-process agent); `config` is the per-machine config file.
 - `examples/import-example`: an example import plugin built on `api/imports/v1/command`, which maps a synthetic source file of flat turns and of a message tree; `cmd/recall`'s end-to-end import test builds and runs it.
-  Like the credential example, CI builds and tests it, and GoReleaser never ships it.
+  CI builds and tests it, and GoReleaser never ships it.
 - `internal/extension`: the owner's extension files that skills and the reduce append at load time.
 - `internal/hook`: what the plugin's session hooks need: the hook input, the recursion guard, and the worker's lock and schedule.
 - `hooks/hooks.json`: the plugin's SessionEnd hook, which runs `recall hook`; nothing runs at session start.
@@ -64,14 +67,28 @@ Examples and tests use placeholders like `you`, `example.com`, and `laptop-a`.
 
 - Standard library first.
   Allowed dependencies: `pelletier/go-toml/v2`, AWS SDK for Go v2 (config, sts, s3), `klauspost/compress/zstd`, `micahhausler/aws-iam-policy` (typed IAM policy documents, for the policies recall prints and the bucket policy it sets and verifies), `golang.org/x/term` (in `api/credentials/v1/command` only, to refuse to print a token to a terminal: a file's mode can't tell a terminal from the null device, which is a character device too).
+  `internal/githubapp` alone also uses `google/go-tpm` (the TPM), `google/go-tpm-tools` (its simulator, tests only), and `golang.org/x/crypto` (the SSH agent protocol).
   Anything else needs a written reason.
 - Every pluggable part is a Go interface with a small registry keyed by the config name, and an in-memory fake in its package.
   Don't add an interface with only one plausible implementation.
 - Skills read and write config through `recall config get|set`, never by parsing TOML.
-- No test calls a model or AWS or touches the real crontab, LaunchAgents, or `$HOME`; tests use fakes and temp dirs.
+- No test calls a model, AWS, or GitHub, or touches the real crontab, LaunchAgents, `$HOME`, a real TPM, or a real SSH agent; tests use fakes, simulators, and temp dirs.
+  The opt-in exceptions are `TestRealDevice`, which runs only with `RECALL_TPM_TEST=1`, and `TestRealAgent`, which runs only with `RECALL_AGENT_TEST` and `RECALL_AGENT_PEM` set; `TestOpenSSHAgentSignsRS256` starts its own throwaway `ssh-agent` and never talks to yours.
 - A new or changed config key goes in three places: the code, `config.example.toml`, and the README or skill that uses it.
 - Memory management and nothing else: a feature that isn't about capturing, archiving, or learning from sessions belongs elsewhere.
   Enforcing the owner's style preferences, for example, is out of scope even when a script could.
+  The rule's scope is the `recall` binary: `recall-github-app` is an optional companion, a separate binary and cask for anyone who wants a bot to open recall's pull requests.
+
+## GitHub App command
+
+- A token never reaches a log, an error, a test name, or a terminal; `status` proves a token mints without showing one.
+  To keep a token out of output, parse the JSON and drop the field, never a regex over the text.
+- `token` only reads: it never writes the config or caches a token on disk.
+- A key file is never replaced or deleted, except the download `import-key` destroys last; a TPM blob may be the only copy of a key.
+- What can't be done twice goes last: ask GitHub everything and check every place a file must go before keeping a key GitHub hands over once or destroying a download; `keep` in `importkey.go` is the one order both commands use.
+- Nothing adds a key to an SSH agent; a key in an agent is picked by its fingerprint, and its signature is verified before use.
+- No fallback identities, and a token GitHub scoped wider than asked is dropped.
+- A POST or DELETE GitHub may have seen is never retried, and the manifest exchange is attempted once.
 
 ## Writing
 
@@ -92,6 +109,7 @@ Run these before saying a change is done; CI runs the same set:
 ```sh
 go vet ./...
 go test ./...
+CGO_ENABLED=0 go build ./...   # releases build without cgo; only the TPM simulator tests use it
 gofmt -l .        # must print nothing
 gitleaks dir . --redact
 claude plugin validate .

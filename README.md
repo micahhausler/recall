@@ -147,6 +147,17 @@ recall config set store.kind s3    # writes only to config.d/90-set.local.toml, 
 An S3 store needs AWS credentials and permissions on the bucket.
 [`docs/store.md`](docs/store.md) lists the IAM actions each role needs and has an example policy.
 
+## A GitHub App for recall's pull requests
+
+`recall-github-app` is an optional credential command that mints a GitHub App installation token for each repository, so the App's bot opens recall's pull requests and you approve them as yourself.
+It ships as its own cask from the same tap:
+
+```sh
+brew install --cask recall-github-app
+```
+
+[`docs/github-app.md`](docs/github-app.md) covers registering the App, where its key lives, and rotation.
+
 ## Inspirations
 
 - [Lamis Mukta, Learning while you sleep: Beyond memory to dreaming](https://www.youtube.com/watch?v=tTcxVv8HHNw): dream over full archived sessions out of band, tool calls included, and propose memory changes with the evidence sessions attached.

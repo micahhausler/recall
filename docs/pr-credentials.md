@@ -10,7 +10,7 @@ recall knows nothing about where the credential comes from.
 It runs the command and uses what comes back.
 The contract is modeled on Kubernetes exec credential plugins.
 A GitHub App that mints one-hour installation tokens, a bot user's token read from a password manager, and anything else that prints the same JSON all work.
-[`examples/credential-github-app`](../examples/credential-github-app) is a working GitHub App command to start from.
+[`recall-github-app`](github-app.md) is a ready-made GitHub App command, released beside recall as its own cask.
 
 ```toml
 [review.credentials]
@@ -101,7 +101,8 @@ import credentialsv1 "github.com/micahhausler/recall/api/credentials/v1"
 The package imports only the standard library, and recall's own side of the contract is built on it, so the two can't spell a field differently.
 A `Status` prints without its token under `%v`, `%+v`, `%s`, and `%#v`; only `encoding/json` writes it.
 
-[`examples/credential-github-app`](../examples/credential-github-app) is a whole command in Go: it calls `command.Run` from the `command` package beside the types with a `grant` function that mints a GitHub App installation token, and its tests pass a string and a buffer.
+A whole command in Go calls `command.Run` from the `command` package beside the types with a function that returns the `Status` for a request; `command.Run` reads `RECALL_EXEC_INFO`, refuses to print to a terminal, and writes the answer.
+`recall-github-app`, in [`cmd/recall-github-app`](../cmd/recall-github-app) and `internal/githubapp/cli/token.go`, is built this way.
 
 ## What recall does with the credential
 
