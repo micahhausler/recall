@@ -36,7 +36,7 @@ Release archives named `recall-github-app_<version>_<os>_<arch>.tar.gz` sit besi
 | `recall-github-app import-key PEM` | Stores a key downloaded from the App's settings page, for an existing App, rotation, or another machine. `PEM` is a file, or `-` for stdin. |
 | `recall-github-app --version` | Prints the release tag. |
 
-Flags: `--config PATH`, `--key KIND:PATH` (`create`, `import-key`; `create` takes `tpm` or `file`), `--client-id ID` (`import-key`), and `--name APP`, `--description TEXT`, `--homepage URL`, and `--port N` (`create`).
+Flags: `--config PATH`, `--permission NAME=LEVEL` (`token`, repeatable), `--key KIND:PATH` (`create`, `import-key`; `create` takes `tpm` or `file`), `--client-id ID` (`import-key`), and `--name APP`, `--description TEXT`, `--homepage URL`, and `--port N` (`create`).
 `create` requires `--name`, because GitHub App names are unique across GitHub.
 A flag a command doesn't take is a usage error.
 `--key` defaults to a `tpm:` key on Linux and has no default elsewhere, and its path is absolute or starts with `~/`.
@@ -86,7 +86,9 @@ What `token` prints:
 | Checks, Commit statuses | read: recall's evidence scan reports failed checks |
 | Lifetime | One hour, set by GitHub |
 
-`token` checks what GitHub says it granted against this table, and drops a token that reaches another repository, more than one, or any other permission.
+A caller other than recall, such as a wrapper that files issues, adds a permission with `--permission`, e.g. `--permission issues=write`.
+`token` asks for one only when the config's `extra_permissions` holds it at that level or higher.
+`token` checks what GitHub says it granted against what it asked for, and drops a token that reaches another repository, more than one, or any other permission.
 `token` writes a token only to stdout, never caches one, and refuses to print one to a terminal.
 recall holds it in memory for the run.
 
@@ -177,6 +179,13 @@ key_fingerprint = "SHA256:..."   # as the App's settings page lists it
 `key_fingerprint` picks the key out of the agent, which holds others.
 For any kind, a key that doesn't match it is an error; `create` and `import-key` write it.
 A key the file doesn't define, such as a misspelled one, is an error too.
+`extra_permissions` names what the App holds on purpose beyond the token table, for `token --permission` to ask for:
+
+```toml
+extra_permissions = { issues = "write" }
+```
+
+`status` expects the App to hold each of them, and reports neither as more than a token uses.
 The rest is what GitHub says about the App, kept so `token` doesn't ask every time; `token` asks when one is missing, and `status` fails when one disagrees with GitHub.
 Nothing in the file is secret.
 
@@ -216,8 +225,8 @@ Nothing in the file is secret.
   Anything that can read the file holds the App.
 - **One signature is the whole App for ten minutes.**
   A signed JWT can mint a token for any repository the App is installed on, with every permission the App holds.
-  One repository and four permissions is what `token` asks for, not a limit on whoever can sign.
-  So the App is installed on selected repositories only and holds only those permissions; `status` reports anything more as a problem.
+  One repository and the table's permissions is what `token` asks for, not a limit on whoever can sign.
+  So the App is installed on selected repositories only and holds only those permissions and its `extra_permissions`; `status` reports anything more as a problem.
 - **Approval is only required where a branch rule requires it.**
   A token can push to any branch no rule protects, and merge a pull request no rule holds for review.
 

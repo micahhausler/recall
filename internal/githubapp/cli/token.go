@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 
 	credentialsv1 "github.com/micahhausler/recall/api/credentials/v1"
 	"github.com/micahhausler/recall/api/credentials/v1/command"
@@ -16,8 +17,9 @@ import (
 // here is where the token comes from.
 
 // token answers one credential request with a token that reaches only the
-// requested repository.
-func (e *env) token(ctx context.Context) error {
+// requested repository, with what every token uses plus the asked
+// permissions the config's extra_permissions hold.
+func (e *env) token(ctx context.Context, asked map[string]string) error {
 	err := command.Run(ctx, e.execInfo, e.stdout, func(ctx context.Context, req command.Request) (credentialsv1.Status, error) {
 		none := credentialsv1.Status{}
 		if req.Host != "github.com" {
@@ -27,7 +29,15 @@ func (e *env) token(ctx context.Context) error {
 		if err != nil {
 			return none, err
 		}
-		t, err := a.Token(ctx, req.Owner, req.Name, tokenPermissions)
+		permissions := maps.Clone(tokenPermissions)
+		held := expectedPermissions(cfg)
+		for name, level := range asked {
+			if !app.Grants(held[name], level) {
+				return none, fmt.Errorf("--permission %s=%s: the config's extra_permissions don't hold it; add it there and to the App", name, level)
+			}
+			permissions[name] = level
+		}
+		t, err := a.Token(ctx, req.Owner, req.Name, permissions)
 		if errors.Is(err, app.ErrNotInstalled) {
 			return none, fmt.Errorf("%w; %s", err, e.installHint(cfg.Slug))
 		}

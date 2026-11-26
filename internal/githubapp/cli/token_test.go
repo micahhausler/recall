@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"maps"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -375,5 +376,31 @@ func TestVersionPrintsTheTag(t *testing.T) {
 	}
 	if code := f.run("", "token", "--version"); code != 2 {
 		t.Errorf("token --version: exit %d, want 2", code)
+	}
+}
+
+// --permission adds what the config's extra_permissions hold to the
+// token, and nothing they don't.
+func TestTokenAsksForAnExtraPermissionTheConfigHolds(t *testing.T) {
+	f := newFixture(t)
+	f.github.Granted["issues"] = "write"
+	f.configured(config.Config{AppID: 7, Slug: "recall-you", BotUserID: 4242, Owner: "you",
+		ExtraPermissions: map[string]string{"issues": "write"}})
+	f.env.execInfo = request
+	if code := f.run("", "token", "--permission", "issues=write"); code != 0 {
+		t.Fatalf("exit %d: %s", code, f.stderr)
+	}
+	want := map[string]string{"contents": "write", "pull_requests": "write", "checks": "read", "statuses": "read", "issues": "write"}
+	if got := f.github.Requests[len(f.github.Requests)-1].Permissions; !maps.Equal(got, want) {
+		t.Errorf("asked for %v, want %v", got, want)
+	}
+	minted := len(f.github.Requests)
+	for _, arg := range []string{"administration=write", "checks=write", "issues=admin"} {
+		if code := f.run("", "token", "--permission", arg); code == 0 {
+			t.Errorf("token --permission %s: exit 0, want a refusal", arg)
+		}
+	}
+	if len(f.github.Requests) != minted {
+		t.Errorf("a refused --permission minted a token")
 	}
 }

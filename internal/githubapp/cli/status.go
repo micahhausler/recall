@@ -47,7 +47,8 @@ func (e *env) status(ctx context.Context) error {
 	if err := person(info.Owner); err != nil {
 		problem("%v", err)
 	}
-	for name, level := range tokenPermissions {
+	expected := expectedPermissions(cfg)
+	for name, level := range expected {
 		if !app.Grants(info.Permissions[name], level) {
 			problem("the App lacks %s: %s; add it on its settings page, then accept the change on each installation", name, level)
 		}
@@ -58,9 +59,9 @@ func (e *env) status(ctx context.Context) error {
 		if name == "metadata" && level == "read" {
 			continue // every App holds it
 		}
-		want, used := tokenPermissions[name]
+		want, used := expected[name]
 		if !used || (level != want && app.Grants(level, want)) {
-			problem("the App holds %s: %s, more than a token ever uses; remove it on its settings page", name, level)
+			problem("the App holds %s: %s, more than a token ever uses; remove it on its settings page, or name it in the config's extra_permissions", name, level)
 		}
 	}
 	// What the config caches about the App must match GitHub.

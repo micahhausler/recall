@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -106,7 +107,7 @@ func TestCreateRegistersStoresAndConfigures(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := config.Config{ClientID: "Iv23liEXAMPLE", AppID: 7, Slug: "recall-you", BotUserID: 4242, Owner: "you", Key: "file:~/keys/app.pem", KeyFingerprint: keyFingerprint()}
-	if *cfg != want {
+	if !reflect.DeepEqual(*cfg, want) {
 		t.Errorf("config = %+v, want %+v", *cfg, want)
 	}
 	if strings.Contains(f.stdout.String(), "PRIVATE KEY") {
@@ -159,7 +160,7 @@ func TestCreateKeepsTheAppWhenALaterLookupFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := config.Config{ClientID: "Iv23liEXAMPLE", AppID: 7, Slug: "recall-you", Owner: "you", Key: "file:~/keys/app.pem", KeyFingerprint: keyFingerprint()}
-	if *cfg != want {
+	if !reflect.DeepEqual(*cfg, want) {
 		t.Errorf("config = %+v, want %+v", *cfg, want)
 	}
 	// token asks GitHub for the bot itself once it answers again.
