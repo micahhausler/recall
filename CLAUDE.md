@@ -15,7 +15,7 @@ Examples and tests use placeholders like `you`, `example.com`, and `laptop-a`.
 - `cmd/recall/main.go`: flag parsing and subcommand dispatch only; logic lives in `internal/`.
 - `internal/config`: the layered TOML loader and the `config get|set|show` writer.
   `harness.go` holds the table of what recall knows about each harness before any config: its CLI, paths, trailer, models, and whether its session-end hook can run the loop.
-  A new harness is a constant and an entry there, plus an adapter in `internal/harness/<name>` listed in `internal/harness/adapters` and a runner in `internal/model` registered under that constant.
+  A new harness is a constant and an entry there, plus an adapter in `internal/harness/<name>` listed in `internal/harness/adapters` and a runner in `internal/model/<name>` listed in `internal/model/runners`, both under that constant.
 - `internal/store`: the archive store interface, with `fs` and `s3` backends and an in-memory fake.
 - `internal/recur`: recurring jobs reconciled into cron (Linux) or LaunchAgents (macOS).
 - `internal/archive`: the weekly transcript archive.
@@ -28,6 +28,9 @@ Examples and tests use placeholders like `you`, `example.com`, and `laptop-a`.
 - `internal/events`: recall's side of the normalized event schema (`docs/events.md`), aliases of `api/events/v1` plus the JSONL writer.
 - `internal/clock`: the injected clock; nothing calls `time.Now` directly where a week boundary matters.
 - `internal/model`: the headless harness-CLI runner model calls go through; never an API client.
+  It holds the `Runner` and `Editor` interfaces, their fakes, and the scratch-dir exec every runner shares.
+  Each harness's runner is a sub-package: `claude`, the only one with an `Editor`, and `kiro`.
+  `internal/model/runners` lists every runner and opens one by `learn.runner` name.
   Only the apply step's `Editor` gets tools, and only file tools confined to its worktrees.
 - `internal/learn`: the learning loop (`docs/learning.md`): render, map with cache, rule hits, ledger, aging, candidates, scope, evidence checks, reduce, apply.
   The binary, not a model, makes every check that holds a proposal back, and every edit to a harness settings file.

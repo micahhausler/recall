@@ -1,4 +1,6 @@
-package model
+// Package kiro runs prompts through Kiro CLI headless (`kiro-cli chat
+// --no-interactive`), as a Runner; it has no Editor.
+package kiro
 
 import (
 	"bufio"
@@ -13,13 +15,13 @@ import (
 	"strings"
 
 	"github.com/micahhausler/recall/internal/config"
+	"github.com/micahhausler/recall/internal/model"
 )
 
-func init() {
-	Register(config.HarnessKiro, func() Runner { return &Kiro{} })
-}
+// New is a Runner with the default command and sessions directory.
+func New() model.Runner { return &Runner{} }
 
-// Kiro runs Kiro CLI headless: `kiro-cli chat --no-interactive
+// Runner runs Kiro CLI headless: `kiro-cli chat --no-interactive
 // --output-format stream-json --trust-tools= --agent recall-headless
 // --agent-engine v3 [--model <model>] [--effort <level>]` with the input
 // on stdin, from a scratch dir whose agent has no tools. In the v3 engine
@@ -35,11 +37,11 @@ func init() {
 // guard (learn.selfAuthored) keeps a leaked run from counting as the
 // owner's.
 //
-// Kiro is a Runner but not an Editor: a trusted Kiro tool is trusted on any
-// path, outside the workspace too, so it can't keep apply's edits inside
-// the worktrees. Apply runs it with no tools instead, and the binary writes
-// the files its answer returns.
-type Kiro struct {
+// Runner is a model.Runner but not an Editor: a trusted Kiro tool is
+// trusted on any path, outside the workspace too, so it can't keep apply's
+// edits inside the worktrees. Apply runs it with no tools instead, and the
+// binary writes the files its answer returns.
+type Runner struct {
 	// Command is the Kiro CLI binary, default config.DefaultCLI's.
 	Command string
 	// SessionsDir is where Kiro saves sessions, default ~/.kiro/sessions.
@@ -48,23 +50,23 @@ type Kiro struct {
 	Log io.Writer
 }
 
-func (k *Kiro) command() string {
+func (k *Runner) command() string {
 	if k.Command == "" {
 		return config.DefaultCLI(config.HarnessKiro)
 	}
 	return k.Command
 }
 
-// kiroAgentName names the agent every run uses, which Run writes into the
-// run's scratch dir as kiroAgent. The owner's default agent may allow tools
-// without asking (reads under the working directory, or MCP servers), and
-// --trust-tools= revokes none of them; this one has no tools, no MCP
-// servers, and no resources. Managed settings can still add MCP servers to
-// every agent, so it also denies every capability: a deny in any scope wins
-// over an allow in any other.
-const kiroAgentName = "recall-headless"
+// agentName names the agent every run uses, which Run writes into the
+// run's scratch dir as agentConfig. The owner's default agent may allow
+// tools without asking (reads under the working directory, or MCP
+// servers), and --trust-tools= revokes none of them; this one has no
+// tools, no MCP servers, and no resources. Managed settings can still add
+// MCP servers to every agent, so it also denies every capability: a deny
+// in any scope wins over an allow in any other.
+const agentName = "recall-headless"
 
-const kiroAgent = `{
+const agentConfig = `{
   "name": "recall-headless",
   "description": "recall's headless model calls: no tools",
   "tools": [],
@@ -76,57 +78,52 @@ const kiroAgent = `{
 }
 `
 
-// kiroEngine is pinned so a run doesn't change with the owner's
+// engine is pinned so a run doesn't change with the owner's
 // chat.agentEngine setting; the stream parser reads both engines.
-const kiroEngine = "v3"
+const engine = "v3"
 
 // Check refuses an effort level kiro-cli doesn't take.
-func (k *Kiro) Check(call Call) error { return validEffort(config.HarnessKiro, call.Effort) }
+func (k *Runner) Check(call model.Call) error {
+	return model.ValidEffort(config.HarnessKiro, call.Effort)
+}
 
 // Run sends input to call's model; an empty model or "auto" lets Kiro
 // choose. It runs in an empty scratch dir, never the caller's (under recur,
 // $HOME), holding only the agent file.
-func (k *Kiro) Run(ctx context.Context, call Call, input string) (string, Usage, error) {
+func (k *Runner) Run(ctx context.Context, call model.Call, input string) (string, model.Usage, error) {
 	if err := k.Check(call); err != nil {
-		return "", Usage{}, err
+		return "", model.Usage{}, err
 	}
 	command := k.command()
-	dir, err := os.MkdirTemp("", "recall-run-")
+	dir, cleanup, err := model.ScratchDir()
 	if err != nil {
-		return "", Usage{}, err
+		return "", model.Usage{}, err
 	}
-	defer os.RemoveAll(dir)
+	defer cleanup()
 	agents := filepath.Join(dir, ".kiro", "agents")
 	if err := os.MkdirAll(agents, 0o755); err != nil {
-		return "", Usage{}, err
+		return "", model.Usage{}, err
 	}
-	if err := os.WriteFile(filepath.Join(agents, kiroAgentName+".json"), []byte(kiroAgent), 0o644); err != nil {
-		return "", Usage{}, err
+	if err := os.WriteFile(filepath.Join(agents, agentName+".json"), []byte(agentConfig), 0o644); err != nil {
+		return "", model.Usage{}, err
 	}
 	args := []string{"chat", "--no-interactive", "--output-format", "stream-json", "--trust-tools=",
-		"--agent", kiroAgentName, "--agent-engine", kiroEngine}
+		"--agent", agentName, "--agent-engine", engine}
 	if call.Model != "" && call.Model != "auto" {
 		args = append(args, "--model", call.Model)
 	}
 	if call.Effort != "" {
 		args = append(args, "--effort", call.Effort)
 	}
-	cmd := exec.CommandContext(ctx, command, args...)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), HookGuard)
-	cmd.Stdin = strings.NewReader(input)
-	var out, errOut bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &errOut
-	var res *kiroStream
+	var res *stream
 	defer func() { k.deleteOwnSession(ctx, command, res) }()
-	runErr := cmd.Run()
-	res = parseKiroStream(out.Bytes())
-	return res.result(command, strings.TrimSpace(errOut.String()), runErr)
+	stdout, stderr, runErr := model.Cmd{Command: command, Args: args, Dir: dir, Input: input}.Run(ctx)
+	res = parseStream(stdout)
+	return res.result(command, stderr, runErr)
 }
 
 // sessionsDir is where Kiro saves sessions, ~/.kiro/sessions by default.
-func (k *Kiro) sessionsDir() string {
+func (k *Runner) sessionsDir() string {
 	if k.SessionsDir != "" {
 		return k.SessionsDir
 	}
@@ -137,9 +134,9 @@ func (k *Kiro) sessionsDir() string {
 	return config.DefaultSource(config.HarnessKiro, home)
 }
 
-// kiroSessions lists the sessions on disk under dir as id to path, in both
+// listSessions lists the sessions on disk under dir as id to path, in both
 // layouts Kiro writes: cli/<id>.jsonl, and <workspace hash>/sess_<id>/.
-func kiroSessions(dir string) map[string]string {
+func listSessions(dir string) map[string]string {
 	out := map[string]string{}
 	if dir == "" {
 		return out
@@ -177,7 +174,7 @@ func kiroSessions(dir string) map[string]string {
 // worse than leaking recall's own. A run that ends before the stream names
 // its session (an early crash) therefore deletes nothing and logs the leak;
 // the map's self-input guard keeps the leaked run out of the loop.
-func (k *Kiro) deleteOwnSession(ctx context.Context, command string, res *kiroStream) {
+func (k *Runner) deleteOwnSession(ctx context.Context, command string, res *stream) {
 	// A fresh context: the run's may be what ended it.
 	ctx = context.WithoutCancel(ctx)
 	if res == nil || res.session == "" {
@@ -186,7 +183,7 @@ func (k *Kiro) deleteOwnSession(ctx context.Context, command string, res *kiroSt
 		return
 	}
 	_ = exec.CommandContext(ctx, command, "chat", "--delete-session", res.session).Run()
-	sessions := kiroSessions(k.sessionsDir())
+	sessions := listSessions(k.sessionsDir())
 	// The stream names a v3 session sess_<id> and a V2 one bare; look up
 	// both spellings, so only this run's exact session can match.
 	for _, id := range []string{res.session, "sess_" + res.session} {
@@ -203,15 +200,15 @@ func (k *Kiro) deleteOwnSession(ctx context.Context, command string, res *kiroSt
 }
 
 // log is where cleanup reports a leaked session.
-func (k *Kiro) log() io.Writer {
+func (k *Runner) log() io.Writer {
 	if k.Log != nil {
 		return k.Log
 	}
 	return os.Stderr
 }
 
-// kiroStream is what a stream-json run reported.
-type kiroStream struct {
+// stream is what a stream-json run reported.
+type stream struct {
 	session    string
 	finished   bool
 	status     string
@@ -223,7 +220,7 @@ type kiroStream struct {
 	credits    float64
 }
 
-type kiroEvent struct {
+type event struct {
 	Type string `json:"type"`
 	Data struct {
 		SessionID          string `json:"sessionId"`
@@ -250,12 +247,12 @@ type kiroEvent struct {
 	} `json:"data"`
 }
 
-func parseKiroStream(stdout []byte) *kiroStream {
-	res := &kiroStream{}
+func parseStream(stdout []byte) *stream {
+	res := &stream{}
 	sc := bufio.NewScanner(bytes.NewReader(stdout))
 	sc.Buffer(make([]byte, 0, 1024*1024), 64*1024*1024)
 	for sc.Scan() {
-		var ev kiroEvent
+		var ev event
 		if json.Unmarshal(sc.Bytes(), &ev) != nil {
 			continue
 		}
@@ -283,11 +280,11 @@ func parseKiroStream(stdout []byte) *kiroStream {
 	return res
 }
 
-func (r *kiroStream) result(command, stderr string, runErr error) (string, Usage, error) {
-	usage := Usage{Credits: r.credits}
+func (r *stream) result(command, stderr string, runErr error) (string, model.Usage, error) {
+	usage := model.Usage{Credits: r.credits}
 	name := command + " chat"
 	if r.stopReason == "refusal" {
-		return "", usage, fmt.Errorf("%s: %w: %s", name, ErrRefusal, strings.TrimSpace(r.text()))
+		return "", usage, fmt.Errorf("%s: %w: %s", name, model.ErrRefusal, strings.TrimSpace(r.text()))
 	}
 	if r.errMessage != "" {
 		return "", usage, fmt.Errorf("%s: %s", name, r.errMessage)
@@ -313,7 +310,7 @@ func (r *kiroStream) result(command, stderr string, runErr error) (string, Usage
 
 // text is the final answer: finalText, or the streamed chunks when Kiro
 // truncated it.
-func (r *kiroStream) text() string {
+func (r *stream) text() string {
 	if r.truncated || r.finalText == "" {
 		if s := r.chunks.String(); s != "" {
 			return s

@@ -61,8 +61,9 @@ type harnessDefaults struct {
 }
 
 // harnesses is every harness recall knows, in the order PrimaryHarness
-// prefers them. A new harness is a constant, an entry here, and an adapter
-// and a runner registered under that constant; cmd/recall's
+// prefers them. A new harness is a constant, an entry here, an adapter
+// listed under that constant in internal/harness/adapters, and a runner
+// listed under it in internal/model/runners; cmd/recall's
 // TestKnownHarnessesAreWired fails until all of them are there.
 var harnesses = []harnessDefaults{
 	{
