@@ -1,4 +1,4 @@
-package harness
+package claude
 
 import (
 	"bufio"
@@ -11,27 +11,21 @@ import (
 	"os/exec"
 
 	"github.com/micahhausler/recall/internal/config"
+	"github.com/micahhausler/recall/internal/harness"
 	"github.com/micahhausler/recall/internal/hook"
 )
 
-// Inventory is what a harness offers in a directory: its skills and the
-// slash commands it accepts (skills and built-ins).
-type Inventory struct {
-	Skills   []string
-	Commands []string
-}
-
-// claudeCLI is the Claude Code binary the inventory runs.
-var claudeCLI = config.DefaultCLI(config.HarnessClaude)
+// cli is the Claude Code binary the inventory runs.
+var cli = config.DefaultCLI(config.HarnessClaude)
 
 // Inventory starts a headless session in dir and reads the skills and slash
 // commands from its init event, the harness's own list, then stops it before
 // the model answers. The session isn't saved, so it never shows up as a
 // transcript.
-func (c *Claude) Inventory(ctx context.Context, dir string) (Inventory, error) {
+func (c *adapter) Inventory(ctx context.Context, dir string) (harness.Inventory, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, claudeCLI, "-p", "reply ok", "--model", "haiku",
+	cmd := exec.CommandContext(ctx, cli, "-p", "reply ok", "--model", "haiku",
 		"--output-format", "stream-json", "--verbose", "--max-turns", "1",
 		"--no-session-persistence", "--disallowedTools", "*")
 	cmd.Dir = dir
@@ -40,22 +34,22 @@ func (c *Claude) Inventory(ctx context.Context, dir string) (Inventory, error) {
 	cmd.Env = append(os.Environ(), hook.Guard)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return Inventory{}, err
+		return harness.Inventory{}, err
 	}
 	if err := cmd.Start(); err != nil {
-		return Inventory{}, fmt.Errorf("%s: %w", claudeCLI, err)
+		return harness.Inventory{}, fmt.Errorf("%s: %w", cli, err)
 	}
 	inv, perr := parseInit(stdout)
 	cancel()
 	_ = cmd.Wait() // killed on purpose once init is read
 	if perr != nil {
-		return Inventory{}, fmt.Errorf("%s -p init: %w", claudeCLI, perr)
+		return harness.Inventory{}, fmt.Errorf("%s -p init: %w", cli, perr)
 	}
 	return inv, nil
 }
 
 // parseInit reads stream-json lines until the system init event.
-func parseInit(r io.Reader) (Inventory, error) {
+func parseInit(r io.Reader) (harness.Inventory, error) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
 	for sc.Scan() {
@@ -69,10 +63,10 @@ func parseInit(r io.Reader) (Inventory, error) {
 		if json.Unmarshal(sc.Bytes(), &ev) != nil || ev.Type != "system" || ev.Subtype != "init" {
 			continue
 		}
-		return Inventory{Skills: ev.Skills, Commands: append(ev.SlashCommands, ev.TerminalCommands...)}, nil
+		return harness.Inventory{Skills: ev.Skills, Commands: append(ev.SlashCommands, ev.TerminalCommands...)}, nil
 	}
 	if err := sc.Err(); err != nil {
-		return Inventory{}, err
+		return harness.Inventory{}, err
 	}
-	return Inventory{}, errors.New("no init event")
+	return harness.Inventory{}, errors.New("no init event")
 }

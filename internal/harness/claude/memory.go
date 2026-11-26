@@ -1,4 +1,4 @@
-package harness
+package claude
 
 import (
 	"bufio"
@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/micahhausler/recall/internal/harness"
 )
 
 // memoryIndex is the file Claude Code's auto memory lists its notes in.
@@ -17,7 +19,7 @@ const memoryIndex = "MEMORY.md"
 // Memories reads Claude Code's auto memory: one directory per project under
 // the transcript root, <project>/memory/, holding an index and one Markdown
 // note per memory with YAML frontmatter.
-func (c *Claude) Memories() ([]Memory, error) {
+func (c *adapter) Memories() ([]harness.Memory, error) {
 	projects, err := os.ReadDir(c.source)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -25,7 +27,7 @@ func (c *Claude) Memories() ([]Memory, error) {
 	if err != nil {
 		return nil, err
 	}
-	var out []Memory
+	var out []harness.Memory
 	for _, p := range projects {
 		if !p.IsDir() {
 			continue
@@ -62,12 +64,12 @@ func (c *Claude) Memories() ([]Memory, error) {
 // The frontmatter is read line by line for the few keys recall uses, at any
 // nesting, since the harness has moved them between the top level and a
 // metadata block.
-func readMemory(path string) (Memory, error) {
+func readMemory(path string) (harness.Memory, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return Memory{}, err
+		return harness.Memory{}, err
 	}
-	m := Memory{Path: path, Name: strings.TrimSuffix(filepath.Base(path), ".md")}
+	m := harness.Memory{Path: path, Name: strings.TrimSuffix(filepath.Base(path), ".md")}
 	if st, err := os.Stat(path); err == nil {
 		m.Modified = st.ModTime()
 	}

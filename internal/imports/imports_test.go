@@ -15,7 +15,7 @@ import (
 	importsv1 "github.com/micahhausler/recall/api/imports/v1"
 	"github.com/micahhausler/recall/internal/config"
 	"github.com/micahhausler/recall/internal/events"
-	"github.com/micahhausler/recall/internal/harness"
+	"github.com/micahhausler/recall/internal/harness/adapters"
 )
 
 var start = time.Date(2026, 3, 9, 6, 0, 0, 0, time.UTC)
@@ -38,7 +38,7 @@ func options(t *testing.T) Options {
 
 func stored(t *testing.T, o Options, id string) []events.Event {
 	t.Helper()
-	h, err := harness.Open(o.Name, config.HarnessSettings{Source: o.Sessions, Enabled: true, Format: config.FormatEvents})
+	h, err := adapters.Open(o.Name, config.HarnessSettings{Source: o.Sessions, Enabled: true, Format: config.FormatEvents})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,4 +1,4 @@
-package harness_test
+package claude_test
 
 import (
 	"encoding/json"
@@ -12,11 +12,12 @@ import (
 	"github.com/micahhausler/recall/internal/config"
 	"github.com/micahhausler/recall/internal/events"
 	"github.com/micahhausler/recall/internal/harness"
+	"github.com/micahhausler/recall/internal/harness/claude"
 )
 
-func claude(t *testing.T, source string) harness.Harness {
+func open(t *testing.T, source string) harness.Harness {
 	t.Helper()
-	h, err := harness.Open("claude", config.HarnessSettings{Source: source, Enabled: true})
+	h, err := claude.New(config.HarnessSettings{Source: source, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,7 +26,7 @@ func claude(t *testing.T, source string) harness.Harness {
 
 func readFixture(t *testing.T, name string) []events.Event {
 	t.Helper()
-	h := claude(t, t.TempDir())
+	h := open(t, t.TempDir())
 	f, err := os.Open(filepath.Join("testdata", name+".jsonl"))
 	if err != nil {
 		t.Fatal(err)
@@ -149,7 +150,7 @@ func TestToolInput(t *testing.T) {
 	} {
 		line := `{"type":"assistant","timestamp":"2026-11-01T00:00:02Z","message":{"model":"m","content":[{"type":"tool_use","id":"t1","name":"` +
 			tc.tool + `","input":` + tc.input + `}]}}` + "\n"
-		evs, err := claude(t, t.TempDir()).ReadSession(strings.NewReader(line), "s", "laptop-a")
+		evs, err := open(t, t.TempDir()).ReadSession(strings.NewReader(line), "s", "laptop-a")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -164,7 +165,7 @@ func TestToolInput(t *testing.T) {
 }
 
 func TestToolCallsResultsAndSkills(t *testing.T) {
-	h := claude(t, t.TempDir())
+	h := open(t, t.TempDir())
 	evs, err := h.ReadSession(strings.NewReader(toolSession), "s", "laptop-a")
 	if err != nil {
 		t.Fatal(err)
@@ -188,7 +189,7 @@ func TestToolCallsResultsAndSkills(t *testing.T) {
 }
 
 func TestTornLastLineIsSkipped(t *testing.T) {
-	h := claude(t, t.TempDir())
+	h := open(t, t.TempDir())
 	evs, err := h.ReadSession(strings.NewReader(
 		`{"type":"user","timestamp":"2026-11-01T00:00:01Z","entrypoint":"cli","message":{"content":"hello"}}`+"\n"+
 			`{"type":"user","timestamp":"2026-11-01T00:0`), "s", "")
@@ -214,7 +215,7 @@ func TestSessionsAndArchiveReading(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(source, "-home-you", "notes.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	h := claude(t, source)
+	h := open(t, source)
 
 	sessions, err := h.Sessions()
 	if err != nil || len(sessions) != 1 || !strings.HasSuffix(sessions[0], ".jsonl") {

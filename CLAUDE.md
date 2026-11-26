@@ -15,13 +15,15 @@ Examples and tests use placeholders like `you`, `example.com`, and `laptop-a`.
 - `cmd/recall/main.go`: flag parsing and subcommand dispatch only; logic lives in `internal/`.
 - `internal/config`: the layered TOML loader and the `config get|set|show` writer.
   `harness.go` holds the table of what recall knows about each harness before any config: its CLI, paths, trailer, models, and whether its session-end hook can run the loop.
-  A new harness is a constant and an entry there, plus an adapter in `internal/harness` and a runner in `internal/model` registered under that constant.
+  A new harness is a constant and an entry there, plus an adapter in `internal/harness/<name>` listed in `internal/harness/adapters` and a runner in `internal/model` registered under that constant.
 - `internal/store`: the archive store interface, with `fs` and `s3` backends and an in-memory fake.
 - `internal/recur`: recurring jobs reconciled into cron (Linux) or LaunchAgents (macOS).
 - `internal/archive`: the weekly transcript archive.
 - `internal/redact`: the token-shape redaction the archive applies when `archive-chats.redact` is on.
-- `internal/harness`: one adapter per coding agent's transcript format and native memory: `claude` and `kiro`.
-  A harness recall doesn't know by name sets `format` to read through one of them under its own name, or `events` to read recall's own normalized events (`events.go`).
+- `internal/harness`: the `Harness` interface and what every adapter shares: week file selection and archive reading.
+  Each coding agent's transcript format and native memory is a sub-package: `claude` and `kiro`, which also installs recall's Kiro power.
+  `stored` reads recall's own normalized events, such as an import's stored sessions.
+  `internal/harness/adapters` lists every adapter and opens one by config name; a harness recall doesn't know by name sets `format` to read through one of them under its own name, or `events` to read recall's own events.
 - `internal/evidence`: evidence sources outside the chat, read behind `learn.evidence`; `github` (review comments and failed checks on agent-authored pull requests, through `gh`) is the only one today.
 - `internal/events`: recall's side of the normalized event schema (`docs/events.md`), aliases of `api/events/v1` plus the JSONL writer.
 - `internal/clock`: the injected clock; nothing calls `time.Now` directly where a week boundary matters.

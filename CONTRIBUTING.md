@@ -54,7 +54,7 @@ claude plugin validate .
 
 ## Common changes
 
-- **A harness adapter.** Implement `harness.Harness` in `internal/harness` and register it under its config name. It must emit the schema in `docs/events.md`, and nothing downstream should need to change. Test it against fixture transcripts in a temp dir, then add it to the README's harness table and `config.example.toml`.
+- **A harness adapter.** Implement `harness.Harness` in a new `internal/harness/<name>` package and list its `New` in `internal/harness/adapters` under its config name. It must emit the schema in `docs/events.md`, and nothing downstream should need to change. Test it against fixture transcripts in a temp dir, then add it to the README's harness table and `config.example.toml`.
 - **An evidence source.** Add it in `internal/evidence` beside `github`. It is turned on by name in `learn.evidence`.
 - **A store backend.** Implement the interface in `internal/store` beside `fs` and `s3`, and say in `docs/store.md` what permissions it needs.
 - **A skill.** Each skill is `skills/<name>/SKILL.md` and ends with an "Owner additions" block. Run `claude plugin validate .` after changing one.

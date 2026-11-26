@@ -14,7 +14,7 @@ import (
 
 	"github.com/micahhausler/recall"
 	"github.com/micahhausler/recall/internal/config"
-	"github.com/micahhausler/recall/internal/harness"
+	"github.com/micahhausler/recall/internal/harness/kiro"
 	"github.com/micahhausler/recall/internal/model"
 	"github.com/micahhausler/recall/internal/review"
 	"github.com/micahhausler/recall/internal/store"
@@ -192,7 +192,7 @@ func initKiroPower(ctx context.Context, w io.Writer, s *config.Settings, dryRun 
 		return false
 	}
 	power := recall.KiroPower()
-	names, err := harness.PowerSkills(power)
+	names, err := kiro.PowerSkills(power)
 	if err != nil {
 		fmt.Fprintf(w, "warning: couldn't read the Kiro power built into recall: %v\n", err)
 		return false
@@ -206,7 +206,7 @@ func initKiroPower(ctx context.Context, w io.Writer, s *config.Settings, dryRun 
 		fmt.Fprintf(w, "warning: %s isn't on PATH, so the %s skills aren't installed in Kiro; rerun recall init once it is\n", kiroPowerCLI, skills)
 		return false
 	}
-	line, err := harness.InstallKiroPower(ctx, kiroPowerCLI, power)
+	line, err := kiro.InstallPower(ctx, kiroPowerCLI, power)
 	if err != nil {
 		fmt.Fprintf(w, "warning: couldn't install the %s skills into Kiro: %v\n", skills, err)
 		return false

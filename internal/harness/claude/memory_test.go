@@ -1,4 +1,4 @@
-package harness_test
+package claude_test
 
 import (
 	"os"
@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-func TestClaudeMemories(t *testing.T) {
+func TestMemories(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "projects")
 	project := filepath.Join(source, "-home-you-src-project")
 	mem := filepath.Join(project, "memory")
@@ -29,7 +29,7 @@ func TestClaudeMemories(t *testing.T) {
 		"  type: feedback\n  originSessionId: s1\n  modified: 2026-11-08T07:09:53.401Z\n---\n\nOpen PRs as regular PRs.\n\n**Why:** the owner said so.\n")
 	put(filepath.Join(mem, "bare.md"), "A note with no frontmatter.\n")
 
-	mems, err := claude(t, source).Memories()
+	mems, err := open(t, source).Memories()
 	if err != nil || len(mems) != 2 {
 		t.Fatalf("memories = %+v, %v", mems, err)
 	}
@@ -45,7 +45,7 @@ func TestClaudeMemories(t *testing.T) {
 	if bare.Name != "bare" || bare.Type != "" || bare.Body != "A note with no frontmatter." || bare.Modified.IsZero() {
 		t.Errorf("bare note = %+v", bare)
 	}
-	if none, err := claude(t, filepath.Join(t.TempDir(), "missing")).Memories(); err != nil || len(none) != 0 {
+	if none, err := open(t, filepath.Join(t.TempDir(), "missing")).Memories(); err != nil || len(none) != 0 {
 		t.Errorf("no transcript root: %+v, %v", none, err)
 	}
 }

@@ -1,7 +1,6 @@
-// Package harness adapts one coding agent's chat history: where it keeps
-// transcripts, what its archive prefix is, and how a session becomes
-// normalized events. Backends register under the name config uses, so
-// adding an agent is a new file, not a change to callers.
+// Package harness is what every coding agent's adapter shares: the Harness
+// interface, the week's file selection, and archive reading. Each adapter
+// is a sub-package, and package adapters opens one by its config name.
 package harness
 
 import (
@@ -53,6 +52,13 @@ type Harness interface {
 	Memories() ([]Memory, error)
 }
 
+// Inventory is what a harness offers in a directory: its skills and the
+// slash commands it accepts (skills and built-ins).
+type Inventory struct {
+	Skills   []string
+	Commands []string
+}
+
 // Memory is one note a harness's built-in memory wrote: something the agent
 // decided to remember, kept on the machine that wrote it and reviewed by
 // nobody. recall reads these as evidence and never writes them.
@@ -90,55 +96,6 @@ type SessionMetadata interface {
 
 // Factory opens a harness from its merged settings.
 type Factory func(s config.HarnessSettings) (Harness, error)
-
-var registry = map[string]Factory{}
-
-// Register adds a harness under its config name.
-func Register(name string, f Factory) {
-	registry[name] = f
-}
-
-// Open opens one named harness. A name recall doesn't know opens the
-// adapter its settings' Format names, under that name; the events format
-// is recall's own.
-func Open(name string, s config.HarnessSettings) (Harness, error) {
-	if f, ok := registry[name]; ok {
-		return f(s)
-	}
-	if s.Format == "" {
-		return nil, fmt.Errorf("unknown harness %q; set harness.%s.format to the known harness whose transcript format it shares", name, name)
-	}
-	if s.Format == config.FormatEvents {
-		return openEvents(name, s), nil
-	}
-	f, ok := registry[s.Format]
-	if !ok {
-		return nil, fmt.Errorf("harness %q: unknown format %q", name, s.Format)
-	}
-	h, err := f(s)
-	if err != nil {
-		return nil, err
-	}
-	return &formatted{Harness: h, name: name}, nil
-}
-
-// Enabled opens every enabled harness in the settings, sorted by name.
-func Enabled(s *config.Settings) ([]Harness, error) {
-	names := make([]string, 0, len(s.Harnesses))
-	for n := range s.Harnesses {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	var out []Harness
-	for _, n := range names {
-		h, err := Open(n, s.Harnesses[n])
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, h)
-	}
-	return out, nil
-}
 
 // WalkFiles returns (path relative to root's parent, info) for every regular
 // file under root, sorted; symlinks are skipped. A missing root is empty.
@@ -179,8 +136,8 @@ func WalkFiles(root string) ([]FileInfo, error) {
 	return out, nil
 }
 
-// weekFiles is the shared mtime selection every directory-based harness uses.
-func weekFiles(root string, start, end time.Time) ([]string, error) {
+// WeekFiles is the shared mtime selection every directory-based harness uses.
+func WeekFiles(root string, start, end time.Time) ([]string, error) {
 	files, err := WalkFiles(root)
 	if err != nil {
 		return nil, err

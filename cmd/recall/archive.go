@@ -17,6 +17,7 @@ import (
 	"github.com/micahhausler/recall/internal/config"
 	"github.com/micahhausler/recall/internal/credential"
 	"github.com/micahhausler/recall/internal/harness"
+	"github.com/micahhausler/recall/internal/harness/adapters"
 	"github.com/micahhausler/recall/internal/model"
 	"github.com/micahhausler/recall/internal/store"
 )
@@ -78,7 +79,7 @@ func loadArchiveEnv() (*archiveEnv, error) {
 	if err != nil {
 		return nil, err
 	}
-	hs, err := harness.Enabled(settings)
+	hs, err := adapters.Enabled(settings)
 	if err != nil {
 		return nil, err
 	}

@@ -1,4 +1,4 @@
-package harness
+package kiro
 
 import (
 	"bytes"
@@ -29,11 +29,11 @@ func PowerSkills(power fs.FS) ([]string, error) {
 	return names, nil
 }
 
-// InstallKiroPower runs `<bin> powers install` on a copy of power in a
+// InstallPower runs `<bin> powers install` on a copy of power in a
 // fresh temp dir, which it removes afterward, and returns the CLI's last
 // output line. The CLI installs only from a directory: no URL, file, or
 // stdin. Installing over an installed power updates it.
-func InstallKiroPower(ctx context.Context, bin string, power fs.FS) (string, error) {
+func InstallPower(ctx context.Context, bin string, power fs.FS) (string, error) {
 	tmp, err := os.MkdirTemp("", "recall-power-")
 	if err != nil {
 		return "", err

@@ -17,6 +17,7 @@ import (
 	"github.com/micahhausler/recall/internal/clock"
 	"github.com/micahhausler/recall/internal/config"
 	"github.com/micahhausler/recall/internal/harness"
+	"github.com/micahhausler/recall/internal/harness/adapters"
 	"github.com/micahhausler/recall/internal/store"
 )
 
@@ -51,7 +52,7 @@ func (tr *tree) touch(rel string, when time.Time, body string) {
 }
 
 func (tr *tree) harness(t *testing.T) harness.Harness {
-	h, err := harness.Open("claude", config.HarnessSettings{Source: tr.source, Enabled: true})
+	h, err := adapters.Open("claude", config.HarnessSettings{Source: tr.source, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}

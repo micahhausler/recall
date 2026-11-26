@@ -14,6 +14,7 @@ import (
 	"github.com/micahhausler/recall/internal/config"
 	"github.com/micahhausler/recall/internal/evidence"
 	"github.com/micahhausler/recall/internal/harness"
+	"github.com/micahhausler/recall/internal/harness/adapters"
 	"github.com/micahhausler/recall/internal/learn"
 	"github.com/micahhausler/recall/internal/model"
 	"github.com/micahhausler/recall/internal/review"
@@ -116,7 +117,7 @@ func newHookFixtureWith(t *testing.T, toml string) *hookFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hs, err := harness.Enabled(settings)
+	hs, err := adapters.Enabled(settings)
 	if err != nil {
 		t.Fatal(err)
 	}
