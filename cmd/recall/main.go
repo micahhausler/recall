@@ -25,7 +25,7 @@ Usage:
   recall hook ...                  what the plugin's session hooks run
   recall extension NAME            print the owner's extension files for a skill
 
-Run 'recall <command> -h' for a command's flags.
+Run 'recall <command> -h' for a command's flags, and 'recall --version' for the release tag.
 `
 
 func main() {
@@ -42,7 +42,7 @@ func run(args []string) int {
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 		return 0
-	case "version":
+	case "--version":
 		fmt.Println("recall", version.Version)
 		return 0
 	case "config":

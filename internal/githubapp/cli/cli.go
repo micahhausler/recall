@@ -48,6 +48,7 @@ Usage:
   NAME import-key PEM     store a key downloaded from the App's
                                        settings page, for rotation or another
                                        machine; PEM is a file, or - for stdin
+  NAME --version          print the release tag
 
   --config PATH       the config file (default ~/.config/NAME/config.toml)
   --key KIND:PATH     create, import-key: where the key goes. tpm wraps it
@@ -121,7 +122,7 @@ type env struct {
 
 // Main runs the command os.Args names and returns its exit code.
 func Main() int {
-	ghapi.UserAgent = Name + "/" + version.Version
+	ghapi.UserAgent = Name + "/" + version.Number()
 	home, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", Name, err)
@@ -158,8 +159,17 @@ func (e *env) run(ctx context.Context, args []string) int {
 	description := fs.String("description", defaultDescription, "")
 	homepage := fs.String("homepage", defaultHomepage, "")
 	port := fs.Int("port", 8765, "")
+	showVersion := fs.Bool("version", false, "")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if *showVersion {
+		if fs.NFlag() != 1 || fs.NArg() != 0 {
+			fmt.Fprint(e.stderr, usage)
+			return 2
+		}
+		fmt.Fprintln(e.stdout, n, version.Version)
+		return 0
 	}
 	if fs.NArg() == 0 {
 		fmt.Fprint(e.stderr, usage)

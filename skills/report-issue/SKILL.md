@@ -1,12 +1,12 @@
 ---
 name: report-issue
 description: Draft a GitHub issue on the recall repo (github.com/micahhausler/recall) and file it only after I approve the exact text. Use when I say "report this to recall", "file a recall issue", or hit a recall bug or missing feature worth reporting. It gathers the recall version, OS, harness, what happened, and what was expected, and never files anything without my explicit yes.
-allowed-tools: Bash(recall extension report-issue), Bash(recall version), Bash(uname -sr), Bash(gh issue create:*)
+allowed-tools: Bash(recall extension report-issue), Bash(recall --version), Bash(uname -sr), Bash(gh issue create:*)
 ---
 
 Issues go to `github.com/micahhausler/recall`; the bug and feature forms in its `.github/ISSUE_TEMPLATE/` show the shape to follow.
 
-1. **Gather.** Run `recall version` and `uname -sr`.
+1. **Gather.** Run `recall --version` and `uname -sr`.
    Ask which harness was involved (for example Claude Code), what happened, and what was expected instead, unless this session already makes that clear; confirm your reading with me before drafting.
 2. **Keep it clean.** The issue carries only those five facts in my words: version, OS, harness, what happened, what was expected.
    Never include session text, transcript excerpts, hostnames, usernames, account IDs, ARNs, internal URLs, or paths that name a person; replace a needed path with a placeholder like `~/project`.

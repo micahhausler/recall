@@ -34,6 +34,7 @@ Release archives named `recall-github-app_<version>_<os>_<arch>.tar.gz` sit besi
 | `recall-github-app status` | Shows the App, its key and fingerprint, and where it is installed, and mints a test token for each repository, then revokes it. Exits 1 on any problem. |
 | `recall-github-app create` | Registers a new App through GitHub's manifest flow, stores its key, and writes the config. |
 | `recall-github-app import-key PEM` | Stores a key downloaded from the App's settings page, for an existing App, rotation, or another machine. `PEM` is a file, or `-` for stdin. |
+| `recall-github-app --version` | Prints the release tag. |
 
 Flags: `--config PATH`, `--key KIND:PATH` (`create`, `import-key`; `create` takes `tpm` or `file`), `--client-id ID` (`import-key`), and `--name APP`, `--description TEXT`, `--homepage URL`, and `--port N` (`create`).
 `create` requires `--name`, because GitHub App names are unique across GitHub.

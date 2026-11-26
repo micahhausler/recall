@@ -12,9 +12,9 @@ Pin the `host` key in a drop-in under `~/.config/recall/config.d/` on every mach
 If the claim names a machine that is retired, reimaged, or renamed, `recall learn reducer --take` moves it to this one.
 If I take the short path, skip to step 5's first map, and review with `recall learn reviews` and a merge of each `learn-<date>` branch.
 
-1. **Binary.** Run `recall version`.
+1. **Binary.** Run `recall --version`.
    If it's missing, offer, in order: Homebrew when `brew` is installed (`brew tap micahhausler/recall https://github.com/micahhausler/recall`, then `brew install --cask recall`); `go install github.com/micahhausler/recall/cmd/recall@latest` when Go is installed; otherwise the release archive for this OS and architecture from the repo's releases page, checked against `checksums.txt`, with `recall` put on PATH.
-   Verify with `recall version` before going on.
+   Verify with `recall --version` before going on.
 2. **Config.** `recall config show` prints the merged config and where each value came from; with nothing configured yet, defaults apply.
    If `~/.kiro/sessions` exists, offer to turn on the Kiro harness (`recall config set harness.kiro.enabled true`), and ask whether the learning loop should run through Kiro (`recall config set learn.runner kiro`); say that `learn apply` then runs in text mode: Kiro can't confine write tools to the worktrees, so it gets none, and recall writes the files the model returns, only at the paths it listed.
    If this machine has no Claude Code, offer `recall config set harness.claude.enabled false`: the runner and `learn.skills` then default to Kiro's, and `recall init` declares recur jobs for the loop instead of the session hook, since Kiro's session-end hook kills the worker it starts; `recall recur sync` installs them.
