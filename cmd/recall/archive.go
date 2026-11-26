@@ -19,6 +19,7 @@ import (
 	"github.com/micahhausler/recall/internal/harness"
 	"github.com/micahhausler/recall/internal/harness/adapters"
 	"github.com/micahhausler/recall/internal/model"
+	"github.com/micahhausler/recall/internal/model/runners"
 	"github.com/micahhausler/recall/internal/store"
 )
 
@@ -47,12 +48,12 @@ type archiveEnv struct {
 }
 
 // newRunner is the model runner the map and reduce steps call through,
-// registered under the learn.runner name.
+// listed under the learn.runner name.
 func (e *archiveEnv) newRunner() (model.Runner, error) {
 	if e.runner != nil {
 		return e.runner, nil
 	}
-	return model.Open(e.settings.Learn.Runner)
+	return runners.Open(e.settings.Learn.Runner)
 }
 
 // newEditor is the editor the apply step calls through. A runner whose
@@ -62,7 +63,7 @@ func (e *archiveEnv) newEditor() (model.Editor, error) {
 	if e.editor != nil {
 		return e.editor, nil
 	}
-	return model.OpenEditor(e.settings.Learn.Runner)
+	return runners.OpenEditor(e.settings.Learn.Runner)
 }
 
 func loadArchiveEnv() (*archiveEnv, error) {

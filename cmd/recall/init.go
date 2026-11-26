@@ -16,6 +16,7 @@ import (
 	"github.com/micahhausler/recall/internal/config"
 	"github.com/micahhausler/recall/internal/harness/kiro"
 	"github.com/micahhausler/recall/internal/model"
+	"github.com/micahhausler/recall/internal/model/runners"
 	"github.com/micahhausler/recall/internal/review"
 	"github.com/micahhausler/recall/internal/store"
 )
@@ -175,7 +176,7 @@ func cmdInit(args []string) int {
 	fmt.Printf("       recall learn map --since %dd --dry-run\n", mapWindowDays)
 	fmt.Printf("       recall learn map --since %dd && recall learn run\n", mapWindowDays)
 	fmt.Printf("  3. Review what it proposes: learn.review is %q (recall learn reviews).\n", s.Learn.Review)
-	if _, err := model.OpenEditor(s.Learn.Runner); errors.Is(err, model.ErrNoEditor) {
+	if _, err := runners.OpenEditor(s.Learn.Runner); errors.Is(err, model.ErrNoEditor) {
 		fmt.Printf("     learn.runner %q %v, so it applies with no tools and recall writes the files it returns.\n", s.Learn.Runner, model.ErrNoEditor)
 	}
 	return 0
