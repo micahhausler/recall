@@ -56,7 +56,7 @@ Examples and tests use placeholders like `you`, `example.com`, and `laptop-a`.
   CI builds and tests it, and GoReleaser never ships it.
 - `internal/extension`: the owner's extension files that skills and the reduce append at load time.
 - `internal/hook`: what the plugin's session hooks need: the hook input, the recursion guard, and the worker's lock and schedule.
-- `hooks/hooks.json`: the plugin's SessionEnd hook, which runs `recall hook`; nothing runs at session start.
+- `hooks/hooks.json`: the plugin's SessionStart and SessionEnd hooks, which run `recall hook`; session start only reads the repo note for the session's repo (`learn.repo_notes`), and never calls a model or the store.
 - `plugin.json`: the Agent Plugins manifest, which installs the same skills as a Kiro power; `.claude-plugin/plugin.json` is Claude Code's.
 - `embed.go`: package `recall` at the module root, which embeds `plugin.json`, `skills/keep`, and `skills/recall-setup` as the Kiro power `recall init` installs through `kiro-cli powers install`; only `cmd/recall` imports it.
   Kiro rejects a skill whose frontmatter isn't strict YAML, so a skill the power ships quotes any value that holds `: `.

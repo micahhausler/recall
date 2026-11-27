@@ -1072,3 +1072,53 @@ func TestEffortUnknownLevel(t *testing.T) {
 		t.Errorf("kiro map_effort none: %v", err)
 	}
 }
+
+func TestRepoNotes(t *testing.T) {
+	for _, tc := range []struct {
+		name, toml, want, err string
+	}{
+		{"unset", "[learn]\nrepos = [\"~/src/notes\"]\n", "", ""},
+		{"inside a repo", "[learn]\nrepos = [\"~/src/notes\"]\nrepo_notes = \"~/src/notes/repo-notes\"\n", "/home/you/src/notes/repo-notes", ""},
+		{"no repos", "[learn]\nrepo_notes = \"~/src/notes/repo-notes\"\n", "/home/you/src/notes/repo-notes", ""},
+		{"public", "[learn]\nrepos = [\"~/src/notes\"]\nrepo_notes = \"~/src/notes/repo-notes\"\n[keep]\npublic = [\"~/src/notes\"]\n", "", "is under keep.public"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := filepath.Join(t.TempDir(), "config.toml")
+			write(t, b, "host = \"laptop-a\"\n"+tc.toml)
+			c, err := Load(b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s, err := c.Settings("/home/you", "laptop-a")
+			switch {
+			case tc.err == "" && err != nil:
+				t.Fatal(err)
+			case tc.err != "" && (err == nil || !strings.Contains(err.Error(), tc.err)):
+				t.Fatalf("err = %v, want %q", err, tc.err)
+			case tc.err == "" && s.Learn.RepoNotes != tc.want:
+				t.Errorf("repo_notes = %q, want %q", s.Learn.RepoNotes, tc.want)
+			}
+		})
+	}
+}
+
+// keep.public catches a repo notes directory a symlink puts under it.
+func TestRepoNotesPublicSymlink(t *testing.T) {
+	home := t.TempDir()
+	real := filepath.Join(home, "src", "dotfiles")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, filepath.Join(home, "dotfiles")); err != nil {
+		t.Fatal(err)
+	}
+	b := filepath.Join(t.TempDir(), "config.toml")
+	write(t, b, "host = \"laptop-a\"\n[learn]\nrepo_notes = \"~/src/dotfiles/repo-notes\"\n[keep]\npublic = [\"~/dotfiles\"]\n")
+	c, err := Load(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Settings(home, "laptop-a"); err == nil || !strings.Contains(err.Error(), "is under keep.public") {
+		t.Errorf("err = %v, want keep.public", err)
+	}
+}

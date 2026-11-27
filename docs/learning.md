@@ -109,6 +109,9 @@ A rule in a global file costs context in every session, so a lesson that holds i
 - **Only listed repos.** `learn.targets` are the global files, and `learn.repos` lists the checkouts a proposal may also target. A pull request on a repo may be read by other people, so recall never finds a repo on its own.
 - **Narrowest target wins.** The reduce places each rule, and the binary checks it. A repo-scoped proposal must cite only sessions that ran in that repo, and a global rule whose every session ran in one repo is held back.
 - **Pull requests open on origin,** so in a fork the change never lands upstream.
+- **A repo recall doesn't change gets repo notes.** With `learn.repo_notes` set, a lesson every session of which ran in one unlisted repo with an origin goes in that repo's notes: the owner's file at `<repo_notes>/<host>/<path>.md`, keyed by the repo's origin so every machine finds the same file.
+  Repo notes are off until the owner sets `learn.repo_notes` to a directory in a private git checkout, such as `repo-notes/` in the one that holds the global rules. The review stages it in that checkout like any other change, and recall writes nothing to the repo the repo note is for. The binary holds a repo note to the same rule as a repo's own file: it must cite only sessions that ran in its repo. Only Claude Code loads a repo note, through the plugin's SessionStart hook, so an add no Claude Code session showed is held back, and a rule in a repo note never graduates into the repo's settings.
+- **A lesson with no place stays out.** One that holds in one unlisted repo, without a repo note to hold it, is named under "Repo lessons without a home" and dropped.
 - **Harness scope narrows like repo scope.** A new rule whose every cited session came from one harness goes in a file only that harness loads, such as Kiro's steering file for a lesson only Kiro sessions show. A file is a harness's own when no other enabled harness loads it, directly or through an `@` import or a Markdown link, by the resolution `recall lint` follows, so with one harness enabled every target is its own. The binary holds back an add aimed at a file another harness loads, and names the file it belongs in.
 - **A harness with no file of its own gets no harness-specific rule.** An import loads no context file, so a lesson only an import's sessions show is held back; one other harnesses' sessions corroborate goes through.
 - **Repo scope applies first, and only adds narrow.** Outside evidence names no harness, so it neither narrows nor widens a proposal, and a reword, retirement, or graduation acts on a rule where it lives.
@@ -168,11 +171,11 @@ A proposal the owner closes is a judgment, and the loop keeps it.
 
 ## Session hooks: the default way to run the loop
 
-The plugin carries one harness hook, on session end, so a machine needs no cron job.
-It does nothing until `recall init` turns its steps on under `[hooks]`.
-`recall recur` installs scheduled jobs in its place.
+The plugin carries two harness hooks, on session start and session end, so a machine needs no cron job.
+Session end does nothing until `recall init` turns its steps on under `[hooks]`, and session start prints nothing for a repo with no notes.
+`recall recur` installs scheduled jobs in place of the session-end work.
 
-- **Nothing runs at session start.** A hook there could delay the session.
+- **Session start only reads a file.** `recall hook session-start` looks up the origin of the checkout the session starts in and prints that repo's notes as added context: no store, no network, and no model. A session that moves into a repo after it starts gets no repo note.
 - **Session end returns at once.** It starts a detached worker that archives at most once a day, maps sessions quiet for six hours, and runs the reduce and apply every `hooks.learn_every` days.
 - **A failing step waits a day,** so a reduce that keeps failing can't become a paid model call per session.
 - **No recursion.** Every harness run recall starts carries `RECALL_HOOK=1`, and recall's hooks do nothing when they see it.

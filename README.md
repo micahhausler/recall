@@ -84,7 +84,7 @@ claude plugin install recall@recall
 
 The skills run in Claude Code (not the Claude desktop app) and drive the `recall` binary, which reads transcripts from every enabled harness.
 `recall init` is the short path for a new machine; the `recall-setup` skill walks you through every choice, including an S3 store and scheduled jobs.
-The plugin also installs the session-end hook, which does nothing until `[hooks]` in your config turns a step on.
+The plugin also installs the session-end hook, which does nothing until `[hooks]` in your config turns a step on, and the session-start hook, which does nothing until `learn.repo_notes` names your notes for repos recall doesn't change ([`docs/learning.md`](docs/learning.md)).
 
 In Kiro CLI, `recall init` installs the `keep` and `recall-setup` skills as a Kiro power when the kiro harness is on (`recall config set harness.kiro.enabled true`), from files built into the binary, and rerunning it after an upgrade updates them.
 The Kiro IDE can import the repository as a power from its GitHub URL.

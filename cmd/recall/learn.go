@@ -46,7 +46,7 @@ const learnUsage = `Usage:
         reconcile the rule ledger with the bullets in learn.targets and in the
         context files of each learn.repos checkout
   recall learn targets
-        list every context file a proposal may land in, and its scope
+        list every context file and note a proposal may land in, and its scope
   recall learn age
         report rules the ledger says to reword or retire; exit 1 if any.
         Also lists, as "check", rules earned on a model no recent session
@@ -168,9 +168,10 @@ func cmdLearn(args []string) int {
 	}
 }
 
-// loadRepos finds the context files of each learn.repos checkout. An entry
-// that isn't a git checkout is an error, not a skip: a typo here would
-// silently send a repo's lessons to the global files.
+// loadRepos finds the context files of each learn.repos checkout, then the
+// repo notes under learn.repo_notes. An entry that isn't a git checkout is an
+// error, not a skip: a typo here would silently send a repo's lessons to
+// the global files.
 func loadRepos(ctx context.Context, env *archiveEnv) ([]learn.Repo, error) {
 	var repos []learn.Repo
 	seen := map[string]bool{}
@@ -189,7 +190,42 @@ func loadRepos(ctx context.Context, env *archiveEnv) ([]learn.Repo, error) {
 		}
 		repos = append(repos, repo)
 	}
-	return repos, nil
+	dir := repoNotesDir(env)
+	if dir == "" {
+		return repos, nil
+	}
+	if _, ok := review.RepoRoot(ctx, existingAncestor(dir)); !ok {
+		return nil, fmt.Errorf("learn.repo_notes: %s isn't in a git checkout, so no review could stage a change to it", tilde(dir, env.home))
+	}
+	notes, err := learn.DiscoverRepoNotes(dir)
+	if err != nil {
+		return nil, fmt.Errorf("learn.repo_notes: %w", err)
+	}
+	return append(repos, notes...), nil
+}
+
+// existingAncestor is dir or its nearest parent that exists, so a repo
+// notes directory not made yet still finds its checkout.
+func existingAncestor(dir string) string {
+	for {
+		if _, err := os.Stat(dir); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return dir
+		}
+		dir = parent
+	}
+}
+
+// repoNotesDir is learn.repo_notes with symlinks resolved; "" when off.
+func repoNotesDir(env *archiveEnv) string {
+	dir := env.settings.Learn.RepoNotes
+	if dir == "" {
+		return ""
+	}
+	return review.Resolve(dir)
 }
 
 // evidenceRepos are the repositories an evidence source scans: the origins
@@ -197,7 +233,7 @@ func loadRepos(ctx context.Context, env *archiveEnv) ([]learn.Repo, error) {
 func evidenceRepos(repos []learn.Repo) []string {
 	var slugs []string
 	for _, r := range repos {
-		if r.Remote != "" {
+		if r.Remote != "" && !r.RepoNote {
 			slugs = append(slugs, r.Remote)
 		}
 	}
@@ -220,14 +256,14 @@ func learnTargets(ctx context.Context, env *archiveEnv) int {
 		return fail(err)
 	}
 	for _, t := range env.settings.Learn.Targets {
-		fmt.Printf("global  %s\n", tilde(t, env.home))
+		fmt.Printf("%-9s  %s\n", "global", tilde(t, env.home))
 	}
 	for _, repo := range repos {
-		kind := "repo  "
-		name := repo.Remote
-		if name == "" {
-			name = tilde(repo.Root, env.home)
+		kind := "repo"
+		if repo.RepoNote {
+			kind = "repo note"
 		}
+		name := repo.Name(env.home)
 		for _, f := range repo.Files {
 			note := ""
 			switch {
@@ -236,8 +272,13 @@ func learnTargets(ctx context.Context, env *archiveEnv) int {
 			case len(f.Globs) > 0:
 				note = "  (paths: " + fmt.Sprint(f.Globs) + ")"
 			}
-			fmt.Printf("%s  %s%s  [%s]\n", kind, tilde(f.Path, env.home), note, name)
+			fmt.Printf("%-9s  %s%s  [%s]\n", kind, tilde(f.Path, env.home), note, name)
 		}
+	}
+	if dir := repoNotesDir(env); dir != "" {
+		fmt.Printf("%-9s  %s  (new repo notes go here, one file per repo)\n", "notes", tilde(dir, env.home)+string(filepath.Separator))
+	} else {
+		fmt.Printf("%-9s  off (learn.repo_notes)\n", "notes")
 	}
 	return 0
 }
@@ -1253,8 +1294,9 @@ func learnGates(env *archiveEnv, repos []learn.Repo, taken []string, ledger *lea
 	}
 	return learn.Gates{
 		Readers: readers, Own: own,
-		Targets: l.Targets, Repos: repos, Home: env.home,
-		Skills: l.Skills, Bin: l.Bin, Settings: l.Settings,
+		Targets: l.Targets, Repos: repos, Home: env.home, RepoNotes: repoNotesDir(env),
+		NoteHarnesses: config.RepoNoteHarnesses(env.settings.Harnesses),
+		Skills:        l.Skills, Bin: l.Bin, Settings: l.Settings,
 		Taken: taken, Budget: l.Budget,
 		Ledger:                 ledger,
 		RequireOwnerEvidence:   l.RequireOwnerEvidence,

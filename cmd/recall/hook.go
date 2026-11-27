@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,16 +13,24 @@ import (
 
 	"github.com/micahhausler/recall/internal/config"
 	"github.com/micahhausler/recall/internal/hook"
+	"github.com/micahhausler/recall/internal/learn"
 )
 
 const hookUsage = `Usage:
+  recall hook session-start    print the repo note for the repo a session starts in
   recall hook session-end      start the loop's background work, and return at once
 
-The recall plugin installs this as the harness's SessionEnd hook, so the
-learning loop runs with no cron job or LaunchAgent, and nothing recall
-installs runs at session start. The background work does only what [hooks]
-in the config turns on: hooks.map, hooks.archive, and hooks.learn_every.
-Its output is in ~/.local/state/recall/hook.log.
+The recall plugin installs these as Claude Code's SessionStart and
+SessionEnd hooks.
+
+session-start reads only local files: with learn.repo_notes set, it adds the
+owner's repo note for the repo the session starts in to the session's context,
+and prints nothing otherwise.
+
+session-end runs the learning loop with no cron job or LaunchAgent. The
+background work does only what [hooks] in the config turns on: hooks.map,
+hooks.archive, and hooks.learn_every. Its output is in
+~/.local/state/recall/hook.log.
 `
 
 // Background work is one at a time, and a worker that hasn't finished in
@@ -53,6 +63,11 @@ func cmdHook(args []string) int {
 		return 0
 	}
 	switch args[0] {
+	case "session-start":
+		if err := sessionStart(hook.ReadInput(os.Stdin), env, os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "recall: %v\n", err)
+		}
+		return 0
 	case "session-end":
 		hook.ReadInput(os.Stdin)
 		h := env.settings.Hooks
@@ -70,6 +85,20 @@ func cmdHook(args []string) int {
 		fmt.Fprint(os.Stderr, hookUsage)
 		return 2
 	}
+}
+
+// sessionStart writes the SessionStart hook's answer: the repo note for the
+// repo holding the session's directory as added context, or nothing.
+func sessionStart(in hook.Input, env *archiveEnv, w io.Writer) error {
+	text, err := learn.RepoNoteContext(repoNotesDir(env), in.CWD, env.home)
+	if err != nil || text == "" {
+		return err
+	}
+	out := map[string]any{"hookSpecificOutput": map[string]string{
+		"hookEventName":     "SessionStart",
+		"additionalContext": text,
+	}}
+	return json.NewEncoder(w).Encode(out)
 }
 
 // startWorker runs `recall hook work` detached, in its own session with its

@@ -43,6 +43,7 @@ var schema = []string{
 	"learn.reduce_effort",
 	"learn.targets",
 	"learn.repos",
+	"learn.repo_notes",
 	"learn.ledger",
 	"learn.candidates",
 	"learn.retire_days",
@@ -198,6 +199,9 @@ type LearnSettings struct {
 	// Repos are the checkouts whose own context files a repo-only lesson
 	// may land in.
 	Repos []string
+	// RepoNotes is a directory inside a private git checkout that holds a
+	// file of rules for each repo recall doesn't change; empty is off.
+	RepoNotes string
 	// Ledger is the separate file, kept beside the context files, that
 	// tracks each rule.
 	Ledger string
@@ -418,6 +422,7 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 	str("learn.map_effort", &s.Learn.MapEffort)
 	str("learn.reduce_effort", &s.Learn.ReduceEffort)
 	str("learn.apply_effort", &s.Learn.ApplyEffort)
+	path("learn.repo_notes", &s.Learn.RepoNotes)
 	path("learn.ledger", &s.Learn.Ledger)
 	path("learn.candidates", &s.Learn.Candidates)
 	num("learn.retire_days", &s.Learn.RetireDays)
@@ -557,6 +562,9 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 				s.Learn.Repos = append(s.Learn.Repos, ExpandHome(ev, home))
 			}
 		}
+	}
+	if err == nil && s.Learn.RepoNotes != "" {
+		err = c.checkRepoNotes(s)
 	}
 	if v, ok := c.Get("recur.env"); ok && err == nil {
 		list, lok := v.([]any)
@@ -816,4 +824,40 @@ func ExpandHome(p, home string) string {
 		}
 		return os.Getenv(name)
 	})
+}
+
+// checkRepoNotes refuses a repo notes directory under a keep.public path,
+// since repo notes describe other people's repos.
+func (c *Config) checkRepoNotes(s *Settings) error {
+	o, _ := c.Origin("learn.repo_notes")
+	dir := resolved(s.Learn.RepoNotes)
+	for _, pub := range s.Keep.Public {
+		if inside(dir, resolved(pub)) {
+			return fmt.Errorf("%s: learn.repo_notes %s is under keep.public %s; repo notes describe other people's repos and stay private", o, s.Learn.RepoNotes, pub)
+		}
+	}
+	return nil
+}
+
+// resolved is path with symlinks resolved as far as it exists, so a
+// symlink can't hide that one path is under another.
+func resolved(path string) string {
+	path = filepath.Clean(path)
+	var rest []string
+	for {
+		if r, err := filepath.EvalSymlinks(path); err == nil {
+			return filepath.Join(append([]string{r}, rest...)...)
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return filepath.Join(append([]string{path}, rest...)...)
+		}
+		rest = append([]string{filepath.Base(path)}, rest...)
+		path = parent
+	}
+}
+
+// inside reports whether path is dir or below it.
+func inside(path, dir string) bool {
+	return path == dir || strings.HasPrefix(path, dir+string(filepath.Separator))
 }

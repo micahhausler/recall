@@ -405,6 +405,10 @@ func (a *Applier) Plan(ctx context.Context, dir string) (*Plan, error) {
 	}
 	p.Branch = "learn-" + p.Date
 
+	props := ParseProposals(string(md))
+	// A proposal may start a repo's notes, as the reduce checked it.
+	a.addProposedRepoNotes(props, a.norm)
+
 	targets := map[string]bool{}
 	for _, t := range a.Targets {
 		targets[a.norm(t)] = true
@@ -441,7 +445,7 @@ func (a *Applier) Plan(ctx context.Context, dir string) (*Plan, error) {
 
 	budget := a.budgetCheck()
 	textSize := textBudget()
-	for i, prop := range ParseProposals(string(md)) {
+	for i, prop := range props {
 		r := Route{ID: fmt.Sprintf("p-%02d", i+1), Proposal: prop, Skip: a.reviewed(prop), Models: evidence.models(prop.Candidates)}
 		if r.Skip == "" && a.unsupported(prop, evidence) {
 			r.Skip = "none of its evidence is an observation the owner typed (learn.require_owner_evidence)"
@@ -454,16 +458,15 @@ func (a *Applier) Plan(ctx context.Context, dir string) (*Plan, error) {
 		if r.Skip == "" {
 			r.Skip = a.scopeProblem(prop, a.norm(prop.Target), evidence)
 		}
+		if r.Skip == "" && repoNoteRemote(a.RepoNotes, a.norm(prop.Target)) != "" {
+			r.Skip = publicNote(a.norm(prop.Target), a.Public, review.Resolve)
+		}
 		// Placement is enforced, not advised: a global rule earned in one
 		// repo belongs in that repo's own file, where only its sessions pay
 		// for it.
 		if r.Skip == "" {
 			if repo := a.narrowScope(prop, a.norm(prop.Target), evidence); repo != nil {
-				name := repo.Remote
-				if name == "" {
-					name = homeRelative(repo.Root, a.Home)
-				}
-				r.Skip = fmt.Sprintf("it targets a global file, and every session behind it ran in %s; it belongs in that repo's own context file", name)
+				r.Skip = fmt.Sprintf("it targets a global file, and every session behind it ran in %s; it belongs in %s", repo.Name(a.Home), repo.home())
 			}
 		}
 		if r.Skip == "" {
@@ -600,6 +603,10 @@ func (a *Applier) route(r *Route, targets, taken map[string]bool, rootOf func(st
 			break
 		}
 		repo := repoOf(a.Repos, review.Resolve(rule.Target))
+		if repo != nil && repo.RepoNote {
+			r.Skip = fmt.Sprintf("its rule lives in the repo note for %s, and recall changes nothing in that repo, its settings included", repo.Remote)
+			break
+		}
 		if repo == nil {
 			gts := make([]string, 0, len(a.Targets))
 			for _, t := range a.Targets {
@@ -1741,6 +1748,12 @@ func (a *Applier) body(plan *Plan, public bool, lines []string, applied []Outcom
 	for _, line := range lines {
 		b.WriteString(line + "\n")
 	}
+	if notes := a.repoNotesIn(plan, applied); len(notes) > 0 {
+		fmt.Fprintf(&b, "\nRepo notes change here, each loaded only in %s sessions that start in its repo; recall changes nothing in those repos:\n", harnessList(a.NoteHarnesses))
+		for _, line := range notes {
+			b.WriteString(line + "\n")
+		}
+	}
 	if len(forced) > 0 {
 		b.WriteString("\nAn ignore rule matches these files; they were committed with `git add -f` so the change stays whole. Fix the ignore file if they should stay tracked:\n")
 		for _, rel := range forced {
@@ -1763,6 +1776,25 @@ func (a *Applier) body(plan *Plan, public bool, lines []string, applied []Outcom
 		b.WriteString("\n\n</details>\n")
 	}
 	return b.String()
+}
+
+// repoNotesIn lists the repos whose repo notes the applied proposals edit.
+func (a *Applier) repoNotesIn(plan *Plan, applied []Outcome) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, o := range applied {
+		r := plan.route(o.Route)
+		if r == nil {
+			continue
+		}
+		for _, path := range r.Edit {
+			if remote := repoNoteRemote(a.RepoNotes, path); remote != "" && !seen[remote] {
+				seen[remote] = true
+				out = append(out, "- "+remote)
+			}
+		}
+	}
+	return out
 }
 
 func (a *Applier) save(plan *Plan, res *ApplyResult) error {
