@@ -18,6 +18,14 @@ type Gates struct {
 	Targets []string
 	Repos   []Repo
 	Home    string
+	// Repo notes is the directory of the owner's files of rules for repos
+	// recall doesn't change (learn.repo_notes); empty offers none. Repos
+	// holds the repo notes that exist, and the reduce and apply add the ones
+	// a run needs.
+	RepoNotes string
+	// NoteHarnesses are the enabled harnesses that load repo notes; a
+	// lesson only other harnesses showed can't go in one.
+	NoteHarnesses []string
 	// Skills and Bin are where a new skill and a graduated script go
 	// (learn.skills, learn.bin). Settings is the harness settings file a
 	// graduated hook or permission rule goes in (learn.settings); empty
@@ -105,7 +113,11 @@ func (g *Gates) budgetCheck() func(p Proposal, target string, held bool) string 
 // scopeProblem says why a proposal can't go to its repo-scoped place, if it
 // can't, by the reduce run's evidence record.
 func (g *Gates) scopeProblem(p Proposal, target string, e RunEvidence) string {
-	return scopeProblem(p, target, g.Repos, e, g.Home, g.rules())
+	if why := scopeProblem(p, target, g.Repos, e, g.Home, g.rules()); why != "" {
+		return why
+	}
+	repo, _ := scopeRepo(p, target, g.Repos, g.rules())
+	return repoNoteHarnessProblem(p, repo, e, g.NoteHarnesses)
 }
 
 // narrowScope names the one listed repo all of a global add's evidence

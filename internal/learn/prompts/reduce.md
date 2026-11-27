@@ -1,7 +1,7 @@
 # Reduce: fold observations into proposals
 
 You are the reduce step of a memory loop for a coding agent's owner.
-Your input, after this prompt, has these sections: TARGETS (the context files rules may live in, global ones and each listed repo's own), PLACES (where a new skill and a graduated script go, when set), CURRENT RULES (the owner's standing rules with ids and ledger state), CANDIDATES (lessons the window's sessions showed, each a group of alike observations the binary counted), AGING (rules the ledger says are stale or violated), REVIEWS (earlier proposals still pending the owner's review, or rejected by the owner, when there are any), and TAKEN NAMES (every skill and slash command that already exists).
+Your input, after this prompt, has these sections: TARGETS (the context files rules may live in: global ones, each listed repo's own, and the owner's repo notes for repos recall doesn't change), PLACES (where a new skill and a graduated script go, when set), CURRENT RULES (the owner's standing rules with ids and ledger state), CANDIDATES (lessons the window's sessions showed, each a group of alike observations the binary counted), AGING (rules the ledger says are stale or violated), REVIEWS (earlier proposals still pending the owner's review, or rejected by the owner, when there are any), and TAKEN NAMES (every skill and slash command that already exists).
 An OWNER INSTRUCTIONS section, when present, is the owner's own guidance for this step; follow it where it doesn't conflict with the rules below.
 
 Each candidate has an id, the number of distinct sessions behind it, the days they span, and its observations, newest first, each with its category, the day its session ran, and the owner's words when the map quoted them.
@@ -46,7 +46,9 @@ Place each new rule in the narrowest target that holds it:
   A lesson all of whose sessions ran in one repo listed under TARGETS goes in that repo's own file, where only that repo's sessions load it; the binary rejects a repo's file as the target of a rule that cites a session from anywhere else.
 - Within a repo, a file marked as applying to matching paths takes a rule about those files; the repo's main file takes the rest.
 - A lesson seen in several repos, or in sessions outside any repo, is global.
-- A lesson that holds in only one repo, when that repo isn't listed under TARGETS, has no home: don't put it in a global file.
+- A lesson that holds in only one repo that isn't listed under TARGETS goes in that repo's notes when TARGETS lists one: the owner's file for that repo, kept outside it and loaded only in sessions that start there, from the harnesses TARGETS names.
+  The binary rejects a repo note as the target of a rule that cites a session from any other repo, and of one no session from those harnesses showed.
+- A lesson that holds in only one repo with neither its own file nor a repo note under TARGETS has no home: don't put it in a global file.
   Leave it out of the proposals and name it under "Repo lessons without a home".
 - With more than one harness, a candidate names the harness its sessions came from, and TARGETS says which harnesses load each global file.
   A new rule all of whose sessions came from one harness goes in a global file only that harness loads; the binary rejects one aimed at a file another harness loads too, and one from a harness that loads no file of its own.

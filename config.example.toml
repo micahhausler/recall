@@ -167,6 +167,17 @@ targets = ["~/.claude/CLAUDE.md", "~/.kiro/steering/AGENTS.md"]
 # recall never proposes a change to a repo that isn't listed here, since a
 # pull request there may be read by other people. Default: none.
 repos = ["~/src/project"]
+# A directory inside a private git checkout you own that holds your repo notes: one
+# file of rules per repo recall doesn't change, at <repo_notes>/<host>/<path>.md,
+# keyed by that repo's origin. A lesson every session of which ran in one
+# unlisted repo with an origin lands in its notes, by a review in the
+# checkout that holds the directory. The plugin's SessionStart hook adds a
+# repo's notes to Claude Code sessions that start in it; recall writes
+# nothing to the repo itself. A directory outside a git checkout is an
+# error, and config load refuses one under a keep.public path, since repo
+# notes describe other people's repos. Default: unset, which offers no repo
+# notes.
+# repo_notes = "~/src/notes/repo-notes"
 # The rule ledger, a separate file, never comments in the context files
 # (docs/learning.md). The store holds the authoritative copy for every
 # machine that shares it: the reducer writes a new version there after each

@@ -19,6 +19,7 @@ Apply each proposal by kind:
 
 - **add**: add the rule to its target file, in the section where it fits.
   If an existing bullet already says most of it, reword that bullet instead of adding a near-duplicate.
+  A new repo note is a plain list of rules with no heading: the hook that loads it names the repo.
   When the proposal has a `- displaces:` line, also remove that rule from the same file: the file is at its budget, and the new rule takes the old one's place.
   DISPLACED RULES gives the text of each rule a proposal displaces.
 - **reword**: replace the existing rule with the proposed text.

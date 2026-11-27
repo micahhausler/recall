@@ -1,6 +1,7 @@
 package config
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -70,6 +71,22 @@ func TestHookRunsLoop(t *testing.T) {
 	} {
 		if got := HookRunsLoop(tc.enabled); got != tc.want {
 			t.Errorf("HookRunsLoop(%v) = %v, want %v", tc.enabled, got, tc.want)
+		}
+	}
+}
+
+func TestRepoNoteHarnesses(t *testing.T) {
+	on := HarnessSettings{Enabled: true}
+	for _, tc := range []struct {
+		enabled map[string]HarnessSettings
+		want    []string
+	}{
+		{map[string]HarnessSettings{HarnessClaude: on, HarnessKiro: on}, []string{HarnessClaude}},
+		{map[string]HarnessSettings{HarnessKiro: on}, nil},
+		{nil, nil},
+	} {
+		if got := RepoNoteHarnesses(tc.enabled); !slices.Equal(got, tc.want) {
+			t.Errorf("RepoNoteHarnesses(%v) = %v, want %v", tc.enabled, got, tc.want)
 		}
 	}
 }

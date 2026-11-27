@@ -92,13 +92,15 @@ func (r *Reducer) clusters(window []SessionObservations) (open []Cluster, used i
 		r.loads[""]++
 		for i := range r.Repos {
 			if r.Repos[i].holds(so.Scope.Key(), r.Home) {
-				r.loads[r.Repos[i].Root]++
+				r.loads[r.Repos[i].scopeID()]++
 			}
 		}
 	}
 	all := r.Candidates.Cluster(withRepeats(window, cutoff, r.RepeatEvidenceSessions), cutoff, now.Format("2006-01-02"))
 	r.Candidates.Prune(all)
-	return Open(all, r.reviews())
+	open, used = Open(all, r.reviews())
+	r.addRepoNotes(repoNoteRemotes(open, r.NoteHarnesses))
+	return open, used
 }
 
 func (r *Reducer) retireDays() int {
@@ -151,11 +153,10 @@ func (r *Reducer) buildInput(open []Cluster, used int) string {
 		fmt.Fprintf(&b, "- %s%s%s\n", t, r.size(t), r.loadedBy(t))
 	}
 	for _, repo := range r.Repos {
-		name := repo.Remote
-		if name == "" {
-			name = homeRelative(repo.Root, r.Home)
+		if repo.RepoNote {
+			continue
 		}
-		fmt.Fprintf(&b, "\nRepo %s, loaded only in sessions that run there:\n", name)
+		fmt.Fprintf(&b, "\nRepo %s, loaded only in sessions that run there:\n", repo.Name(r.Home))
 		for _, f := range repo.Files {
 			fmt.Fprintf(&b, "- %s%s", f.Path, r.size(f.Path))
 			switch {
@@ -166,6 +167,23 @@ func (r *Reducer) buildInput(open []Cluster, used int) string {
 			}
 			b.WriteString("\n")
 		}
+	}
+
+	notes := false
+	for _, repo := range r.Repos {
+		if !repo.RepoNote {
+			continue
+		}
+		if !notes {
+			fmt.Fprintf(&b, "\nRepo notes, each the owner's file for one repo recall doesn't change, loaded only in %s sessions that start in that repo:\n", harnessList(r.NoteHarnesses))
+			notes = true
+		}
+		f := repo.Files[0]
+		fmt.Fprintf(&b, "- %s%s (for %s", f.Path, r.size(f.Path), repo.Remote)
+		if f.New {
+			b.WriteString("; doesn't exist yet")
+		}
+		b.WriteString(")\n")
 	}
 
 	if r.Skills != "" || r.Bin != "" {
@@ -202,7 +220,7 @@ func (r *Reducer) buildInput(open []Cluster, used int) string {
 		// What the rule costs: its tokens, in every session that loads it.
 		scope := ""
 		if repo := repoOf(r.Repos, rule.Target); repo != nil {
-			scope = repo.Root
+			scope = repo.scopeID()
 		}
 		if n := r.loads[scope]; n > 0 {
 			fmt.Fprintf(&b, "; about %d tokens in each of %d session(s)", tokenCost(rule.Text), n)
@@ -276,6 +294,9 @@ func (r *Reducer) Run(ctx context.Context, window []SessionObservations, outDir 
 	}
 	props := ParseProposals(out)
 	r.Candidates.Cite(props, date)
+	// A proposal may start a repo's notes the input didn't list; the
+	// checks below judge it as the apply will.
+	r.addProposedRepoNotes(props, func(p string) string { return review.Resolve(normTarget(p, r.Home)) })
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return "", usage, err
 	}
@@ -464,7 +485,7 @@ func (r *Reducer) checks(out string, props []Proposal, evidence RunEvidence) []r
 				} else if repo := r.narrowScope(p, target, evidence); repo != nil {
 					fs = append(fs, reduceFinding{title: p.Title,
 						line: fmt.Sprintf("- %q targets a global file, and every session behind it ran in %s; "+
-							"it belongs in that repo's own context file, and the apply holds it back.", p.Title, homeRelative(repo.Root, r.Home))})
+							"it belongs in %s, and the apply holds it back.", p.Title, repo.Name(r.Home), repo.home())})
 				} else if why := r.harnessScope(p, target, evidence); why != "" {
 					fs = append(fs, reduceFinding{title: p.Title,
 						line: fmt.Sprintf("- %q: %s; the apply holds it back.", p.Title, why)})

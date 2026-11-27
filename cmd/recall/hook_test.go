@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +17,7 @@ import (
 	"github.com/micahhausler/recall/internal/evidence"
 	"github.com/micahhausler/recall/internal/harness"
 	"github.com/micahhausler/recall/internal/harness/adapters"
+	"github.com/micahhausler/recall/internal/hook"
 	"github.com/micahhausler/recall/internal/learn"
 	"github.com/micahhausler/recall/internal/model"
 	"github.com/micahhausler/recall/internal/review"
@@ -353,4 +356,139 @@ func TestHookWorkerSkipsStepsRecurJobsRun(t *testing.T) {
 			t.Error("an unrelated recur job kept the archive hook step from running")
 		}
 	})
+}
+
+func TestHookSessionStart(t *testing.T) {
+	home := review.Resolve(t.TempDir())
+	upstream := filepath.Join(home, "src", "upstream")
+	if err := os.MkdirAll(filepath.Join(upstream, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(upstream, ".git", "config"), []byte("[remote \"origin\"]\n\turl = git@example.com:them/upstream.git\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(home, "src", "notes", "repo-notes")
+	note := filepath.Join(dir, "example.com", "them", "upstream.md")
+	if err := os.MkdirAll(filepath.Dir(note), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(note, []byte("- Run make test.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env := &archiveEnv{home: home, settings: &config.Settings{Learn: config.LearnSettings{RepoNotes: dir}}}
+
+	var out strings.Builder
+	if err := sessionStart(hook.Input{CWD: upstream, Event: "SessionStart"}, env, &out); err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		HookSpecificOutput struct {
+			HookEventName     string `json:"hookEventName"`
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal([]byte(out.String()), &got); err != nil {
+		t.Fatalf("%v: %s", err, out.String())
+	}
+	if got.HookSpecificOutput.HookEventName != "SessionStart" || !strings.Contains(got.HookSpecificOutput.AdditionalContext, "- Run make test.") {
+		t.Errorf("answer = %+v", got)
+	}
+
+	for name, e := range map[string]struct {
+		cwd string
+		env *archiveEnv
+	}{
+		"another directory": {home, env},
+		"repo notes off":    {upstream, &archiveEnv{home: home, settings: &config.Settings{}}},
+	} {
+		out.Reset()
+		if err := sessionStart(hook.Input{CWD: e.cwd}, e.env, &out); err != nil || out.Len() != 0 {
+			t.Errorf("%s: printed %q, %v", name, out.String(), err)
+		}
+	}
+}
+
+// One of recall's own harness runs gets no repo note: the hook returns
+// before it reads anything.
+func TestHookSessionStartGuarded(t *testing.T) {
+	home := t.TempDir()
+	upstream := filepath.Join(home, "src", "upstream")
+	if err := os.MkdirAll(upstream, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, upstream, "init", "-q")
+	gitIn(t, upstream, "remote", "add", "origin", "git@example.com:them/upstream.git")
+	dir := filepath.Join(home, "notes", "repo-notes")
+	note := filepath.Join(dir, "example.com", "them", "upstream.md")
+	if err := os.MkdirAll(filepath.Dir(note), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(note, []byte("- Run make test.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := filepath.Join(home, "config.toml")
+	if err := os.WriteFile(cfg, []byte(fmt.Sprintf("host = \"laptop-a\"\n[learn]\nrepo_notes = %q\n", dir)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv(config.EnvVar, cfg)
+	input := fmt.Sprintf(`{"cwd":%q,"hook_event_name":"SessionStart"}`, upstream)
+	hookRun := func() (int, string) {
+		in, inW, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		inW.WriteString(input)
+		inW.Close()
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		stdin, stdout := os.Stdin, os.Stdout
+		os.Stdin, os.Stdout = in, w
+		code := run([]string{"hook", "session-start"})
+		os.Stdin, os.Stdout = stdin, stdout
+		w.Close()
+		data, _ := io.ReadAll(r)
+		return code, string(data)
+	}
+	// Unguarded, the same input prints the note, so the guard is what keeps
+	// recall's own runs quiet.
+	if code, out := hookRun(); code != 0 || !strings.Contains(out, "Run make test.") {
+		t.Fatalf("unguarded session-start: code %d, printed %q", code, out)
+	}
+	t.Setenv(hook.GuardEnv, "1")
+	if code, out := hookRun(); code != 0 || out != "" {
+		t.Errorf("guarded session-start: code %d, printed %q", code, out)
+	}
+}
+
+// Repo notes may live in any git checkout, listed in learn.repos or not,
+// and the directory needn't exist yet.
+func TestLoadReposRepoNotes(t *testing.T) {
+	home := t.TempDir()
+	notes := filepath.Join(home, "src", "notes")
+	if err := os.MkdirAll(notes, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, notes, "init", "-q")
+	loose := filepath.Join(home, "loose")
+	if err := os.MkdirAll(loose, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		dir, err string
+	}{
+		{filepath.Join(notes, "repo-notes"), ""},
+		{filepath.Join(loose, "repo-notes"), "isn't in a git checkout"},
+	} {
+		env := &archiveEnv{home: home, settings: &config.Settings{Learn: config.LearnSettings{RepoNotes: c.dir}}}
+		_, err := loadRepos(context.Background(), env)
+		if c.err == "" && err != nil {
+			t.Errorf("%s: %v", c.dir, err)
+		}
+		if c.err != "" && (err == nil || !strings.Contains(err.Error(), c.err)) {
+			t.Errorf("%s: err = %v, want %q", c.dir, err, c.err)
+		}
+	}
 }

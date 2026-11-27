@@ -1,7 +1,6 @@
 // Package hook is what the harness's own hooks need from recall, so the
 // learning loop runs with no scheduler: a session end that starts the
-// loop's work in the background. Nothing runs at session start, so recall
-// can never delay a session.
+// loop's work in the background. Session start only reads a local file.
 package hook
 
 import (

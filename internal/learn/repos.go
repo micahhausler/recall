@@ -23,6 +23,35 @@ type Repo struct {
 	Root   string
 	Remote string
 	Files  []RepoFile
+	// Repo note marks the owner's file of rules for a repo recall doesn't
+	// change (learn.repo_notes): no Root, and Remote is the repo it is for.
+	RepoNote bool
+}
+
+// Name is how the reduce and the apply name the repo: its origin, or its
+// checkout without one.
+func (r Repo) Name(home string) string {
+	if r.Remote != "" {
+		return r.Remote
+	}
+	return homeRelative(r.Root, home)
+}
+
+// scopeID keys the sessions that load the repo's files: its checkout, or
+// for a repo note, the repo it is for.
+func (r Repo) scopeID() string {
+	if r.RepoNote {
+		return "repo note:" + r.Remote
+	}
+	return r.Root
+}
+
+// home says where a lesson scoped to the repo belongs.
+func (r Repo) home() string {
+	if r.RepoNote {
+		return "its repo note"
+	}
+	return "that repo's own context file"
 }
 
 // RepoFile is one context file in a repo.
@@ -220,6 +249,9 @@ func (r Repo) holds(key, home string) bool {
 	if r.Remote != "" && key == r.Remote {
 		return true
 	}
+	if r.RepoNote {
+		return false
+	}
 	return review.Resolve(ExpandScopePath(key, home)) == r.Root
 }
 
@@ -287,7 +319,7 @@ func scopeRepo(p Proposal, target string, repos []Repo, rules []Rule) (*Repo, st
 			return nil, ""
 		}
 		for i := range repos {
-			if within(target, repos[i].Root) {
+			if !repos[i].RepoNote && within(target, repos[i].Root) {
 				return &repos[i], target
 			}
 		}
@@ -310,6 +342,9 @@ func scopeProblem(p Proposal, target string, repos []Repo, e RunEvidence, home s
 	repo, at := scopeRepo(p, target, repos, rules)
 	if repo == nil {
 		return ""
+	}
+	if repo.RepoNote && p.Kind == "graduate" {
+		return fmt.Sprintf("its rule lives in the repo note for %s, and recall changes nothing in that repo, its settings included", repo.Remote)
 	}
 	target = at
 	refs := e.sessions(p.Candidates)
@@ -340,6 +375,9 @@ func narrowScope(p Proposal, target string, repos []Repo, e RunEvidence, home st
 		return nil
 	}
 	for i := range repos {
+		if repos[i].RepoNote && repos[i].Files[0].New {
+			continue // offered by this reduce alone, so the apply can't see it
+		}
 		all := true
 		for _, ref := range refs {
 			all = all && repos[i].holds(ref.Repo, home)

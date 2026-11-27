@@ -58,6 +58,9 @@ type harnessDefaults struct {
 	// hookRunsLoop says its session-end hook can start the detached worker
 	// that runs the loop. Without one, recur jobs run the loop instead.
 	hookRunsLoop bool
+	// loadsRepoNotes says its session-start hook adds the owner's notes for
+	// the repo a session starts in (learn.repo_notes).
+	loadsRepoNotes bool
 }
 
 // harnesses is every harness recall knows, in the order PrimaryHarness
@@ -75,11 +78,12 @@ var harnesses = []harnessDefaults{
 		trailer: "Co-Authored-By: Claude",
 		// Measured on real sessions, haiku missed plain corrections that
 		// sonnet caught, so the map runs on sonnet.
-		mapModel:     "sonnet",
-		reduceModel:  "opus",
-		applyModel:   "sonnet",
-		efforts:      []string{"low", "medium", "high", "xhigh", "max"},
-		hookRunsLoop: true,
+		mapModel:       "sonnet",
+		reduceModel:    "opus",
+		applyModel:     "sonnet",
+		efforts:        []string{"low", "medium", "high", "xhigh", "max"},
+		hookRunsLoop:   true,
+		loadsRepoNotes: true,
 	},
 	{
 		name:   HarnessKiro,
@@ -96,7 +100,8 @@ var harnesses = []harnessDefaults{
 		// GPT models also take none.
 		efforts: []string{"none", "low", "medium", "high", "xhigh", "max"},
 		// Kiro's session-end hook kills every process it starts, the
-		// detached worker included.
+		// detached worker included. recall installs no session-start hook
+		// for Kiro, so it loads no repo notes.
 	},
 }
 
@@ -158,6 +163,18 @@ func HookRunsLoop(enabled map[string]HarnessSettings) bool {
 		}
 	}
 	return false
+}
+
+// RepoNoteHarnesses are the enabled harnesses whose session-start hook
+// loads repo notes, in table order.
+func RepoNoteHarnesses(enabled map[string]HarnessSettings) []string {
+	var out []string
+	for _, h := range harnesses {
+		if _, on := enabled[h.name]; on && h.loadsRepoNotes {
+			out = append(out, h.name)
+		}
+	}
+	return out
 }
 
 // Each Default below is "" for a harness recall doesn't know.
