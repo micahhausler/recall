@@ -23,7 +23,9 @@ type command struct {
 
 var commands = []command{
 	{"init", true, [][2]string{{"init [--dry-run]", "set a new machine up with defaults: no bucket, scheduler, or git remote"}}, cmdInit},
+	{"sync", true, [][2]string{{"sync [--force]", "run each step that's due: imports, archive, observe, propose on the proposing machine"}}, cmdSync},
 	{"report", true, [][2]string{{"report [--since 30d|all]", "say what recall noticed; no model call"}}, cmdReport},
+	{"status", true, [][2]string{{"status", "what is on, the timer and its last run, the proposing machine, pending proposals"}}, cmdStatus},
 	{"proposals", true, [][2]string{{"proposals", "list sent proposals and what became of them"}}, cmdProposals},
 	{"config", true, [][2]string{{"config show|get|set", "read and write the layered TOML config"}}, cmdConfig},
 

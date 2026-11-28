@@ -100,6 +100,12 @@ func TestStatePathsUnderHome(t *testing.T) {
 	if got := CandidatesPath("/home/you"); got != "/home/you/.local/state/recall/learn/candidates.json" {
 		t.Errorf("candidates = %q", got)
 	}
+	if got := PendingDir("/home/you"); got != "/home/you/.local/state/recall/pending" {
+		t.Errorf("pending = %q", got)
+	}
+	if got := UploadedDir("/home/you"); got != "/home/you/.local/state/recall/uploaded" {
+		t.Errorf("uploaded = %q", got)
+	}
 }
 
 func TestSchemaPatternCount(t *testing.T) {

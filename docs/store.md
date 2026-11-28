@@ -16,6 +16,7 @@ For a policy to paste, skip to the reducer example at the end.
 | `learn/reducer` | `recall init` on an unclaimed store, a reduce on an unclaimed store, and `learn reducer --take` | every learning host | the one host that reduces |
 | `ledger/<timestamp>Z` | the reducer, never overwritten | every learning host, newest first | versions of the rule ledger |
 
+On an S3 store, a host writes its observations, rule hits, memory notes, and evidence under `analysis/` to `~/.local/state/recall/pending/` first, under the same keys, and `recall sync` uploads the ones the bucket lacks; `analysis/reviews/` goes straight to the bucket.
 `<harness>` is `claude`, `kiro`, or the name of a `[harness.<name>]` table read through a `format`, such as an import's ([import.md](import.md)).
 Each is its own prefix, so a role needs `<name>/*` beside `claude/*`, and `recall archive-chats policy` names every enabled harness.
 Uploads that never overwrite use `If-None-Match: *`; IAM can't require that header, so the policy can't enforce it.

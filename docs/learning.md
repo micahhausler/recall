@@ -73,6 +73,10 @@ A small model then reads the session and records corrections, repeated context, 
 - **Sonnet is the map default.** On a test of real sessions, haiku returned `NONE` on a session full of corrections, and sonnet caught them all.
 - **Rule hits are stored apart from observations,** so a rule change never re-observes a session. A session is judged only against rules in force when it ran.
 - **Every machine maps its own sessions.** The reduce reads every host's observations from the shared store, so transcripts never move.
+- **Observations land on disk first.** On an S3 store, the observations, rule hits, memory notes, and evidence the map writes go to `~/.local/state/recall/pending/` under their store keys, and the cache reads there before the store, so a missing or unreachable bucket never stops a pass or spends a model call twice.
+  `recall sync` uploads what the store lacks; the map itself never uploads.
+  A propose stops before any model call while any of these objects wait on this machine, since it reads them only from the store.
+  On a local store the map writes straight to the store, and nothing waits.
 - **A refused session is mapped as far as the model accepts,** and the same content is never retried on another model.
 
 ## Report: what recall noticed
@@ -198,6 +202,12 @@ A proposal the owner closes is a judgment, and the loop keeps it.
 The plugin carries two harness hooks, on session start and session end, so a machine needs no cron job.
 Session end does nothing until `recall init` turns its steps on under `[hooks]`, and session start prints nothing for a repo with no notes.
 `recall recur` installs scheduled jobs in place of the session-end work.
+
+`recall sync` is the scheduled form of the same steps ([commands.md](commands.md)): one command a weekly timer runs on every machine.
+Every machine archives, observes, and uploads its observations; only the proposing machine runs the imports and proposes; each step runs only when it is due.
+It takes the worker's lock, so a sync and a hook worker never run at once, and it reads and writes the worker's `hook-learn.stamp` and `hook-learn-tried.stamp`, so a machine that moves from the hook to a timer does not propose twice in one week.
+A recur job whose command is `recall sync` covers all three hook steps.
+Sync proposes once a week whatever `hooks.learn_every` says; that key paces only the session hook.
 
 - **Session start only reads a file.** `recall hook session-start` looks up the origin of the checkout the session starts in and prints that repo's notes as added context: no store, no network, and no model. A session that moves into a repo after it starts gets no repo note.
 - **Session end returns at once.** It starts a detached worker that archives at most once a day, maps sessions quiet for six hours, and runs the reduce and apply every `hooks.learn_every` days.

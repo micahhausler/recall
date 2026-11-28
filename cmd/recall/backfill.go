@@ -120,10 +120,15 @@ func initBackfill(ctx context.Context, env *archiveEnv, in io.Reader, mode strin
 
 // reducesHere reports whether this machine holds the store's reduce claim.
 func reducesHere(ctx context.Context, env *archiveEnv) bool {
+	claim, err := storeClaim(ctx, env)
+	return err == nil && claim == env.settings.Host
+}
+
+// storeClaim is the host that proposes for the configured store, or "".
+func storeClaim(ctx context.Context, env *archiveEnv) (string, error) {
 	st, _, err := openStore(ctx, env)
 	if err != nil {
-		return false
+		return "", err
 	}
-	claim, err := storeReducer(ctx, st)
-	return err == nil && claim == env.settings.Host
+	return storeReducer(ctx, st)
 }

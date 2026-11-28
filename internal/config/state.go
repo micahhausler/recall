@@ -21,3 +21,19 @@ func LedgerPath(home string) string {
 func CandidatesPath(home string) string {
 	return filepath.Join(home, ".local", "state", "recall", "learn", "candidates.json")
 }
+
+// PendingDir is where observe writes analysis/ keys before `recall sync`
+// uploads them.
+func PendingDir(home string) string {
+	return filepath.Join(home, ".local", "state", "recall", "pending")
+}
+
+// UploadedDir holds a marker per PendingDir key already uploaded.
+func UploadedDir(home string) string {
+	return filepath.Join(home, ".local", "state", "recall", "uploaded")
+}
+
+// SyncStatePath is each step's result from the last `recall sync`.
+func SyncStatePath(home string) string {
+	return filepath.Join(home, ".local", "state", "recall", "sync.json")
+}

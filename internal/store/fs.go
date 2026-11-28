@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -24,6 +25,8 @@ func init() {
 // FS stores objects as files under a root directory.
 type FS struct {
 	root string
+	// private makes directories 0700 and claims 0600.
+	private bool
 }
 
 // NewFS returns a store rooted at dir, creating it if needed.
@@ -38,10 +41,17 @@ func NewFS(dir string) (*FS, error) {
 }
 
 func (f *FS) path(key string) (string, error) {
-	if key == "" || strings.HasPrefix(key, "/") || strings.Contains(key, "..") {
+	if key == "" || strings.HasPrefix(key, "/") || slices.Contains(strings.Split(key, "/"), "..") {
 		return "", fmt.Errorf("bad key %q", key)
 	}
 	return filepath.Join(f.root, filepath.FromSlash(key)), nil
+}
+
+func (f *FS) dirMode() os.FileMode {
+	if f.private {
+		return 0o700
+	}
+	return 0o755
 }
 
 // PutIfAbsent claims the key with O_EXCL, writes a temp file, and renames it
@@ -52,11 +62,11 @@ func (f *FS) PutIfAbsent(ctx context.Context, key string, r io.Reader) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), f.dirMode()); err != nil {
 		return err
 	}
 	for {
-		claim, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+		claim, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, f.dirMode()&0o666)
 		if err == nil {
 			claim.Close()
 			break
@@ -104,7 +114,7 @@ func (f *FS) Put(ctx context.Context, key string, r io.Reader) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), f.dirMode()); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".put-*")

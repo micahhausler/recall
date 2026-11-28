@@ -29,6 +29,10 @@ type Runner struct {
 	Build Options
 	Out   io.Writer
 	Err   io.Writer
+	// Quiet leaves out the weeks with nothing to upload.
+	Quiet bool
+	// Uploaded counts the weeks Run uploaded.
+	Uploaded int
 }
 
 // DefaultLookback is how many complete weeks an archive run checks.
@@ -58,14 +62,21 @@ func (r *Runner) Run(ctx context.Context, lookback int, dryRun, offline bool) (i
 			// A week encrypted by the removed client-side encryption feature
 			// is still that week: name it rather than upload it again.
 			if sealed := key + ".age"; have[sealed] {
+				if r.Quiet {
+					continue
+				}
 				fmt.Fprintf(r.Out, "%s: already in the store as %s, encrypted by a feature recall removed; the age CLI still reads it\n", w, r.Dest(sealed))
 				continue
 			}
-			n, err := r.one(ctx, h, w, key, dryRun, offline)
-			if err != nil {
+			n, up, err := r.one(ctx, h, w, key, dryRun, offline)
+			switch {
+			case err != nil:
 				fmt.Fprintf(r.Err, "%s: upload failed: %v\n", w, err)
 				failed++
-			} else if n != "" {
+			case up:
+				r.Uploaded++
+				fmt.Fprintln(r.Out, n)
+			case n != "" && !r.Quiet:
 				fmt.Fprintln(r.Out, n)
 			}
 		}
@@ -73,27 +84,27 @@ func (r *Runner) Run(ctx context.Context, lookback int, dryRun, offline bool) (i
 	return failed, nil
 }
 
-func (r *Runner) one(ctx context.Context, h harness.Harness, w Week, key string, dryRun, offline bool) (string, error) {
+func (r *Runner) one(ctx context.Context, h harness.Harness, w Week, key string, dryRun, offline bool) (msg string, uploaded bool, err error) {
 	start, end := w.Bounds(r.Loc)
 	files, err := h.WeekFiles(start, end)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	if len(files) == 0 {
-		return fmt.Sprintf("%s: no changed files, nothing to upload", w), nil
+		return fmt.Sprintf("%s: no changed files, nothing to upload", w), false, nil
 	}
 	tmp, err := os.MkdirTemp("", "recall-archive.")
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	defer os.RemoveAll(tmp)
 	out := filepath.Join(tmp, "a.tar.zst")
 	built, size, err := BuildFile(filepath.Dir(h.SourceDir()), files, out, r.Build)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	if len(built.Files) == 0 {
-		return fmt.Sprintf("%s: the changed files were deleted before archiving; nothing to upload", w), nil
+		return fmt.Sprintf("%s: the changed files were deleted before archiving; nothing to upload", w), false, nil
 	}
 	dest := r.Dest(key)
 	what := fmt.Sprintf("%d files, %d bytes to %s", len(built.Files), size, dest)
@@ -101,19 +112,19 @@ func (r *Runner) one(ctx context.Context, h harness.Harness, w Week, key string,
 		what += fmt.Sprintf("; redacted %d secret-shaped token(s)", built.Redactions)
 	}
 	if dryRun {
-		return fmt.Sprintf("%s: would upload %s", w, what), nil
+		return fmt.Sprintf("%s: would upload %s", w, what), false, nil
 	}
 	f, err := os.Open(out)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	defer f.Close()
 	err = r.Store.PutIfAbsent(ctx, key, f)
 	if errors.Is(err, store.ErrExists) {
-		return fmt.Sprintf("%s: already in %s", w, dest), nil
+		return fmt.Sprintf("%s: already in %s", w, dest), false, nil
 	}
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	return fmt.Sprintf("%s: uploaded %s", w, what), nil
+	return fmt.Sprintf("%s: uploaded %s", w, what), true, nil
 }

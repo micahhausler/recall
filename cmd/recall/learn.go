@@ -128,7 +128,10 @@ func learnFlags(name, usage string, verbs ...string) (*flag.FlagSet, *learnOpts)
 	if uses("map") {
 		fs.IntVar(&o.limit, "limit", 0, "observe: at most this many sessions, newest first")
 		fs.BoolVar(&o.archives, "archives", false, "observe: also observe other hosts' archived sessions from the store (downloads their weeks)")
-		fs.DurationVar(&o.idle, "idle", 0, "observe: skip a session whose transcript changed more recently than this")
+		if name == "observe" {
+			o.idle = mapIdle
+		}
+		fs.DurationVar(&o.idle, "idle", o.idle, "observe: skip a session whose transcript changed more recently than this; 0 turns it off")
 	}
 	if uses("reduce", "run") {
 		fs.StringVar(&o.out, "out", "", "reduce, propose: where proposals land (default ~/.local/state/recall/learn/<date>)")
@@ -244,7 +247,8 @@ func noProposeDryRun() int {
 const observeUsage = `Usage:
   recall observe [--since 30d|all] [--limit N] [--idle 6h] [--archives] [--dry-run]
         observe new or changed sessions with learn.map_model; cached in the store.
-        --idle skips a session active more recently than that.
+        --idle skips a session active more recently than that, 6h by
+        default; --idle 0 turns it off.
         --archives also observes archived weeks from the store.
         The same step as recall learn map.
 `
@@ -465,6 +469,17 @@ func syncedLedger(ctx context.Context, env *archiveEnv, st store.Store, strict b
 		return nil, err
 	}
 	return learn.SyncLedger(ctx, st, config.LedgerPath(env.home), env.settings.Host, reducer, strict, os.Stderr)
+}
+
+// observeLedger is the synced ledger, or this machine's copy when the
+// store can't answer, so observe and report still run.
+func observeLedger(ctx context.Context, env *archiveEnv, st store.Store, pending *store.Pending) (*learn.Ledger, error) {
+	ledger, err := syncedLedger(ctx, env, st, false)
+	if err == nil || pending == nil {
+		return ledger, err
+	}
+	fmt.Fprintf(os.Stderr, "recall: warning: couldn't read the rule ledger from the store (%v); using this machine's copy\n", err)
+	return learn.LoadLedger(config.LedgerPath(env.home))
 }
 
 // publishStoreLedger writes the ledger to the store as its newest version,
@@ -788,6 +803,7 @@ func learnMap(ctx context.Context, env *archiveEnv, runner model.Runner, since s
 type mapPass struct {
 	env          *archiveEnv
 	st           store.Store
+	pending      *store.Pending
 	repos        []learn.Repo
 	run          *mapRun
 	mappers      []*learn.Mapper
@@ -796,6 +812,8 @@ type mapPass struct {
 	noteHarness  map[string]string
 	cutoffTime   time.Time
 	fromArchives bool
+	// syncing leaves out the note on what waits; sync uploads it next.
+	syncing bool
 }
 
 // planMap lists the sessions a map over since would read, calling no model.
@@ -812,14 +830,14 @@ func planMap(ctx context.Context, env *archiveEnv, runner model.Runner, since st
 	cutoff := cutoffTime.UTC().Format("2006-01-02T15:04:05Z")
 	allWindow := cutoffTime.IsZero() // --since all
 	undatedSkipped := 0
-	st, _, err := openStore(ctx, env)
+	st, pending, err := openObserveStore(ctx, env)
 	if err != nil {
 		return nil, err
 	}
 	// The store's ledger first, so the rule ids this host shows the model
 	// are the reducer's, whichever host this is. A map only shows rules, so
 	// a failure folding other hosts' reviews degrades to a warning.
-	ledger, err := syncedLedger(ctx, env, st, false)
+	ledger, err := observeLedger(ctx, env, st, pending)
 	if err != nil {
 		return nil, err
 	}
@@ -828,7 +846,7 @@ func planMap(ctx context.Context, env *archiveEnv, runner model.Runner, since st
 		return nil, err
 	}
 	scoping := &learn.Scoping{Repos: repos, Home: env.home}
-	p := &mapPass{env: env, st: st, repos: repos, run: &mapRun{}, cutoffTime: cutoffTime, fromArchives: fromArchives,
+	p := &mapPass{env: env, st: st, pending: pending, repos: repos, run: &mapRun{}, cutoffTime: cutoffTime, fromArchives: fromArchives,
 		noteHarness: map[string]string{}}
 	mapper := func(host string, h harness.Harness) *learn.Mapper {
 		m := &learn.Mapper{
@@ -1022,6 +1040,14 @@ func (p *mapPass) execute(ctx context.Context, evidenceGate func(name string) bo
 	if !p.fromArchives {
 		warnUnobservedHosts(ctx, env, st)
 	}
+	if p.pending != nil {
+		warnRemote(p.pending)
+		if n, err := p.pending.Waiting(); err != nil {
+			return fail(err)
+		} else if n > 0 && !p.syncing {
+			fmt.Printf("observe: %d objects wait; run `recall sync` to upload them\n", n)
+		}
+	}
 	if run.failed > 0 {
 		return 1
 	}
@@ -1200,7 +1226,7 @@ func warnUnobservedHosts(ctx context.Context, env *archiveEnv, st store.Store) {
 const maxFailStreak = 3
 
 func learnObservations(ctx context.Context, env *archiveEnv, harnessName string) int {
-	st, _, err := openStore(ctx, env)
+	st, pending, err := openObserveStore(ctx, env)
 	if err != nil {
 		return fail(err)
 	}
@@ -1208,6 +1234,7 @@ func learnObservations(ctx context.Context, env *archiveEnv, harnessName string)
 	if err != nil {
 		return fail(err)
 	}
+	warnRemote(pending)
 	for _, so := range window {
 		if err := printJSON(so); err != nil {
 			return fail(err)
@@ -1476,11 +1503,11 @@ func buildReport(ctx context.Context, env *archiveEnv, since string) (learn.Repo
 	if !cutoffTime.IsZero() {
 		cutoff = cutoffTime.UTC().Format("2006-01-02")
 	}
-	st, _, err := openStore(ctx, env)
+	st, pending, err := openObserveStore(ctx, env)
 	if err != nil {
 		return learn.Report{}, err
 	}
-	ledger, err := syncedLedger(ctx, env, st, false)
+	ledger, err := observeLedger(ctx, env, st, pending)
 	if err != nil {
 		return learn.Report{}, err
 	}
@@ -1498,6 +1525,7 @@ func buildReport(ctx context.Context, env *archiveEnv, since string) (learn.Repo
 		}
 		judged = append(judged, j...)
 	}
+	warnRemote(pending)
 	candidates, err := learn.LoadCandidates(config.CandidatesPath(env.home))
 	if err != nil {
 		return learn.Report{}, err
@@ -1578,6 +1606,9 @@ func learnReduce(ctx context.Context, env *archiveEnv, runner model.Runner, outD
 // candidates to read. The store is opened once here and threaded through
 // the gate, the reducer, and the ledger publish.
 func reduce(ctx context.Context, env *archiveEnv, runner model.Runner, outDir string, dryRun bool, w reduceWindow, force bool) (dir string, read bool, err error) {
+	if err := waitingGate(env); err != nil {
+		return "", false, err
+	}
 	st, _, err := openStore(ctx, env)
 	if err != nil {
 		return "", false, err
@@ -1853,6 +1884,9 @@ func learnReviews(ctx context.Context, env *archiveEnv) int {
 // reduced nothing, or whose proposals were dropped on an already-applied
 // directory, shouldn't count as a period's pass.
 func learnRun(ctx context.Context, env *archiveEnv, runner model.Runner, outDir string, w reduceWindow, force bool) (code int, done bool) {
+	if err := waitingGate(env); err != nil {
+		return fail(err), false
+	}
 	if code := learnRulesSync(ctx, env); code != 0 {
 		return code, false
 	}

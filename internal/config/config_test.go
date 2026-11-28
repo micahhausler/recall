@@ -979,6 +979,13 @@ func TestRunsStep(t *testing.T) {
 		{"recall archive build x y >> log", StepArchive, false},
 		{"# recall archive", StepArchive, false},
 		{"echo hi # recall propose", StepLearn, false},
+		{"recall sync", StepArchive, true},
+		{"recall sync", StepMap, true},
+		{"recall sync --force", StepLearn, true},
+		{"recall recur sync", StepArchive, false},
+		{"recall recur sync", StepMap, false},
+		{"recall recur sync", StepLearn, false},
+		{"recall syncer", StepMap, false},
 	} {
 		if got := RunsStep(tc.command, tc.step); got != tc.want {
 			t.Errorf("RunsStep(%q, %q) = %v, want %v", tc.command, tc.step, got, tc.want)

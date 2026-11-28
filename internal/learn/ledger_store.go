@@ -273,7 +273,7 @@ func SyncLedger(ctx context.Context, st store.Store, path, host, reducer string,
 	if err != nil {
 		return nil, err
 	}
-	empty := len(local.Rules) == 0 && len(local.Reviews) == 0 && local.LastRule == 0
+	empty := local.empty()
 	if host == reducer {
 		use := local
 		if stored != nil {
@@ -281,11 +281,7 @@ func SyncLedger(ctx context.Context, st store.Store, path, host, reducer string,
 			case empty:
 				use = stored
 				fmt.Fprintf(warn, "recall: restored the rule ledger from the store (%s)\n", key)
-			// A local file older than the store's newest version is a restore
-			// from a backup: publishing it would roll the shared ledger back,
-			// so the store version wins. Rule numbers and reviews only grow,
-			// so either one lower says the file is older.
-			case local.LastRule < stored.LastRule || len(local.Reviews) < len(stored.Reviews):
+			case local.olderThan(stored):
 				use = stored
 				fmt.Fprintf(warn, "recall: the local rule ledger (last rule %d, %d review(s)) is older than the store's newest version %s (last rule %d, %d review(s)), like a restore from a backup; adopted the store's\n",
 					local.LastRule, len(local.Reviews), key, stored.LastRule, len(stored.Reviews))
@@ -325,18 +321,7 @@ func SyncLedger(ctx context.Context, st store.Store, path, host, reducer string,
 	// change and re-propose it while still open. It rides this host's cache
 	// until the reducer folds the per-host review object the forced run
 	// wrote (PutHostReviews) into the shared ledger.
-	seen := map[string]bool{}
-	for _, rv := range stored.Reviews {
-		seen[reviewKey(rv)] = true
-	}
-	kept := 0
-	for _, rv := range local.Reviews {
-		if !seen[reviewKey(rv)] {
-			stored.Reviews = append(stored.Reviews, rv)
-			seen[reviewKey(rv)] = true
-			kept++
-		}
-	}
+	kept := stored.keepReviews(local)
 	storedData, err := ledgerBytes(stored)
 	if err != nil {
 		return nil, err
@@ -353,4 +338,73 @@ func SyncLedger(ctx context.Context, st store.Store, path, host, reducer string,
 		}
 	}
 	return stored, nil
+}
+
+func (l *Ledger) empty() bool {
+	return len(l.Rules) == 0 && len(l.Reviews) == 0 && l.LastRule == 0
+}
+
+// olderThan says l is a restore from a backup of a ledger stored has moved
+// past: rule numbers and reviews only grow, so either one lower is older.
+// Publishing it would roll the shared ledger back, so the store's wins.
+func (l *Ledger) olderThan(stored *Ledger) bool {
+	return l.LastRule < stored.LastRule || len(l.Reviews) < len(stored.Reviews)
+}
+
+// keepReviews adds the reviews on from that l lacks, and counts them.
+func (l *Ledger) keepReviews(from *Ledger) int {
+	seen := map[string]bool{}
+	for _, rv := range l.Reviews {
+		seen[reviewKey(rv)] = true
+	}
+	kept := 0
+	for _, rv := range from.Reviews {
+		if !seen[reviewKey(rv)] {
+			l.Reviews = append(l.Reviews, rv)
+			seen[reviewKey(rv)] = true
+			kept++
+		}
+	}
+	return kept
+}
+
+// PeekLedger is the ledger SyncLedger would load, read-only: it saves no
+// file, and reads host review objects without folding or pruning them.
+func PeekLedger(ctx context.Context, st store.Store, path, host, reducer string) (*Ledger, error) {
+	local, err := LoadLedger(path)
+	if err != nil {
+		return nil, err
+	}
+	stored, _, err := LoadStoreLedger(ctx, st)
+	if err != nil {
+		return nil, err
+	}
+	if host != reducer {
+		if stored == nil {
+			return local, nil
+		}
+		stored.keepReviews(local)
+		return stored, nil
+	}
+	use := local
+	if stored != nil && (local.empty() || local.olderThan(stored)) {
+		use = stored
+	}
+	keys, err := st.List(ctx, storeReviewsPrefix)
+	if err != nil {
+		return nil, err
+	}
+	for _, key := range keys {
+		if _, folded := use.Folded[key]; folded {
+			continue
+		}
+		hr, ok, err := getJSON[HostReviews](ctx, st, key)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			use.keepReviews(&Ledger{Reviews: hr.Reviews})
+		}
+	}
+	return use, nil
 }
