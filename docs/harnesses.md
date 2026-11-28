@@ -50,6 +50,8 @@ timeout = "10m"
 ## An import runs on one machine
 
 - `import.command` belongs in that machine's config drop-in, and the `format` line in config every machine reads, since the reducer reads only the harnesses its own config declares.
-- A plugin that fetches from a service runs from a recur job, whose `PATH` is `recur.env`'s, so a bare-named plugin must be on it.
-- A plugin that reads a file the owner downloads runs by hand after each download.
+- `recall sync` runs every import on the proposing machine, and skips them on every other machine, so a config shared across machines imports each source once.
+- `recall import <name>` runs one import by hand on any machine whose config names its command, and that machine's next sync archives and observes what it stored.
+- On a timer, a bare-named plugin must be on `recur.env`'s `PATH`.
+- A plugin that reads a file the owner downloads finds nothing new until the next download.
 - Two machines importing one source count each session twice, so `recall import` warns when another host has archived the same harness recently.

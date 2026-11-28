@@ -37,10 +37,10 @@ recall's config is layered TOML.
 - A rule in a repo's own context file graduates into that repo's `.claude/settings.json` when every cited session ran there, whatever `learn.settings` says.
 - `learn.check` runs in each changed worktree before commit, with the staged diff on stdin, and a nonzero exit holds that repo's change back, staged in its worktree.
 - `learn.repeat_evidence_sessions` never counts an expected nonzero exit, such as a `grep` that matched nothing or a `diff` that found differences.
-- `learn.evidence` sources are scanned at most once a day from the session-end hook, and on every `recall observe` run by hand.
+- `learn.evidence` sources are scanned at most once a day from the session-end hook, and on every `recall sync` and every `recall observe` run by hand.
 - `recur.cron_tz` is written as `CRON_TZ` at the top of the generated crontab block; launchd always uses the Mac's timezone.
 - `recur.env` expands `$HOME` and `~` at run time.
-- An import that runs from a recur job finds a bare-named plugin on `recur.env`'s `PATH`, so the plugin must be on it; an import run by hand uses your shell's `PATH`.
+- An import that `recall sync` runs on a timer finds a bare-named plugin on `recur.env`'s `PATH`, so the plugin must be on it; an import run by hand uses your shell's `PATH`.
 - `lint.ignore` lets a drop-in skip a context file that sparse checkout keeps off this machine.
 - `extensions.<name>` keys a list of files by skill name (`keep`, `recur`, `archive-chats`, `report-issue`), `learn-reduce`, or `learn-apply`; a missing file is skipped with a warning, and a later file replaces the list.
 

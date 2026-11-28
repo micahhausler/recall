@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -58,6 +59,7 @@ func (stubInventoryHarness) Inventory(ctx context.Context, dir string) (harness.
 // carries the CANDIDATES section) gets a proposal only when it has a
 // candidate to cite, the way a real reduce has nothing to say over nothing.
 type scriptedRunner struct {
+	mu    sync.Mutex
 	calls []string
 }
 
@@ -71,7 +73,9 @@ const scriptedProposal = `## Proposals
 `
 
 func (r *scriptedRunner) Run(ctx context.Context, _ model.Call, input string) (string, model.Usage, error) {
+	r.mu.Lock()
 	r.calls = append(r.calls, input)
+	r.mu.Unlock()
 	if strings.Contains(input, "# CANDIDATES") {
 		if strings.Contains(input, "Candidate[") {
 			return scriptedProposal, model.Usage{}, nil

@@ -35,7 +35,8 @@ func (r RecurSettings) Covers(step string) bool {
 }
 
 // RunsStep reports whether command runs step under its new or old spelling,
-// matched on whole words in each shell command it chains.
+// matched on whole words in each shell command it chains; `recall sync`
+// runs every step.
 func RunsStep(command, step string) bool {
 	for _, line := range strings.Split(command, "\n") {
 		for _, part := range strings.FieldsFunc(stripComment(line), func(r rune) bool { return strings.ContainsRune(";&|()", r) }) {
@@ -84,6 +85,9 @@ func wordsRunStep(words []string, step string) bool {
 			continue
 		}
 		w1, w2 := word(i+1), word(i+2)
+		if w1 == "sync" {
+			return true // runs every step
+		}
 		switch step {
 		case StepArchive:
 			if (w1 == "archive-chats" && (w2 == "run" || w2 == "")) || (w1 == "archive" && w2 == "") {

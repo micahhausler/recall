@@ -14,7 +14,9 @@ import (
 // the timer, a skill, a hook, or a script, in `recall --help --all` only.
 var commandAudience = map[string]bool{
 	"init":          true,
+	"sync":          true,
 	"report":        true,
+	"status":        true,
 	"proposals":     true,
 	"config":        true,
 	"observe":       false,
@@ -189,7 +191,8 @@ func TestNewSpellingsMatchOld(t *testing.T) {
 	for _, tc := range []struct{ new, old []string }{
 		{[]string{"observe", "--since", "all", "--limit", "3", "--idle", "6h", "--archives", "--dry-run"},
 			[]string{"learn", "map", "--since", "all", "--limit", "3", "--idle", "6h", "--archives", "--dry-run"}},
-		{[]string{"observe"}, []string{"learn", "map"}},
+		{[]string{"observe"}, []string{"learn", "map", "--idle", "6h"}},
+		{[]string{"observe", "--idle", "0"}, []string{"learn", "map"}},
 		{[]string{"propose", "--out", "/tmp/out", "--force"}, []string{"learn", "run", "--out", "/tmp/out", "--force"}},
 		{[]string{"propose", "--window", "365d"}, []string{"learn", "run", "--window", "365d"}},
 		{[]string{"proposals"}, []string{"learn", "reviews"}},
@@ -222,8 +225,12 @@ func TestNewSpellingsMatchOld(t *testing.T) {
 	}
 	lc, _ := recordExec(t)
 	capture(t, "observe")
-	if got := (*lc)[0].o; got.since != "30d" || got.idle != 0 {
-		t.Errorf("observe defaults = %+v", got)
+	if got := (*lc)[0].o; got.since != "30d" || got.idle != mapIdle {
+		t.Errorf("observe defaults = %+v, want the 6h quiet period", got)
+	}
+	capture(t, "learn", "map")
+	if got := (*lc)[1].o; got.idle != 0 {
+		t.Errorf("learn map idle = %v, want none", got.idle)
 	}
 }
 

@@ -59,13 +59,7 @@ func execSource(name string, imp *config.ImportSettings) imports.Source {
 func runImports(ctx context.Context, env *archiveEnv, names []string, f importFlags,
 	newSource func(name string, imp *config.ImportSettings) imports.Source) int {
 	if len(names) == 0 {
-		for name, h := range env.settings.Harnesses {
-			if h.Import != nil {
-				names = append(names, name)
-			}
-		}
-		sort.Strings(names)
-		if len(names) == 0 {
+		if names = importNames(env); len(names) == 0 {
 			fmt.Println("import: no enabled harness has an [harness.<name>.import] table")
 			return 0
 		}
@@ -81,6 +75,18 @@ func runImports(ctx context.Context, env *archiveEnv, names []string, f importFl
 		return 1
 	}
 	return 0
+}
+
+// importNames are the enabled harnesses with an import table, sorted.
+func importNames(env *archiveEnv) []string {
+	var names []string
+	for name, h := range env.settings.Harnesses {
+		if h.Import != nil {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 func runImport(ctx context.Context, env *archiveEnv, name string, f importFlags,

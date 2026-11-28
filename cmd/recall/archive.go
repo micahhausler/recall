@@ -263,20 +263,53 @@ func openStore(ctx context.Context, env *archiveEnv) (store.Store, func(string) 
 	return st, dest, nil
 }
 
+// openObserveStore opens the store observe and report read through: on any
+// kind but fs, analysis/ keys land in config.PendingDir first and pending
+// is set.
+func openObserveStore(ctx context.Context, env *archiveEnv) (st store.Store, pending *store.Pending, err error) {
+	st, _, err = openStore(ctx, env)
+	if err != nil || env.settings.Store.Kind == "fs" {
+		return st, nil, err
+	}
+	pending, err = store.NewPending(config.PendingDir(env.home), config.UploadedDir(env.home), st)
+	if err != nil {
+		return nil, nil, err
+	}
+	return pending, pending, nil
+}
+
+// warnRemote says when the store didn't answer and only this machine's
+// copy was read.
+func warnRemote(pending *store.Pending) {
+	if pending == nil {
+		return
+	}
+	if err := pending.RemoteErr(); err != nil {
+		fmt.Fprintf(os.Stderr, "recall: warning: the store didn't answer (%v); read and wrote only this machine's copy\n", err)
+	}
+}
+
+// waitingGate stops a propose while this machine has observations the
+// store lacks.
+func waitingGate(env *archiveEnv) error {
+	if env.settings.Store.Kind == "fs" {
+		return nil
+	}
+	n, err := store.Waiting(config.PendingDir(env.home), config.UploadedDir(env.home))
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return fmt.Errorf("%d objects wait; run `recall sync`", n)
+	}
+	return nil
+}
+
 func archiveRun(ctx context.Context, env *archiveEnv, lookback int, dryRun, offline bool) int {
 	if lookback == 0 {
 		lookback = archive.DefaultLookback
 	}
-	r := &archive.Runner{
-		Harnesses: env.harnesses,
-		Host:      env.settings.Host,
-		Clock:     env.clk,
-		Loc:       time.Local,
-		Out:       os.Stdout,
-		Err:       os.Stderr,
-		Dest:      func(key string) string { return "s3://<bucket>/" + key },
-		Build:     env.buildOptions(),
-	}
+	r := newArchiveRunner(env)
 	if !offline {
 		st, dest, err := openStore(ctx, env)
 		if err != nil {
@@ -294,6 +327,20 @@ func archiveRun(ctx context.Context, env *archiveEnv, lookback int, dryRun, offl
 		return 1
 	}
 	return 0
+}
+
+// newArchiveRunner is the archive step for this config, with no store yet.
+func newArchiveRunner(env *archiveEnv) *archive.Runner {
+	return &archive.Runner{
+		Harnesses: env.harnesses,
+		Host:      env.settings.Host,
+		Clock:     env.clk,
+		Loc:       time.Local,
+		Out:       os.Stdout,
+		Err:       os.Stderr,
+		Dest:      func(key string) string { return "s3://<bucket>/" + key },
+		Build:     env.buildOptions(),
+	}
 }
 
 func archiveBuild(env *archiveEnv, args []string) int {

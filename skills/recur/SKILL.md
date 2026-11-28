@@ -20,8 +20,8 @@ allowed-tools: Bash(recall extension recur)
 3. **Check, then sync.** `recall recur check` shows each job as installed and the changes a sync would make. Show me that, then run `recall recur sync` and `recall recur check` again; it should end with `up to date`.
 4. **Try it.** `recall recur run <name>` runs a job exactly as the scheduler would. Its output is in `~/.local/state/recall/recur/<name>.log`; launchd's own errors are in `<name>.launchd.log` next to it.
 
-**Imports.** An import that fetches from a service (`[harness.<name>.import]`, see `docs/import.md`) runs from a job on the one machine whose drop-in names its plugin, daily or at least weekly: `recall config set recur.jobs.import-<name>.schedule '0 6 * * *'` and `...command 'recall import <name>'`.
-The job's `PATH` is `recur.env`'s, so a bare-named `import.command` and everything the plugin runs must be on it, or the command names the plugin by path; `recall recur run import-<name>` proves it.
+**Imports.** An import (`[harness.<name>.import]`, see `docs/import.md`) needs no job of its own: `recall sync` runs it on the proposing machine, and `recall import <name>` runs it by hand anywhere.
+A timer's `PATH` is `recur.env`'s, so a bare-named `import.command` and everything the plugin runs must be on it, or the command names the plugin by path.
 A run that fails because the plugin's login expired stores nothing, its log says why, and the next run after a fresh login catches up.
 An import of a file I download, such as a product's data export, runs by hand after each download, not from a job.
 

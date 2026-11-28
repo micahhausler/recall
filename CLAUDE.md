@@ -17,7 +17,7 @@ Examples and tests use placeholders like `you`, `example.com`, and `laptop-a`.
   `harness.go` holds the table of what recall knows about each harness before any config: its CLI, paths, trailer, models, and whether its session-end hook can run the loop.
   `prices.json` is the only place a model price lives: per provider, its pricing page and the date checked, and per model name recall passes to the CLI, USD per million tokens or Kiro credits per call; `hack/prices` refreshes it.
   A new harness is a constant and an entry there, plus an adapter in `internal/harness/<name>` listed in `internal/harness/adapters` and a runner in `internal/model/<name>` listed in `internal/model/runners`, both under that constant.
-- `internal/store`: the archive store interface, with `fs` and `s3` backends and an in-memory fake.
+- `internal/store`: the archive store interface, with `fs` and `s3` backends, an in-memory fake, and `Pending`, which keeps observe's `analysis/` writes on disk until `Upload`.
 - `internal/recur`: recurring jobs reconciled into cron (Linux) or LaunchAgents (macOS).
 - `internal/archive`: the weekly transcript archive.
 - `internal/redact`: the token-shape redaction the archive applies when `archive-chats.redact` is on.

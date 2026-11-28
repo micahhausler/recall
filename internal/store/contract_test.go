@@ -13,18 +13,24 @@ import (
 
 // contract runs every Store through the same behavior checks.
 func contract(t *testing.T, s Store) {
+	t.Helper()
+	contractUnder(t, s, "")
+}
+
+// contractUnder runs the checks with every key under prefix.
+func contractUnder(t *testing.T, s Store, p string) {
 	ctx := context.Background()
 	t.Helper()
 
-	if err := s.PutIfAbsent(ctx, "claude/laptop-a/2026/W45.tar.zst", strings.NewReader("one")); err != nil {
+	if err := s.PutIfAbsent(ctx, p+"claude/laptop-a/2026/W45.tar.zst", strings.NewReader("one")); err != nil {
 		t.Fatalf("first put: %v", err)
 	}
-	err := s.PutIfAbsent(ctx, "claude/laptop-a/2026/W45.tar.zst", strings.NewReader("two"))
+	err := s.PutIfAbsent(ctx, p+"claude/laptop-a/2026/W45.tar.zst", strings.NewReader("two"))
 	if !errors.Is(err, ErrExists) {
 		t.Fatalf("second put: %v, want ErrExists", err)
 	}
 
-	r, err := s.Get(ctx, "claude/laptop-a/2026/W45.tar.zst")
+	r, err := s.Get(ctx, p+"claude/laptop-a/2026/W45.tar.zst")
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -34,60 +40,60 @@ func contract(t *testing.T, s Store) {
 		t.Errorf("get = %q, want the first write kept", data)
 	}
 
-	if _, err := s.Get(ctx, "claude/laptop-a/2026/W44.tar.zst"); !errors.Is(err, ErrNotExist) {
+	if _, err := s.Get(ctx, p+"claude/laptop-a/2026/W44.tar.zst"); !errors.Is(err, ErrNotExist) {
 		t.Errorf("get missing: %v, want ErrNotExist", err)
 	}
 
-	info, err := s.Head(ctx, "claude/laptop-a/2026/W45.tar.zst")
+	info, err := s.Head(ctx, p+"claude/laptop-a/2026/W45.tar.zst")
 	if err != nil || info.Size != 3 {
 		t.Errorf("head = %+v, %v; want size 3", info, err)
 	}
-	if _, err := s.Head(ctx, "nope"); !errors.Is(err, ErrNotExist) {
+	if _, err := s.Head(ctx, p+"nope"); !errors.Is(err, ErrNotExist) {
 		t.Errorf("head missing: %v, want ErrNotExist", err)
 	}
 
-	for _, key := range []string{"claude/laptop-b/2026/W45.tar.zst", "claude/laptop-a/2025/W52.tar.zst", "codex/laptop-a/2026/W45.tar.zst"} {
+	for _, key := range []string{p + "claude/laptop-b/2026/W45.tar.zst", p + "claude/laptop-a/2025/W52.tar.zst", p + "codex/laptop-a/2026/W45.tar.zst"} {
 		if err := s.PutIfAbsent(ctx, key, strings.NewReader("x")); err != nil {
 			t.Fatal(err)
 		}
 	}
-	keys, err := s.List(ctx, "claude/laptop-a/")
+	keys, err := s.List(ctx, p+"claude/laptop-a/")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	want := []string{"claude/laptop-a/2025/W52.tar.zst", "claude/laptop-a/2026/W45.tar.zst"}
+	want := []string{p + "claude/laptop-a/2025/W52.tar.zst", p + "claude/laptop-a/2026/W45.tar.zst"}
 	if len(keys) != len(want) || keys[0] != want[0] || keys[1] != want[1] {
 		t.Errorf("list = %v, want %v", keys, want)
 	}
-	all, err := s.List(ctx, "")
+	all, err := s.List(ctx, p)
 	if err != nil || len(all) != 4 {
 		t.Errorf("list all = %v, %v; want 4 keys", all, err)
 	}
-	none, err := s.List(ctx, "kiro/")
+	none, err := s.List(ctx, p+"kiro/")
 	if err != nil || len(none) != 0 {
 		t.Errorf("list none = %v, %v; want empty", none, err)
 	}
 
 	// Delete removes an object, and a missing key is no error, so the
 	// reducer's host-review prune can repeat safely.
-	if err := s.Delete(ctx, "claude/laptop-a/2025/W52.tar.zst"); err != nil {
+	if err := s.Delete(ctx, p+"claude/laptop-a/2025/W52.tar.zst"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	if _, err := s.Get(ctx, "claude/laptop-a/2025/W52.tar.zst"); !errors.Is(err, ErrNotExist) {
+	if _, err := s.Get(ctx, p+"claude/laptop-a/2025/W52.tar.zst"); !errors.Is(err, ErrNotExist) {
 		t.Errorf("get after delete: %v, want ErrNotExist", err)
 	}
-	if err := s.Delete(ctx, "claude/laptop-a/2025/W52.tar.zst"); err != nil {
+	if err := s.Delete(ctx, p+"claude/laptop-a/2025/W52.tar.zst"); err != nil {
 		t.Errorf("delete missing: %v, want nil", err)
 	}
 
 	// Put replaces: the reducer claim is the one object a handoff overwrites.
-	if err := s.Put(ctx, "learn/reducer", strings.NewReader("laptop-a\n")); err != nil {
+	if err := s.Put(ctx, p+"learn/reducer", strings.NewReader("laptop-a\n")); err != nil {
 		t.Fatalf("put: %v", err)
 	}
-	if err := s.Put(ctx, "learn/reducer", strings.NewReader("laptop-b\n")); err != nil {
+	if err := s.Put(ctx, p+"learn/reducer", strings.NewReader("laptop-b\n")); err != nil {
 		t.Fatalf("put over an existing object: %v", err)
 	}
-	r, err = s.Get(ctx, "learn/reducer")
+	r, err = s.Get(ctx, p+"learn/reducer")
 	if err != nil {
 		t.Fatalf("get after put: %v", err)
 	}
