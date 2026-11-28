@@ -5,7 +5,7 @@ allowed-tools: Bash(recall extension recur)
 ---
 
 `recall recur` makes this machine's crontab block or LaunchAgents match the `[recur.jobs.<name>]` tables in the recall config, every `config.d/*.toml` drop-in included.
-`recall recur -h` and `config.example.toml` document every key.
+`recall recur -h` and `config.reference.toml` document every key.
 
 **Setup**, run with `setup` or the first time on a machine:
 
@@ -15,7 +15,7 @@ allowed-tools: Bash(recall extension recur)
 
 **Changing jobs:**
 
-1. **Where.** Shared jobs go in a config file my dotfiles share; jobs for one machine go in a drop-in only it has. `recall recur list` shows each job and the file it comes from, and `recall config set recur.jobs.<name>.schedule '0 12 * * 1'` plus `...command 'recall archive-chats run'` writes to the tool-owned drop-in.
+1. **Where.** Shared jobs go in a config file my dotfiles share; jobs for one machine go in a drop-in only it has. `recall recur list` shows each job and the file it comes from, and `recall config set recur.jobs.<name>.schedule '0 12 * * 1'` plus `...command 'recall archive'` writes to the tool-owned drop-in.
 2. **Disable, don't delete.** `recall config set recur.jobs.<name>.enabled false` turns off a shared job on one machine. For a laptop that sleeps, pick a time it's usually awake; launchd runs a missed job on wake, cron doesn't.
 3. **Check, then sync.** `recall recur check` shows each job as installed and the changes a sync would make. Show me that, then run `recall recur sync` and `recall recur check` again; it should end with `up to date`.
 4. **Try it.** `recall recur run <name>` runs a job exactly as the scheduler would. Its output is in `~/.local/state/recall/recur/<name>.log`; launchd's own errors are in `<name>.launchd.log` next to it.

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -136,15 +138,199 @@ func TestUnknownKeyNamesFileAndLine(t *testing.T) {
 	b := base(t)
 	write(t, b, "host = \"laptop-a\"\n")
 	drop := filepath.Join(filepath.Dir(b), "config.d", "10.toml")
-	write(t, drop, "[store]\nkind = \"fs\"\nknid = \"oops\"\n")
-	_, err := Load(b)
-	if err == nil {
-		t.Fatal("want an error")
+	write(t, drop, "[store]\nkind = \"fs\"\n")
+	c, err := Load(b)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, want := range []string{"10.toml:3", `"store.knid"`} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q doesn't mention %s", err, want)
+	want, err := c.Settings("/home/you", "laptop-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Warnings()) != 0 {
+		t.Errorf("warnings = %v, want none", c.Warnings())
+	}
+
+	write(t, drop, "[store]\nkind = \"fs\"\nknid = \"oops\"\n")
+	c, err = Load(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.Settings("/home/you", "laptop-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("settings = %+v, want %+v", got, want)
+	}
+	if _, ok := c.Get("store.knid"); ok {
+		t.Error("Get still finds the ignored key")
+	}
+	if slices.Contains(c.Leaves(), "store.knid") {
+		t.Error("Leaves still lists the ignored key")
+	}
+	ws := c.Warnings()
+	if len(ws) != 1 {
+		t.Fatalf("warnings = %v, want one", ws)
+	}
+	for _, want := range []string{"10.toml:3", `"store.knid"`, "ignored"} {
+		if !strings.Contains(ws[0].String(), want) {
+			t.Errorf("warning %q doesn't mention %s", ws[0], want)
 		}
+	}
+}
+
+func TestRemovedKeyWarningNamesReplacement(t *testing.T) {
+	old := removedKeys
+	t.Cleanup(func() { removedKeys = old })
+	removedKeys = append(removedKeys, removedKey{pattern: "learn.gone", text: "set learn.instead"}, removedKey{pattern: "old-table", text: "use [new-table]"})
+	b := base(t)
+	write(t, b, "[learn]\ngone = 3\n\n[old-table.x]\ny = 1\n")
+	c, err := Load(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws := c.Warnings()
+	if len(ws) != 2 {
+		t.Fatalf("warnings = %v, want two", ws)
+	}
+	if s := ws[0].String(); !strings.Contains(s, `"learn.gone"`) || !strings.Contains(s, "set learn.instead") {
+		t.Errorf("warning %q lacks the key or its replacement", s)
+	}
+	if s := ws[1].String(); !strings.Contains(s, `"old-table.x.y"`) || !strings.Contains(s, "use [new-table]") {
+		t.Errorf("warning %q lacks the key or its replacement", s)
+	}
+	if _, ok := c.Get("old-table"); ok {
+		t.Error("an emptied table is still there")
+	}
+}
+
+func TestUnknownTableWarnsPerLeafInFileOrder(t *testing.T) {
+	b := base(t)
+	write(t, b, "[later]\nzeta = 1\nalpha = 2\nmid = 3\n")
+	write(t, filepath.Join(filepath.Dir(b), "config.d", "10.toml"), "aaa = 1\n")
+	c, err := Load(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, w := range c.Warnings() {
+		got = append(got, w.Key)
+	}
+	want := []string{"later.zeta", "later.alpha", "later.mid", "aaa"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("warning keys = %v, want %v", got, want)
+	}
+}
+
+func TestUnknownKeyUnderWildcard(t *testing.T) {
+	b := base(t)
+	write(t, b, "[harness.claude]\nsource = \"/src/claude\"\nnope = true\n\n[harness.kiro]\nalso_nope = 1\n")
+	c, err := Load(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.Settings("/home/you", "laptop-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h, ok := s.Harnesses["claude"]; !ok || h.Source != "/src/claude" {
+		t.Errorf("claude = %+v, %v; want source /src/claude", h, ok)
+	}
+	if _, ok := s.Harnesses["kiro"]; ok {
+		t.Error("a harness table holding only unknown keys turned the harness on")
+	}
+	if len(c.Warnings()) != 2 {
+		t.Errorf("warnings = %v, want two", c.Warnings())
+	}
+}
+
+func TestQuotedDottedKeysAreDropped(t *testing.T) {
+	b := base(t)
+	write(t, b, "[harness.claude]\nenabled = false\n\n[harness.kiro]\n\"a.b\" = 1\n\n[recur.jobs.\"w.x\"]\nschedule = \"0 12 * * 1\"\ncommand = \"true\"\n")
+	c, err := Load(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Warnings()) != 3 {
+		t.Errorf("warnings = %v, want three", c.Warnings())
+	}
+	if v, _ := c.Get("harness"); !reflect.DeepEqual(v, map[string]any{"claude": map[string]any{"enabled": false}}) {
+		t.Errorf("harness = %v, want only claude", v)
+	}
+	if _, ok := c.Get("recur"); ok {
+		t.Error("an ignored job table is still there")
+	}
+	s, err := c.Settings("/home/you", "laptop-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.Harnesses["kiro"]; ok {
+		t.Error("a harness table holding only an ignored key turned kiro on")
+	}
+	if len(s.Recur.Jobs) != 0 {
+		t.Errorf("jobs = %v, want none", s.Recur.Jobs)
+	}
+}
+
+func TestEmptyUnknownTableWarns(t *testing.T) {
+	for text, at := range map[string]string{
+		"[harness.kiro.future]\n":       "config.toml:1",
+		"[harness.kiro]\nfuture = {}\n": "config.toml:2",
+		"[future]\n":                    "config.toml:1",
+	} {
+		b := base(t)
+		write(t, b, text)
+		c, err := Load(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ws := c.Warnings()
+		if len(ws) != 1 || !strings.Contains(ws[0].String(), at) || !strings.Contains(ws[0].String(), "future") {
+			t.Errorf("%q: warnings = %v, want one naming %s", text, ws, at)
+		}
+		s, err := c.Settings("/home/you", "laptop-a")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := s.Harnesses["kiro"]; ok {
+			t.Errorf("%q turned kiro on", text)
+		}
+	}
+	b := base(t)
+	write(t, b, "[harness.kiro]\n")
+	c, err := Load(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.Settings("/home/you", "laptop-a")
+	if err != nil || len(c.Warnings()) != 0 {
+		t.Fatalf("settings %v, warnings %v", err, c.Warnings())
+	}
+	if _, ok := s.Harnesses["kiro"]; !ok {
+		t.Error("an empty [harness.kiro] no longer turns kiro on")
+	}
+}
+
+func TestKnownKeyWrongShapeStillFails(t *testing.T) {
+	for _, text := range []string{
+		"[store]\nkind = { a = 1 }\n",
+		"store = \"fs\"\n",
+	} {
+		b := base(t)
+		write(t, b, text)
+		if _, err := Load(b); err == nil || !strings.Contains(err.Error(), "config.toml") {
+			t.Errorf("Load(%q) = %v, want an error naming the file", text, err)
+		}
+	}
+	b := base(t)
+	write(t, b, "[learn]\nretire_days = \"four\"\n")
+	c, err := Load(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Settings("/home/you", "laptop-a"); err == nil {
+		t.Error("a wrong type on a known key loaded")
 	}
 }
 
@@ -187,14 +373,11 @@ func TestMissingConfigDirAndFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Defaults apply: claude harness, fs store, archive settings.
-	if s.Host != "laptop-a" || s.Store.Kind != "fs" || s.Archive.Lookback != 4 {
+	if s.Host != "laptop-a" || s.Store.Kind != "fs" || s.Learn.RetireDays != 90 {
 		t.Errorf("defaults wrong: %+v", s)
 	}
 	if s.Harnesses["claude"].Source != "/home/you/.claude/projects" {
 		t.Errorf("default claude harness missing: %+v", s.Harnesses)
-	}
-	if s.Recur.Prefix != "recall.recur" {
-		t.Errorf("recur.prefix = %q", s.Recur.Prefix)
 	}
 }
 
@@ -243,7 +426,7 @@ func TestSetWritesOnlyTheToolDropIn(t *testing.T) {
 
 func TestSetValueTypes(t *testing.T) {
 	b := base(t)
-	if _, err := Set(b, "archive-chats.lookback", "8"); err != nil {
+	if _, err := Set(b, "learn.retire_days", "8"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Set(b, "harness.claude.enabled", "false"); err != nil {
@@ -253,8 +436,8 @@ func TestSetValueTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v, _ := c.Get("archive-chats.lookback"); v != int64(8) {
-		t.Errorf("lookback = %v (%T), want int64 8", v, v)
+	if v, _ := c.Get("learn.retire_days"); v != int64(8) {
+		t.Errorf("retire_days = %v (%T), want int64 8", v, v)
 	}
 	if v, _ := c.Get("harness.claude.enabled"); v != false {
 		t.Errorf("enabled = %v, want false", v)
@@ -271,9 +454,35 @@ func TestSetRejectsUnknownKeys(t *testing.T) {
 	}
 }
 
+func TestSetBesideAnUnknownKey(t *testing.T) {
+	b := base(t)
+	drop := filepath.Join(filepath.Dir(b), "config.d", SetFile)
+	write(t, drop, "[store]\nknid = \"oops\"\n")
+	if _, err := Set(b, "store.kind", "fs"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(drop)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "knid") {
+		t.Errorf("set dropped the key it doesn't know:\n%s", data)
+	}
+	c, err := Load(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := c.Get("store.kind"); v != "fs" {
+		t.Errorf("store.kind = %v, want fs", v)
+	}
+	if _, err := Set(b, "store.knid2", "x"); err == nil || !strings.Contains(err.Error(), `"store.knid2"`) {
+		t.Errorf("set of an unknown key = %v, want an error naming it", err)
+	}
+}
+
 func TestTypeErrorsNameTheOrigin(t *testing.T) {
 	b := base(t)
-	write(t, b, "[archive-chats]\nlookback = \"four\"\n")
+	write(t, b, "[learn]\nretire_days = \"four\"\n")
 	c, err := Load(b)
 	if err != nil {
 		t.Fatal(err)
@@ -478,7 +687,29 @@ func TestFresh(t *testing.T) {
 	if plan, _ := Fresh(c, true, "laptop-b", nil, ""); len(plan) != 0 {
 		t.Errorf("a second init would still set %s", keys(plan))
 	}
+}
 
+// Init leaves learn.runner to its default, so the runner follows the
+// harnesses a later file turns on or off.
+func TestFreshLeavesRunnerUnset(t *testing.T) {
+	for _, toml := range []string{"", "[harness.kiro]\n", "[harness.claude]\nenabled = false\n[harness.kiro]\n"} {
+		b := filepath.Join(t.TempDir(), "config.toml")
+		if err := os.WriteFile(b, []byte(toml), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		c, err := Load(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, existing := range []bool{false, true} {
+			plan, _ := Fresh(c, existing, "laptop-a", nil, "/usr/bin:/bin")
+			for _, kv := range plan {
+				if kv.Key == "learn.runner" {
+					t.Errorf("%q: init sets learn.runner = %s", toml, kv.Value)
+				}
+			}
+		}
+	}
 }
 
 // A machine with a config file already relies on learn.review's default,
@@ -536,8 +767,8 @@ func TestInboxReviewIsRemoved(t *testing.T) {
 	}
 	// The old learn.inbox key is no longer in the schema.
 	write(t, b, "[learn]\ninbox = \"~/somewhere\"\n")
-	if _, err := Load(b); err == nil || !strings.Contains(err.Error(), "learn.inbox") {
-		t.Errorf("err = %v, want learn.inbox rejected as an unknown key", err)
+	if c, err := Load(b); err != nil || len(c.Warnings()) != 1 || c.Warnings()[0].Key != "learn.inbox" {
+		t.Errorf("Load = %v, want learn.inbox ignored with a warning", err)
 	}
 }
 
@@ -604,6 +835,10 @@ func TestFreshSkipsStepsRecurJobsRun(t *testing.T) {
 		{"learn job", job("recall learn run"), "hooks.map hooks.archive", 1},
 		{"map and archive job", job("recall archive-chats run; recall learn map --since 15d"), "hooks.learn_every", 2},
 		{"unrelated job", job("backup-home"), "hooks.map hooks.archive hooks.learn_every", 0},
+		{"propose job", job("recall propose"), "hooks.map hooks.archive", 1},
+		{"archive and observe job", job("recall archive; recall observe --since 15d"), "hooks.learn_every", 2},
+		{"archive plumbing job", job("recall archive-chats check && recall archive-chats info; recall archive build 2026-W45 out.tar.zst"),
+			"hooks.map hooks.archive hooks.learn_every", 0},
 		{"disabled learn job", "[learn]\nreview = \"pr\"\n[recur.jobs.j]\nschedule = \"0 14 * * 1\"\ncommand = \"recall learn run\"\nenabled = false\n",
 			"hooks.map hooks.archive hooks.learn_every", 0},
 	} {
@@ -650,6 +885,11 @@ func TestFreshOneReducerPerStore(t *testing.T) {
 	if !found {
 		t.Errorf("notes = %v, want one naming the claim holder, this machine, and the take hint", notes)
 	}
+	for _, note := range notes {
+		if rest := strings.ReplaceAll(note, "recall learn reducer --take", ""); strings.Contains(rest, "reduce") || !strings.Contains(note, "proposing machine") {
+			t.Errorf("note %q: want the proposing machine, and reduce only in the take hint", note)
+		}
+	}
 
 	// With no claim on the store, the reduce turns on here.
 	plan, _ = Fresh(c, true, "laptop-b", func() (string, error) { return "", nil }, "")
@@ -688,6 +928,62 @@ func TestRecurCovers(t *testing.T) {
 	if r.Covers(StepLearn) {
 		t.Error("nothing runs the reduce, but the step reads as covered")
 	}
+	r = RecurSettings{Jobs: map[string]Job{
+		"weekly": {Command: "recall archive && /usr/local/bin/recall observe --idle 6h; recall propose"},
+	}}
+	for _, step := range []string{StepArchive, StepMap, StepLearn} {
+		if !r.Covers(step) {
+			t.Errorf("the new spellings should cover %q", step)
+		}
+	}
+}
+
+// Each step matches its old and new spelling on whole words, so plumbing
+// that shares a prefix never reads as the step.
+func TestRunsStep(t *testing.T) {
+	for _, tc := range []struct {
+		command, step string
+		want          bool
+	}{
+		{"recall archive-chats run", StepArchive, true},
+		{"recall archive-chats", StepArchive, true},
+		{"recall archive-chats --lookback 4", StepArchive, true},
+		{"recall archive", StepArchive, true},
+		{"recall archive --dry-run", StepArchive, true},
+		{"recall archive-chats check", StepArchive, false},
+		{"recall archive-chats info", StepArchive, false},
+		{"recall archive-chats build 2026-W45 out.tar.zst", StepArchive, false},
+		{"recall archive build 2026-W45 out.tar.zst", StepArchive, false},
+		{"recall archive-chats setup", StepArchive, false},
+		{"recall learn map --since 15d", StepMap, true},
+		{"recall observe", StepMap, true},
+		{"recall observe-later", StepMap, false},
+		{"recall learn mapper", StepMap, false},
+		{"recall learn run", StepLearn, true},
+		{"recall propose --force", StepLearn, true},
+		{"recall learn reduce", StepLearn, false},
+		{"recall proposals", StepLearn, false},
+		{"backup-home", StepArchive, false},
+		{"recall learn run; recall archive", StepArchive, true},
+		{"cd /tmp && recall learn map", StepMap, true},
+		{"recall archive >> /var/log/recall.log 2>&1", StepArchive, true},
+		{"recall archive 2>&1 | logger", StepArchive, true},
+		{"recall archive # weekly", StepArchive, true},
+		{"recall archive-chats >> log", StepArchive, true},
+		{"recall archive-chats &>log", StepArchive, true},
+		{"recall archive < /dev/null", StepArchive, true},
+		{"recall archive-chats run>log", StepArchive, true},
+		{"recall learn map>log", StepMap, true},
+		{"recall learn run 2>log", StepLearn, true},
+		{"recall archive&", StepArchive, true},
+		{"recall archive build x y >> log", StepArchive, false},
+		{"# recall archive", StepArchive, false},
+		{"echo hi # recall propose", StepLearn, false},
+	} {
+		if got := RunsStep(tc.command, tc.step); got != tc.want {
+			t.Errorf("RunsStep(%q, %q) = %v, want %v", tc.command, tc.step, got, tc.want)
+		}
+	}
 }
 
 // The credential command is a program and its arguments, with a timeout;
@@ -720,7 +1016,6 @@ func TestReviewAssignees(t *testing.T) {
 		"[review]\nassignees = [\"you\", 7]\n": "wants an array of strings",
 		"[review]\nassignees = [\"@you\"]\n":   "isn't a login",
 		"[review]\nassignees = [\"\"]\n":       "isn't a login",
-		"[review]\nassignee = [\"you\"]\n":     "unknown key",
 	} {
 		b := base(t)
 		write(t, b, body)
@@ -765,7 +1060,6 @@ func TestReviewCredentials(t *testing.T) {
 		"[review.credentials]\ncommand = [\"x\"]\ntimeout = 30\n":       "wants a duration string",
 		"[review.credentials]\ncommand = [\"x\"]\ntimeout = \"soon\"\n": "isn't a positive duration",
 		"[review.credentials]\ncommand = [\"x\"]\ntimeout = \"-1s\"\n":  "isn't a positive duration",
-		"[review.credentials]\ncommand = [\"x\"]\nshell = \"sh\"\n":     "unknown key",
 	} {
 		b := base(t)
 		write(t, b, body)
@@ -784,17 +1078,17 @@ func TestReviewCredentials(t *testing.T) {
 // still wins, and with Claude Code on nothing moves.
 func TestPrimaryHarnessDefaults(t *testing.T) {
 	for _, tc := range []struct {
-		name, toml                    string
-		runner, ledger, skills, model string
+		name, toml            string
+		runner, skills, model string
 	}{
 		{"kiro only", "[harness.claude]\nenabled = false\n\n[harness.kiro]\n",
-			"kiro", "/home/you/.local/state/recall/ledger.json", "/home/you/.kiro/skills", "auto"},
-		{"kiro only, keys set", "[harness.claude]\nenabled = false\n\n[harness.kiro]\n\n[learn]\nrunner = \"claude\"\nledger = \"/l.json\"\nskills = \"/s\"\n",
-			"claude", "/l.json", "/s", "sonnet"},
+			"kiro", "/home/you/.kiro/skills", "auto"},
+		{"kiro only, keys set", "[harness.claude]\nenabled = false\n\n[harness.kiro]\n\n[learn]\nrunner = \"claude\"\nskills = \"/s\"\n",
+			"claude", "/s", "sonnet"},
 		{"both on", "[harness.kiro]\n",
-			"claude", "/home/you/.local/state/recall/ledger.json", "/home/you/.claude/skills", "sonnet"},
+			"claude", "/home/you/.claude/skills", "sonnet"},
 		{"neither on", "[harness.claude]\nenabled = false\n",
-			"claude", "/home/you/.local/state/recall/ledger.json", "/home/you/.claude/skills", "sonnet"},
+			"claude", "/home/you/.claude/skills", "sonnet"},
 	} {
 		b := base(t)
 		write(t, b, tc.toml)
@@ -814,9 +1108,9 @@ func TestPrimaryHarnessDefaults(t *testing.T) {
 		if l.EvidenceTrailer != wantTrailer {
 			t.Errorf("%s: evidence trailer = %q, want %q", tc.name, l.EvidenceTrailer, wantTrailer)
 		}
-		if l.Runner != tc.runner || l.Ledger != tc.ledger || l.Skills != tc.skills || l.MapModel != tc.model || l.ApplyModel != tc.model {
-			t.Errorf("%s: runner, ledger, skills, map model, apply model = %q, %q, %q, %q, %q; want %q, %q, %q, %q, %q",
-				tc.name, l.Runner, l.Ledger, l.Skills, l.MapModel, l.ApplyModel, tc.runner, tc.ledger, tc.skills, tc.model, tc.model)
+		if l.Runner != tc.runner || l.Skills != tc.skills || l.MapModel != tc.model || l.ApplyModel != tc.model {
+			t.Errorf("%s: runner, skills, map model, apply model = %q, %q, %q, %q; want %q, %q, %q, %q",
+				tc.name, l.Runner, l.Skills, l.MapModel, l.ApplyModel, tc.runner, tc.skills, tc.model, tc.model)
 		}
 	}
 }
@@ -860,6 +1154,9 @@ func TestFreshWithoutClaudeDeclaresJobs(t *testing.T) {
 	if s.Recur.Jobs["recall-map"].Schedule != "0 */6 * * *" {
 		t.Errorf("recall-map = %+v", s.Recur.Jobs["recall-map"])
 	}
+	if s.Learn.Runner != "kiro" {
+		t.Errorf("learn.runner = %q, want kiro", s.Learn.Runner)
+	}
 	if strings.Join(s.Recur.Env, ",") != "PATH=/usr/bin:/bin" {
 		t.Errorf("recur.env = %v", s.Recur.Env)
 	}
@@ -886,8 +1183,14 @@ func TestFreshWithoutClaudeDeclaresJobs(t *testing.T) {
 	if got := strings.Join(keys, " "); got != "recur.jobs.recall-map.schedule recur.jobs.recall-map.command" {
 		t.Errorf("plan = %q, want only the map job", got)
 	}
-	if all := strings.Join(notes, "\n"); !strings.Contains(all, "`recall archive-chats run`") || !strings.Contains(all, "recall learn reducer --take") {
+	if all := strings.Join(notes, "\n"); !strings.Contains(all, "`"+StepArchive+"`") || !strings.Contains(all, "recall learn reducer --take") {
 		t.Errorf("notes = %v, want the covered archive and the claimed reduce", notes)
+	}
+	for _, note := range notes {
+		if strings.Contains(note, "laptop-a") && (!strings.Contains(note, "proposing machine") ||
+			strings.Contains(strings.ReplaceAll(note, "recall learn reducer --take", ""), "reduce")) {
+			t.Errorf("note %q: want the proposing machine, and reduce only in the take hint", note)
+		}
 	}
 }
 

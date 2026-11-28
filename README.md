@@ -43,8 +43,9 @@ recall runs in four steps:
 - **Propose:** stage each proposal as its own commit in a git worktree, never a live file, and send each changed repo to you for review as a pull request or a local branch.
 
 The model calls go through your harness's own command-line tool, so they use the login and billing you already have.
+`recall report` shows what the map found with no model call: each lesson your sessions repeat, with how many sessions, when, and a short quote of your own words, then a report card of the rules already in your context files, each broken, followed, or never relevant, with counts.
 
-Read more: the [learning loop design](docs/learning.md), and [`config.example.toml`](config.example.toml) for every key.
+Read more: the [learning loop design](docs/learning.md), and [`config.reference.toml`](config.reference.toml) for every key.
 
 ## Requirements
 
@@ -84,6 +85,8 @@ claude plugin install recall@recall
 
 The skills run in Claude Code (not the Claude desktop app) and drive the `recall` binary, which reads transcripts from every enabled harness.
 `recall init` is the short path for a new machine; the `recall-setup` skill walks you through every choice, including an S3 store and scheduled jobs.
+At the end, `recall init` offers to map the last 30 days of sessions now, with the number of map calls and their cost shown first, and on the store's reducer it runs the reduce and apply right after, so the first proposals arrive during setup rather than a week later.
+`recall init --backfill yes` maps without asking, and `--backfill no` skips the offer for a scripted install.
 The plugin also installs the session-end hook, which does nothing until `[hooks]` in your config turns a step on, and the session-start hook, which does nothing until `learn.repo_notes` names your notes for repos recall doesn't change ([`docs/learning.md`](docs/learning.md)).
 
 In Kiro CLI, `recall init` installs the `keep` and `recall-setup` skills as a Kiro power when the kiro harness is on (`recall config set harness.kiro.enabled true`), from files built into the binary, and rerunning it after an upgrade updates them.
@@ -136,10 +139,11 @@ Config is TOML, layered: `~/.config/recall/config.toml`, then every `~/.config/r
 A later file wins key by key; `enabled = false` in a later file turns off a job or harness an earlier one declared.
 `$RECALL_CONFIG` overrides the base path.
 
-Every key is documented in [`config.example.toml`](config.example.toml).
+[`config.example.toml`](config.example.toml) is what `recall init` writes, and [`config.reference.toml`](config.reference.toml) documents every key you set.
 
 ```sh
 recall config show                 # the merged result, with the file and line each value came from
+recall config show --defaults      # every key with the value recall uses on this machine, marking the keys your files set
 recall config get store.kind       # one value
 recall config set store.kind s3    # writes only to config.d/90-set.local.toml, never to a file you edited
 ```

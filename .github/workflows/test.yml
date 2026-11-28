@@ -2,28 +2,41 @@
 name: test
 # Docs-only changes skip these checks; gitleaks still scans them. List paths
 # one by one rather than "**.md": the learn prompts and skills are Markdown
-# that the binary embeds and the plugin ships. Keep the two lists the same.
+# that the binary embeds and the plugin ships, and hack/gendocs's test
+# checks docs/commands.md and docs/config.md. Keep the two lists the same.
 on:
   push:
     branches: [main]
     paths-ignore:
-      - "docs/**"
+      - "docs/events.md"
+      - "docs/github-app.md"
+      - "docs/harnesses.md"
+      - "docs/img/**"
+      - "docs/import.md"
+      - "docs/learning.md"
+      - "docs/pr-credentials.md"
+      - "docs/store.md"
       - "README.md"
       - "CONTRIBUTING.md"
       - "CLAUDE.md"
       - "LICENSE"
-      - "config.example.toml"
       - "examples/**/README.md"
       - ".github/ISSUE_TEMPLATE/**"
       - ".github/pull_request_template.md"
   pull_request:
     paths-ignore:
-      - "docs/**"
+      - "docs/events.md"
+      - "docs/github-app.md"
+      - "docs/harnesses.md"
+      - "docs/img/**"
+      - "docs/import.md"
+      - "docs/learning.md"
+      - "docs/pr-credentials.md"
+      - "docs/store.md"
       - "README.md"
       - "CONTRIBUTING.md"
       - "CLAUDE.md"
       - "LICENSE"
-      - "config.example.toml"
       - "examples/**/README.md"
       - ".github/ISSUE_TEMPLATE/**"
       - ".github/pull_request_template.md"

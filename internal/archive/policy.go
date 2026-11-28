@@ -74,7 +74,7 @@ func Policy(kind, bucket string, harnesses []string) policy.Policy {
 func PrintPolicy(out io.Writer, kind, bucket, host string, harnesses []string) error {
 	what := map[string]string{
 		"setup":  "creating and configuring the bucket, once per account (recall archive-chats setup)",
-		"upload": "weekly uploads from every machine (recall archive-chats run); no read or delete",
+		"upload": "weekly uploads from every machine (recall archive); no read or delete",
 	}[kind]
 	if what == "" {
 		return fmt.Errorf("policy wants setup or upload, got %q", kind)

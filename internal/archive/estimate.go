@@ -84,6 +84,9 @@ func human(n float64) string {
 	return fmt.Sprintf("%.1f TB", n)
 }
 
+// S3PricePerGB is S3 Standard's price per GB-month.
+const S3PricePerGB = 0.023
+
 // Estimate reports local transcript size, compressed size, and projected S3
 // cost for one harness.
 type Estimate struct {

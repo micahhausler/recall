@@ -448,7 +448,7 @@ func (a *Applier) Plan(ctx context.Context, dir string) (*Plan, error) {
 	for i, prop := range props {
 		r := Route{ID: fmt.Sprintf("p-%02d", i+1), Proposal: prop, Skip: a.reviewed(prop), Models: evidence.models(prop.Candidates)}
 		if r.Skip == "" && a.unsupported(prop, evidence) {
-			r.Skip = "none of its evidence is an observation the owner typed (learn.require_owner_evidence)"
+			r.Skip = "none of its evidence is an observation the owner typed"
 		}
 		if r.Skip == "" {
 			// The reduce run's own replay record: an add whose replay showed
@@ -1741,7 +1741,7 @@ func landedRules(plan *Plan, applied []Outcome, diff, dir string) map[string]str
 // proposals behind it unless the repo is public.
 func (a *Applier) body(plan *Plan, public bool, lines []string, applied []Outcome, forced []string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Proposals from `recall learn reduce` for %s, applied by `recall learn apply` for review.\n\n", plan.Date)
+	fmt.Fprintf(&b, "Proposals from `recall propose` for %s, sent for review.\n\n", plan.Date)
 	if len(lines) == 0 {
 		b.WriteString("- the apply model reported no proposals for this repo; review the diff\n")
 	}

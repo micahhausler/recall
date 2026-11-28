@@ -15,6 +15,7 @@ Examples and tests use placeholders like `you`, `example.com`, and `laptop-a`.
 - `cmd/recall/main.go`: flag parsing and subcommand dispatch only; logic lives in `internal/`.
 - `internal/config`: the layered TOML loader and the `config get|set|show` writer.
   `harness.go` holds the table of what recall knows about each harness before any config: its CLI, paths, trailer, models, and whether its session-end hook can run the loop.
+  `prices.json` is the only place a model price lives: per provider, its pricing page and the date checked, and per model name recall passes to the CLI, USD per million tokens or Kiro credits per call; `hack/prices` refreshes it.
   A new harness is a constant and an entry there, plus an adapter in `internal/harness/<name>` listed in `internal/harness/adapters` and a runner in `internal/model/<name>` listed in `internal/model/runners`, both under that constant.
 - `internal/store`: the archive store interface, with `fs` and `s3` backends and an in-memory fake.
 - `internal/recur`: recurring jobs reconciled into cron (Linux) or LaunchAgents (macOS).
@@ -54,6 +55,10 @@ Examples and tests use placeholders like `you`, `example.com`, and `laptop-a`.
   `keys` turns a `<kind>:<path>` reference into a signer: `file`, `tpm` (only `device_linux.go` touches a real TPM; tests use a simulator), and `ssh-agent` (`agenttest.Fake` is an in-process agent); `config` is the per-machine config file.
 - `examples/import-example`: an example import plugin built on `api/imports/v1/command`, which maps a synthetic source file of flat turns and of a message tree; `cmd/recall`'s end-to-end import test builds and runs it.
   CI builds and tests it, and GoReleaser never ships it.
+- `hack/gendocs`: renders `docs/commands.md` from the built binary's help and `docs/config.md` from its template and the schema's defaults; prose lives only in its templates.
+  `go generate ./hack/gendocs` rewrites both, and its test fails when either differs from what it renders.
+- `hack/prices`: refreshes `internal/config/prices.json` from each provider's pricing page with one model call through `internal/model`, writing only an answer that passes the table's checks; its tests use a fake runner.
+  GoReleaser ships neither `hack` command.
 - `internal/extension`: the owner's extension files that skills and the reduce append at load time.
 - `internal/hook`: what the plugin's session hooks need: the hook input, the recursion guard, and the worker's lock and schedule.
 - `hooks/hooks.json`: the plugin's SessionStart and SessionEnd hooks, which run `recall hook`; session start only reads the repo note for the session's repo (`learn.repo_notes`), and never calls a model or the store.
@@ -61,20 +66,31 @@ Examples and tests use placeholders like `you`, `example.com`, and `laptop-a`.
 - `embed.go`: package `recall` at the module root, which embeds `plugin.json`, `skills/keep`, and `skills/recall-setup` as the Kiro power `recall init` installs through `kiro-cli powers install`; only `cmd/recall` imports it.
   Kiro rejects a skill whose frontmatter isn't strict YAML, so a skill the power ships quotes any value that holds `: `.
 - `skills/<name>/SKILL.md`: one skill per subcommand, named like it, ending in the "Owner additions" block that loads `recall extension <name>` (except recall-setup, which runs before the binary exists).
-- `config.example.toml`: every config key, with a comment.
+- `config.reference.toml`: the reference, every config key commented out with its default or a marked example, decisions first and "Advanced" last; `config.example.toml`: only what `recall init` writes, with the runner and its models commented out at their defaults.
+  `internal/config/examples_test.go` holds both to the schema and to `Fresh`, and lists the keys the reference leaves out, each named for the change that removes it.
 
 ## Rules
 
 - Standard library first.
-  Allowed dependencies: `pelletier/go-toml/v2`, AWS SDK for Go v2 (config, sts, s3), `klauspost/compress/zstd`, `micahhausler/aws-iam-policy` (typed IAM policy documents, for the policies recall prints and the bucket policy it sets and verifies), `golang.org/x/term` (in `api/credentials/v1/command` only, to refuse to print a token to a terminal: a file's mode can't tell a terminal from the null device, which is a character device too).
-  `internal/githubapp` alone also uses `google/go-tpm` (the TPM), `google/go-tpm-tools` (its simulator, tests only), and `golang.org/x/crypto` (the SSH agent protocol).
+  Allowed dependencies: `pelletier/go-toml/v2`, AWS SDK for Go v2 (config, sts, s3), `klauspost/compress/zstd`, `micahhausler/aws-iam-policy` (typed IAM policy documents, for the policies recall prints and the bucket policy it sets and verifies), `spf13/pflag`, and any `golang.org/x/` package.
+  `api/credentials/v1/command` uses `golang.org/x/term` to refuse to print a token to a terminal: a file's mode can't tell a terminal from the null device, which is a character device too.
+  `internal/githubapp` alone also uses `google/go-tpm` (the TPM) and `google/go-tpm-tools` (its simulator, tests only).
+  `internal/githubapp` uses `golang.org/x/crypto` for the SSH agent protocol.
   Anything else needs a written reason.
 - Every pluggable part is a Go interface with a small registry keyed by the config name, and an in-memory fake in its package.
   Don't add an interface with only one plausible implementation.
 - Skills read and write config through `recall config get|set`, never by parsing TOML.
 - No test calls a model, AWS, or GitHub, or touches the real crontab, LaunchAgents, `$HOME`, a real TPM, or a real SSH agent; tests use fakes, simulators, and temp dirs.
   The opt-in exceptions are `TestRealDevice`, which runs only with `RECALL_TPM_TEST=1`, and `TestRealAgent`, which runs only with `RECALL_AGENT_TEST` and `RECALL_AGENT_PEM` set; `TestOpenSSHAgentSignsRS256` starts its own throwaway `ssh-agent` and never talks to yours.
-- A new or changed config key goes in three places: the code, `config.example.toml`, and the README or skill that uses it.
+- A new config key needs a reason a constant or a derived value won't do; say it in the pull request.
+  Every key is in the schema and in `config.reference.toml`: a decision most owners make gets a comment of at most three lines, and everything else goes under "Advanced" with one line.
+  The README names a key only when a new owner must choose its value in the first week.
+  Mechanics belong in `docs/`, never in a config comment.
+  Removing a key means adding a row for it, with the text that replaces it, to `removedKeys` in `internal/config/schema.go`; a key the schema doesn't know warns and is ignored.
+  A config key never changes between a value and a table; a new shape takes a new key name.
+- A command meant for people goes in `recall --help`, and a command called by the timer, skills, hooks, or scripts goes in `recall --help --all`.
+  Leaving a command out of `--help` removes it from the README and top-level help, never from the binary, and a hidden command stays callable across releases.
+- User-facing text says observe, propose, proposals, and "the proposing machine"; map, reduce, and reducer are design-doc and code terms.
 - Memory management and nothing else: a feature that isn't about capturing, archiving, or learning from sessions belongs elsewhere.
   Enforcing the owner's style preferences, for example, is out of scope even when a script could.
   The rule's scope is the `recall` binary: `recall-github-app` is an optional companion, a separate binary and cask for anyone who wants a bot to open recall's pull requests.

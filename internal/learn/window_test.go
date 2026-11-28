@@ -32,8 +32,8 @@ func TestReduceWindowClustersOldObservationsWithoutMovingRetirement(t *testing.T
 	}
 
 	for name, r := range map[string]*Reducer{
-		"--window all":     {AllWindow: true},
-		"window_days: 365": {WindowDays: 365},
+		"--window all":    {AllWindow: true},
+		"WindowDays: 365": {WindowDays: 365},
 	} {
 		in := build(r)
 		if !strings.Contains(in, "module proxy") {

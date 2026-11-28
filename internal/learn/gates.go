@@ -43,7 +43,7 @@ type Gates struct {
 	// reviews.
 	Ledger *Ledger
 	// RequireOwnerEvidence holds back a new rule or skill that cites no
-	// observation the owner typed (learn.require_owner_evidence).
+	// observation the owner typed; always on outside tests.
 	// RepeatEvidenceSessions, when above 0, lets an add rest on repeat
 	// evidence alone when the repeat was counted in at least that many
 	// sessions (learn.repeat_evidence_sessions).

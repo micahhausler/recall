@@ -46,7 +46,7 @@ func Set(base, key, raw string) (string, error) {
 	setLeaf(tree, strings.Split(key, "."), parseValue(raw))
 
 	// Validate the would-be merged config before writing anything.
-	if err := validateTree(tree, target); err != nil {
+	if err := validateTree(tree, target, key); err != nil {
 		return "", err
 	}
 	out, err := toml.Marshal(tree)
@@ -93,10 +93,20 @@ func parseValue(raw string) any {
 	return raw
 }
 
-// validateTree checks a single file's tree against the schema.
-func validateTree(tree map[string]any, file string) error {
+// validateTree checks a single file's tree against the schema, and the
+// key being set must be one the schema knows.
+func validateTree(tree map[string]any, file, key string) error {
 	origins := map[string]Origin{}
 	mergeInto(map[string]any{}, tree, origins, file, nil, "")
 	c := &Config{values: tree, origin: origins}
-	return c.validate()
+	if _, err := c.validate(); err != nil {
+		return err
+	}
+	if !allowed(key) {
+		if r := replacement(key, nil); r != "" {
+			return fmt.Errorf("unknown key %q; %s", key, r)
+		}
+		return fmt.Errorf("unknown key %q", key)
+	}
+	return nil
 }

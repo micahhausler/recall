@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/micahhausler/recall/internal/archive"
 	"github.com/micahhausler/recall/internal/config"
@@ -30,18 +31,23 @@ import (
 
 const learnUsage = `Usage:
   recall learn map [--since 30d|all] [--limit N] [--idle 6h] [--archives] [--dry-run]
-        observe new or changed sessions with the map model; cached in the store.
+        observe new or changed sessions with learn.map_model; cached in the store.
         --idle skips a session active more recently than that, so one still
-        going isn't mapped now and again when it grows.
-        --archives also maps archived weeks from the store: other hosts'
+        going isn't observed now and again when it grows.
+        --archives also observes archived weeks from the store: other hosts'
         sessions, and this host's own that are no longer on disk; a session
-        still on disk is read from disk. By default each host maps its own
-        sessions and the reduce reads every host's
+        still on disk is read from disk. By default each host observes its
+        own sessions and the proposing machine reads every host's
   recall learn observations [--harness NAME]
         print the cached observations as JSONL
   recall learn candidates
-        list the lessons the window's sessions showed, as the reduce will
+        list the lessons the window's sessions showed, as propose will
         read them: alike observations grouped and counted, no model call
+  recall learn report [--since 30d|all]
+        say what recall noticed: the lessons the window's sessions repeat,
+        with session counts, dates, and your own words, then a report card
+        of your rules: broken, followed, or never relevant, with counts;
+        no model call
   recall learn rules sync
         reconcile the rule ledger with the bullets in learn.targets and in the
         context files of each learn.repos checkout
@@ -51,54 +57,107 @@ const learnUsage = `Usage:
         report rules the ledger says to reword or retire; exit 1 if any.
         Also lists, as "check", rules earned on a model no recent session
         runs, which the current model may follow unprompted
-  recall learn reduce [--out DIR] [--window all] [--dry-run] [--force]
+  recall learn reduce [--out DIR] [--window 365d|all] [--dry-run] [--force]
         fold the window's observations and the ledger into proposals for
-        review. The window is learn.window_days (default learn.retire_days);
-        --window all is a one-off that reads every observation without
+        review. The window defaults to learn.retire_days; --window reads
+        that many days back, or every observation with all, without
         changing retirement, which always uses learn.retire_days.
-        On a machine that isn't the store's reducer the reduce refuses,
-        since only the reducer assigns rule ids; --force runs it anyway,
+        On a machine that isn't the store's proposing machine it refuses,
+        since only that machine assigns rule ids; --force runs it anyway,
         saving locally and leaving the store ledger unwritten
   recall learn apply [--from DIR] [--dry-run]
-        stage a reduce run's proposals (default: the newest) as edits in fresh
+        stage a run's proposals (default: the newest) as edits in fresh
         worktrees, one per repo they touch, and send each changed repo to
         review (learn.review: a pull request or a local branch), one commit
         per proposal so a reviewer can drop one before merging
-  recall learn run [--out DIR] [--force]
-        rules sync, reduce, then apply: the scheduled form of the loop
+  recall learn run [--out DIR] [--window 365d|all] [--force]
+        rules sync, fold into proposals, then apply: the same step as
+        recall propose
   recall learn reducer [--take]
-        say which host runs the reduce on this store; --take moves the
+        say which host is this store's proposing machine; --take moves the
         claim to this host, for when that machine is retired, reimaged,
         or renamed
   recall learn reviews
         check what became of applied proposals (merged, closed, pending) and
-        list them; the reduce and apply do the same check first
+        list them; propose and apply do the same check first
 
-The map, reduce, and apply steps call a model through the harness CLI
+Observing, proposing, and applying call a model through the harness CLI
 (learn.runner, claude or kiro); --dry-run builds and prints what would be
 sent instead. Nothing is written to a live file: apply edits worktrees, and
 every change waits for your review.
 `
 
-// mapWindowDays is the default map window: `recall learn map --since`
+// mapWindowDays is the default map window: `recall observe --since`
 // covers this many days unless told otherwise, `recall init` prints it,
 // and the hook worker's first run maps back over it.
 const mapWindowDays = 30
 
+// learnOpts are the learn steps' flags.
+type learnOpts struct {
+	since    string
+	limit    int
+	archives bool
+	idle     time.Duration
+	out      string
+	window   string
+	from     string
+	dryRun   bool
+	force    bool
+	take     bool
+	harness  string
+}
+
+// learnFlags registers the flags the named learn verbs use.
+func learnFlags(name, usage string, verbs ...string) (*flag.FlagSet, *learnOpts) {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
+	o := &learnOpts{since: fmt.Sprintf("%dd", mapWindowDays)}
+	uses := func(want ...string) bool {
+		for _, v := range verbs {
+			for _, w := range want {
+				if v == w {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	if uses("map", "report") {
+		fs.StringVar(&o.since, "since", o.since, "observe: only sessions with events in this window; report: the window it reports on")
+	}
+	if uses("map") {
+		fs.IntVar(&o.limit, "limit", 0, "observe: at most this many sessions, newest first")
+		fs.BoolVar(&o.archives, "archives", false, "observe: also observe other hosts' archived sessions from the store (downloads their weeks)")
+		fs.DurationVar(&o.idle, "idle", 0, "observe: skip a session whose transcript changed more recently than this")
+	}
+	if uses("reduce", "run") {
+		fs.StringVar(&o.out, "out", "", "reduce, propose: where proposals land (default ~/.local/state/recall/learn/<date>)")
+	}
+	if uses("reduce", "run") {
+		fs.StringVar(&o.window, "window", "", "reduce, propose: days of observations to read, like 365d, or \"all\"; retirement still uses learn.retire_days")
+	}
+	if uses("apply") {
+		fs.StringVar(&o.from, "from", "", "apply: the reduce run to apply (default the newest under ~/.local/state/recall/learn)")
+	}
+	if uses("map", "reduce", "apply", "run") {
+		fs.BoolVar(&o.dryRun, "dry-run", false, "build model inputs and report; call no model")
+	}
+	if uses("reduce", "run") {
+		fs.BoolVar(&o.force, "force", false, "reduce, propose: run on a machine that isn't the store's proposing machine; the store ledger stays unwritten")
+	}
+	if uses("reducer") {
+		fs.BoolVar(&o.take, "take", false, "reducer: move the store's claim to this host")
+	}
+	if uses("observations") {
+		fs.StringVar(&o.harness, "harness", "", "observations: which harness (default the primary one: claude, or kiro with claude off)")
+	}
+	return fs, o
+}
+
+var learnVerbs = []string{"map", "observations", "candidates", "report", "rules-sync", "targets", "age", "reduce", "apply", "reviews", "reducer", "run"}
+
 func cmdLearn(args []string) int {
-	fs := flag.NewFlagSet("learn", flag.ContinueOnError)
-	since := fs.String("since", fmt.Sprintf("%dd", mapWindowDays), "map: only sessions with events in this window")
-	limit := fs.Int("limit", 0, "map: at most this many sessions, newest first")
-	fromArchives := fs.Bool("archives", false, "map: also map other hosts' archived sessions from the store (downloads their weeks)")
-	idle := fs.Duration("idle", 0, "map: skip a session whose transcript changed more recently than this")
-	outDir := fs.String("out", "", "reduce, run: where proposals land (default ~/.local/state/recall/learn/<date>)")
-	window := fs.String("window", "", "reduce: \"all\" reads every observation; retirement still uses learn.retire_days")
-	from := fs.String("from", "", "apply: the reduce run to apply (default the newest under ~/.local/state/recall/learn)")
-	dryRun := fs.Bool("dry-run", false, "build model inputs and report; call no model")
-	force := fs.Bool("force", false, "reduce, run: run on a machine that isn't the store's reducer; the store ledger stays unwritten")
-	take := fs.Bool("take", false, "reducer: move the store's reduce claim to this host")
-	harnessName := fs.String("harness", "", "observations: which harness (default the primary one: claude, or kiro with claude off)")
-	fs.Usage = func() { fmt.Fprint(os.Stderr, learnUsage) }
+	fs, o := learnFlags("learn", learnUsage, learnVerbs...)
 	cmd := ""
 	rest := args
 	if len(args) > 0 && args[0][0] != '-' {
@@ -111,6 +170,120 @@ func cmdLearn(args []string) int {
 	if err := fs.Parse(rest); err != nil {
 		return 2
 	}
+	if cmd == "run" && o.dryRun {
+		return noProposeDryRun()
+	}
+	if _, err := parseWindow(o.window); err != nil {
+		return usageErr(fs, err)
+	}
+	return learnExec(cmd, *o)
+}
+
+// learnCommand is a top-level spelling of one learn verb, with only that
+// verb's flags.
+func learnCommand(name, verb, usage string, args []string) int {
+	fs, o := learnFlags(name, usage, verb)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "recall: %s takes no argument %q\n", name, fs.Arg(0))
+		fs.Usage()
+		return 2
+	}
+	if verb == "run" && o.dryRun {
+		return noProposeDryRun()
+	}
+	if _, err := parseWindow(o.window); err != nil {
+		return usageErr(fs, err)
+	}
+	return learnExec(verb, *o)
+}
+
+func usageErr(fs *flag.FlagSet, err error) int {
+	fmt.Fprintf(os.Stderr, "recall: %v\n", err)
+	fs.Usage()
+	return 2
+}
+
+// reduceWindow is --window: days back, or every observation; zero is learn.retire_days.
+type reduceWindow struct {
+	days int
+	all  bool
+}
+
+// maxWindowDays keeps the cutoff a real date.
+const maxWindowDays = 36500
+
+var windowDaysRE = regexp.MustCompile(`^([0-9]+)d$`)
+
+func parseWindow(s string) (reduceWindow, error) {
+	if s == "" {
+		return reduceWindow{}, nil
+	}
+	if s == "all" {
+		return reduceWindow{all: true}, nil
+	}
+	if m := windowDaysRE.FindStringSubmatch(s); m != nil {
+		n, err := strconv.Atoi(m[1])
+		if err != nil || n > maxWindowDays {
+			return reduceWindow{}, fmt.Errorf("--window %q: at most %dd; --window all reads every observation", s, maxWindowDays)
+		}
+		if n > 0 {
+			return reduceWindow{days: n}, nil
+		}
+	}
+	return reduceWindow{}, fmt.Errorf("--window %q: want a day count like 365d, or all", s)
+}
+
+func noProposeDryRun() int {
+	fmt.Fprintln(os.Stderr, "recall: propose has no --dry-run; use recall learn reduce --dry-run, then recall learn apply --dry-run")
+	return 2
+}
+
+const observeUsage = `Usage:
+  recall observe [--since 30d|all] [--limit N] [--idle 6h] [--archives] [--dry-run]
+        observe new or changed sessions with learn.map_model; cached in the store.
+        --idle skips a session active more recently than that.
+        --archives also observes archived weeks from the store.
+        The same step as recall learn map.
+`
+
+const proposeUsage = `Usage:
+  recall propose [--out DIR] [--window 365d|all] [--force]
+        sync the rules, fold the window's observations into proposals, and
+        send them for review. The window defaults to learn.retire_days;
+        --window reads that many days back, or every observation with all.
+        --force runs on a machine that isn't the store's proposing machine,
+        leaving the store ledger unwritten.
+        The same step as recall learn run.
+`
+
+const proposalsUsage = `Usage:
+  recall proposals
+        check what became of sent proposals (merged, closed, pending) and
+        list them. The same step as recall learn reviews.
+`
+
+const reportUsage = `Usage:
+  recall report [--since 30d|all]
+        say what recall noticed: the lessons the window's sessions repeat,
+        then a report card of your rules; no model call.
+        The same step as recall learn report.
+`
+
+func cmdObserve(args []string) int { return learnCommand("observe", "map", observeUsage, args) }
+func cmdPropose(args []string) int { return learnCommand("propose", "run", proposeUsage, args) }
+func cmdProposals(args []string) int {
+	return learnCommand("proposals", "reviews", proposalsUsage, args)
+}
+func cmdReport(args []string) int { return learnCommand("report", "report", reportUsage, args) }
+
+// learnExec runs one learn verb; tests swap it to see what a spelling
+// reaches.
+var learnExec = execLearn
+
+func execLearn(cmd string, o learnOpts) int {
 	env, err := loadArchiveEnv()
 	if err != nil {
 		return fail(err)
@@ -123,15 +296,17 @@ func cmdLearn(args []string) int {
 
 	switch cmd {
 	case "map":
-		return learnMap(ctx, env, runner, *since, *limit, *dryRun, *fromArchives, *idle, nil)
+		return learnMap(ctx, env, runner, o.since, o.limit, o.dryRun, o.archives, o.idle, nil)
 	case "observations":
-		name := *harnessName
+		name := o.harness
 		if name == "" {
 			name = config.PrimaryHarness(env.settings.Harnesses)
 		}
 		return learnObservations(ctx, env, name)
 	case "candidates":
 		return learnCandidates(ctx, env)
+	case "report":
+		return learnReport(ctx, env, o.since, 0)
 	case "rules-sync":
 		return learnRulesSync(ctx, env)
 	case "targets":
@@ -139,28 +314,17 @@ func cmdLearn(args []string) int {
 	case "age":
 		return learnAge(env)
 	case "reduce":
-		allWindow := false
-		switch *window {
-		case "":
-		case "all":
-			allWindow = true
-		default:
-			fmt.Fprintf(os.Stderr, "recall: learn reduce --window takes only \"all\"; for a fixed wider window, set learn.window_days\n")
-			return 2
-		}
-		return learnReduce(ctx, env, runner, *outDir, *dryRun, allWindow, *force)
+		w, _ := parseWindow(o.window)
+		return learnReduce(ctx, env, runner, o.out, o.dryRun, w, o.force)
 	case "apply":
-		return learnApply(ctx, env, *from, *dryRun)
+		return learnApply(ctx, env, o.from, o.dryRun)
 	case "reviews":
 		return learnReviews(ctx, env)
 	case "reducer":
-		return learnReducer(ctx, env, *take)
+		return learnReducer(ctx, env, o.take)
 	case "run":
-		if *dryRun {
-			fmt.Fprintln(os.Stderr, "recall: learn run has no --dry-run; use learn reduce --dry-run, then learn apply --dry-run")
-			return 2
-		}
-		code, _ := learnRun(ctx, env, runner, *outDir, *force)
+		w, _ := parseWindow(o.window)
+		code, _ := learnRun(ctx, env, runner, o.out, w, o.force)
 		return code
 	default:
 		fmt.Fprint(os.Stderr, learnUsage)
@@ -300,7 +464,7 @@ func syncedLedger(ctx context.Context, env *archiveEnv, st store.Store, strict b
 	if err != nil {
 		return nil, err
 	}
-	return learn.SyncLedger(ctx, st, env.settings.Learn.Ledger, env.settings.Host, reducer, strict, os.Stderr)
+	return learn.SyncLedger(ctx, st, config.LedgerPath(env.home), env.settings.Host, reducer, strict, os.Stderr)
 }
 
 // publishStoreLedger writes the ledger to the store as its newest version,
@@ -330,13 +494,13 @@ func publishStoreLedger(ctx context.Context, env *archiveEnv, st store.Store, le
 		}
 	}
 	if claim != host {
-		note := "it recorded no review the store ledger lacks"
+		note := "it recorded no proposal the store ledger lacks"
 		if key, perr := learn.PutHostReviews(ctx, st, host, ledger, env.clk.Now()); perr != nil {
-			note = fmt.Sprintf("writing this run's reviews for the reducer failed (%v); they stay on this host's local ledger until a later run writes them", perr)
+			note = fmt.Sprintf("writing this run's proposals for the proposing machine failed (%v); they stay on this host's local ledger until a later run writes them", perr)
 		} else if key != "" {
-			note = fmt.Sprintf("reviews recorded by this run were written to %s, and the reducer folds them into the shared ledger at its next sync", key)
+			note = fmt.Sprintf("proposals recorded by this run were written to %s, and the proposing machine folds them into the shared ledger at its next sync", key)
 		}
-		fmt.Fprintf(os.Stderr, "recall: note: %s is this store's reducer and this machine is %s, so this host didn't write the store ledger; %s; "+
+		fmt.Fprintf(os.Stderr, "recall: note: %s is this store's proposing machine and this machine is %s, so this host didn't write the store ledger; %s; "+
 			"if %s is gone, `recall learn reducer --take` moves the claim here\n", claim, host, note, claim)
 		return nil
 	}
@@ -415,7 +579,7 @@ func loadLedgerAndHits(ctx context.Context, env *archiveEnv, st store.Store, str
 	}
 	if undated > 0 {
 		fmt.Fprintf(os.Stderr, "recall: warning: %d session(s) were mapped before observations carried the session's own time, "+
-			"so their evidence is dated by the day they were mapped; `recall learn map --since all` reads them again\n", undated)
+			"so their evidence is dated by the day they were observed; `recall observe --since all` reads them again\n", undated)
 	}
 	return ledger, window, nil
 }
@@ -430,14 +594,29 @@ type mapJob struct {
 	readFrom string // the archive key, for a session read from the store
 }
 
-// mapRun is one learn map pass: the counts it reports and the failure
+// mapRun is one observe pass: the counts it reports and the failure
 // streak that stops it. Workers share it under mu.
 type mapRun struct {
 	mu sync.Mutex
 	// mapped sessions were observed; judged ones were only judged against
 	// rules, their observations already cached.
 	mapped, judged, cached, skipped, failed, partial, streak int
-	cancel                                                   context.CancelFunc
+	// chars is the input a dry run's calls would send.
+	chars  int
+	cancel context.CancelFunc
+	// done of total sessions are finished; progress, when set, hears each
+	// one, outside mu.
+	done, total int
+	progress    func(done, total int)
+}
+
+// step is the progress prefix of a session's line: how many of the pass's
+// sessions are finished, this one included. Called under mu.
+func (r *mapRun) step() string {
+	if r.total == 0 {
+		return ""
+	}
+	return fmt.Sprintf("[%d/%d] ", r.done, r.total)
 }
 
 // inWindow reports whether any of a session's events fall at or after
@@ -488,7 +667,8 @@ func newJob(m *learn.Mapper, harnessName, session string, evs []events.Event) ma
 
 // dryRun reports what mapping the job would do, without a model call.
 func (r *mapRun) dryRun(ctx context.Context, j mapJob) {
-	observe, judge, err := j.m.WouldCall(ctx, j.harness, j.session, j.evs)
+	observe, judge, chars, err := j.m.WouldSend(ctx, j.harness, j.session, j.evs)
+	r.chars += chars
 	switch {
 	case err != nil:
 		fmt.Fprintf(os.Stderr, "recall: %s: %v (skipped)\n", j.label, err)
@@ -508,7 +688,17 @@ func (r *mapRun) dryRun(ctx context.Context, j mapJob) {
 func (r *mapRun) work(ctx context.Context, j mapJob) {
 	res, err := j.m.MapSession(ctx, j.harness, j.session, j.evs)
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.done++
+	done := r.done
+	r.record(ctx, j, res, err)
+	r.mu.Unlock()
+	if r.progress != nil && ctx.Err() == nil {
+		r.progress(done, r.total)
+	}
+}
+
+// record counts and reports one mapped session. Called under mu.
+func (r *mapRun) record(ctx context.Context, j mapJob, res *learn.Mapped, err error) {
 	if err != nil {
 		if ctx.Err() != nil {
 			return // stopped on purpose; not this session's failure
@@ -538,11 +728,11 @@ func (r *mapRun) work(ctx context.Context, j mapJob) {
 			note = fmt.Sprintf("; %s: read the first %d of %d prompts", p.Reason, p.Prompts, p.Of)
 			r.partial++
 		}
-		fmt.Printf("observed %s: %d observation(s), %d rule hit(s) (%s%s)\n",
-			j.label, len(res.Observations.Observations), hits, res.Usage, note)
+		fmt.Printf("%sobserved %s: %d observation(s), %d rule hit(s) (%s%s)\n",
+			r.step(), j.label, len(res.Observations.Observations), hits, res.Usage, note)
 	case res.Judged:
 		r.judged++
-		fmt.Printf("judged %s: %d rule hit(s) (%s)\n", j.label, hits, res.Usage)
+		fmt.Printf("%sjudged %s: %d rule hit(s) (%s)\n", r.step(), j.label, hits, res.Usage)
 	default:
 		r.cached++
 	}
@@ -583,35 +773,63 @@ feed:
 // once a day, while a map run by hand (nil) always scans.
 func learnMap(ctx context.Context, env *archiveEnv, runner model.Runner, since string, limit int, dryRun, fromArchives bool,
 	idle time.Duration, evidenceGate func(name string) bool) int {
-	cutoffTime, err := parseSince(since, env.clk.Now())
+	p, err := planMap(ctx, env, runner, since, limit, fromArchives, idle)
 	if err != nil {
 		return fail(err)
 	}
+	if dryRun {
+		return p.dryRun(ctx)
+	}
+	return p.execute(ctx, evidenceGate, nil)
+}
+
+// mapPass is one observe pass, planned: the sessions it would read and
+// what it reads beside them, before any model call.
+type mapPass struct {
+	env          *archiveEnv
+	st           store.Store
+	repos        []learn.Repo
+	run          *mapRun
+	mappers      []*learn.Mapper
+	jobs         []mapJob
+	notes        []harness.Memory
+	noteHarness  map[string]string
+	cutoffTime   time.Time
+	fromArchives bool
+}
+
+// planMap lists the sessions a map over since would read, calling no model.
+func planMap(ctx context.Context, env *archiveEnv, runner model.Runner, since string, limit int, fromArchives bool,
+	idle time.Duration) (*mapPass, error) {
+	cutoffTime, err := parseSince(since, env.clk.Now())
+	if err != nil {
+		return nil, err
+	}
 	l := env.settings.Learn
 	if err := model.Check(runner, model.Call{Model: l.MapModel, Effort: l.MapEffort}); err != nil {
-		return fail(fmt.Errorf("learn.map_effort: %w", err))
+		return nil, fmt.Errorf("learn.map_effort: %w", err)
 	}
 	cutoff := cutoffTime.UTC().Format("2006-01-02T15:04:05Z")
 	allWindow := cutoffTime.IsZero() // --since all
 	undatedSkipped := 0
 	st, _, err := openStore(ctx, env)
 	if err != nil {
-		return fail(err)
+		return nil, err
 	}
 	// The store's ledger first, so the rule ids this host shows the model
 	// are the reducer's, whichever host this is. A map only shows rules, so
 	// a failure folding other hosts' reviews degrades to a warning.
 	ledger, err := syncedLedger(ctx, env, st, false)
 	if err != nil {
-		return fail(err)
+		return nil, err
 	}
 	repos, err := loadRepos(ctx, env)
 	if err != nil {
-		return fail(err)
+		return nil, err
 	}
 	scoping := &learn.Scoping{Repos: repos, Home: env.home}
-	run := &mapRun{}
-	var mappers []*learn.Mapper
+	p := &mapPass{env: env, st: st, repos: repos, run: &mapRun{}, cutoffTime: cutoffTime, fromArchives: fromArchives,
+		noteHarness: map[string]string{}}
 	mapper := func(host string, h harness.Harness) *learn.Mapper {
 		m := &learn.Mapper{
 			Store: st, Runner: runner, Model: env.settings.Learn.MapModel, Effort: env.settings.Learn.MapEffort,
@@ -623,15 +841,14 @@ func learnMap(ctx context.Context, env *archiveEnv, runner model.Runner, since s
 			// an events harness's ran elsewhere.
 			m.Home, m.Locate = env.home, learn.LocateCheckout(env.home)
 		}
-		mappers = append(mappers, m)
+		p.mappers = append(p.mappers, m)
 		return m
 	}
-	var jobs []mapJob
 	for _, h := range env.harnesses {
 		m := mapper(env.settings.Host, h)
 		sessions, err := h.Sessions()
 		if err != nil {
-			return fail(err)
+			return nil, err
 		}
 		// Sessions still on disk read from disk; the archives fill in only
 		// this host's sessions that are gone (dedupe by session id).
@@ -656,63 +873,93 @@ func learnMap(ctx context.Context, env *archiveEnv, runner model.Runner, since s
 			evs, err := h.ReadSessionFile(s, env.settings.Host)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "recall: %s: %v (skipped)\n", s, err)
-				run.skipped++
+				p.run.skipped++
 				continue
 			}
 			if takeSession(evs, cutoff, allWindow, &undatedSkipped) {
 				session, _ := h.SessionID(s)
-				jobs = append(jobs, newJob(m, h.Name(), session, evs))
+				p.jobs = append(p.jobs, newJob(m, h.Name(), session, evs))
 			}
 		}
 		if fromArchives {
 			archived, err := archiveJobs(ctx, env, st, h, cutoffTime, cutoff,
 				func(host string) *learn.Mapper { return mapper(host, h) }, onDisk, &undatedSkipped)
 			if err != nil {
-				return fail(err)
+				return nil, err
 			}
-			jobs = append(jobs, archived...)
+			p.jobs = append(p.jobs, archived...)
 		}
 	}
 	if undatedSkipped > 0 {
-		fmt.Fprintf(os.Stderr, "recall: warning: %d session(s) whose events carry no timestamps were skipped, since a bounded window can't place them; `recall learn map --since all` reads them\n", undatedSkipped)
+		fmt.Fprintf(os.Stderr, "recall: warning: %d session(s) whose events carry no timestamps were skipped, since a bounded window can't place them; `recall observe --since all` reads them\n", undatedSkipped)
 	}
-	if limit > 0 && len(jobs) > limit {
-		jobs = jobs[:limit]
+	if limit > 0 && len(p.jobs) > limit {
+		p.jobs = p.jobs[:limit]
 	}
 	// Each harness's own memory notes are evidence too, and reading them
 	// calls no model.
-	var notes []harness.Memory
-	noteHarness := map[string]string{}
 	for _, h := range env.harnesses {
 		mems, err := h.Memories()
 		if err != nil {
-			return fail(err)
+			return nil, err
 		}
 		for _, m := range mems {
-			noteHarness[m.Path] = h.Name()
+			p.noteHarness[m.Path] = h.Name()
 		}
-		notes = append(notes, mems...)
+		p.notes = append(p.notes, mems...)
 	}
-	if dryRun {
-		for _, j := range jobs {
-			run.dryRun(ctx, j)
+	return p, nil
+}
+
+// calls counts the model calls the pass would make: sessions to observe,
+// and sessions already observed that only need judging against rules, and
+// the input they would send.
+func (p *mapPass) calls(ctx context.Context) (observe, judge, chars int) {
+	for _, j := range p.jobs {
+		o, jd, n, err := j.m.WouldSend(ctx, j.harness, j.session, j.evs)
+		chars += n
+		switch {
+		case err != nil:
+		case o:
+			observe++
+		case jd:
+			judge++
 		}
-		if len(notes) > 0 {
-			fmt.Printf("map --dry-run: %d native memory note(s) would be read, with no model call\n", len(notes))
-		}
-		if srcs := env.settings.Learn.Evidence; len(srcs) > 0 {
-			fmt.Printf("map --dry-run: evidence source(s) %s would be read, with no model call\n", strings.Join(srcs, ", "))
-		}
-		fmt.Printf("map --dry-run: %d session(s) would be observed and %d judged against rules they haven't seen; %d are cached or have no prompts\n",
-			run.mapped, run.judged, run.cached)
-		return 0
 	}
-	run.runAll(ctx, jobs, env.settings.Learn.MapWorkers)
+	return observe, judge, chars
+}
+
+// dryRun prints what the pass would do and what it would cost.
+func (p *mapPass) dryRun(ctx context.Context) int {
+	run := p.run
+	for _, j := range p.jobs {
+		run.dryRun(ctx, j)
+	}
+	if len(p.notes) > 0 {
+		fmt.Printf("observe --dry-run: %d native memory note(s) would be read, with no model call\n", len(p.notes))
+	}
+	if srcs := p.env.settings.Learn.Evidence; len(srcs) > 0 {
+		fmt.Printf("observe --dry-run: evidence source(s) %s would be read, with no model call\n", strings.Join(srcs, ", "))
+	}
+	fmt.Printf("observe --dry-run: %d session(s) would be observed and %d judged against rules they haven't seen; %d are cached or have no prompts\n",
+		run.mapped, run.judged, run.cached)
+	if n := run.mapped + run.judged; n > 0 {
+		fmt.Printf("observe --dry-run: %s\n", mapEstimate(p.env.settings, n, run.chars, loadedContextChars(p.env.settings.Learn.Runner, p.env.home)))
+	}
+	return 0
+}
+
+// execute runs the pass. progress, when set, is called after each session
+// with how many of the pass's sessions are done.
+func (p *mapPass) execute(ctx context.Context, evidenceGate func(name string) bool, progress func(done, total int)) int {
+	env, st, run := p.env, p.st, p.run
+	run.total, run.progress = len(p.jobs), progress
+	run.runAll(ctx, p.jobs, env.settings.Learn.MapWorkers)
 	added := 0
 	for _, h := range env.harnesses {
 		var mine []harness.Memory
-		for _, m := range notes {
-			if noteHarness[m.Path] == h.Name() {
+		for _, m := range p.notes {
+			if p.noteHarness[m.Path] == h.Name() {
 				mine = append(mine, m)
 			}
 		}
@@ -722,8 +969,8 @@ func learnMap(ctx context.Context, env *archiveEnv, runner model.Runner, since s
 		}
 		added += n
 	}
-	if len(notes) > 0 {
-		fmt.Printf("memory: %d native note(s) read, %d new or changed\n", len(notes), added)
+	if len(p.notes) > 0 {
+		fmt.Printf("memory: %d native note(s) read, %d new or changed\n", len(p.notes), added)
 	}
 	// Evidence from outside the chat: review comments and failed checks on
 	// agent-authored changes, read with no model call. A source that can't
@@ -732,13 +979,13 @@ func learnMap(ctx context.Context, env *archiveEnv, runner model.Runner, since s
 		if evidenceGate != nil && !evidenceGate(name) {
 			continue
 		}
-		src, err := evidence.Open(name, evidence.Options{Repos: evidenceRepos(repos), Trailer: env.settings.Learn.EvidenceTrailer, Credentials: env.credentials()})
+		src, err := evidence.Open(name, evidence.Options{Repos: evidenceRepos(p.repos), Trailer: env.settings.Learn.EvidenceTrailer, Credentials: env.credentials()})
 		if err != nil {
 			return fail(err)
 		}
 		// A source may answer partially: items from the repos that worked,
 		// plus an error for the ones that didn't. The items still count.
-		items, err := src.Items(ctx, cutoffTime)
+		items, err := src.Items(ctx, p.cutoffTime)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "recall: warning: evidence %s: %v\n", name, err)
 			if len(items) == 0 {
@@ -752,10 +999,10 @@ func learnMap(ctx context.Context, env *archiveEnv, runner model.Runner, since s
 		fmt.Printf("evidence %s: %d item(s) read, %d new or changed pull request(s)\n", name, len(items), n)
 	}
 	var usage model.Usage
-	for _, m := range mappers {
+	for _, m := range p.mappers {
 		usage = usage.Add(m.Usage)
 	}
-	fmt.Printf("map: %d observed, %d cached", run.mapped, run.cached)
+	fmt.Printf("observe: %d observed, %d cached", run.mapped, run.cached)
 	if run.judged > 0 {
 		fmt.Printf(", %d judged against rules they hadn't seen", run.judged)
 	}
@@ -772,13 +1019,70 @@ func learnMap(ctx context.Context, env *archiveEnv, runner model.Runner, since s
 		fmt.Printf(" (%s)", usage)
 	}
 	fmt.Println()
-	if !fromArchives {
+	if !p.fromArchives {
 		warnUnobservedHosts(ctx, env, st)
 	}
 	if run.failed > 0 {
 		return 1
 	}
 	return 0
+}
+
+// mapCallSeconds is about how long one headless map call takes.
+const mapCallSeconds = 10
+
+// mapEstimate says about what n map calls cost and how long they take at
+// learn.map_workers at once, at the prices in internal/config/prices.json.
+// chars is the input the calls send in all; contextChars is the context
+// file the runner's CLI loads into each call, beside its own system prompt.
+func mapEstimate(s *config.Settings, n, chars, contextChars int) string {
+	workers := max(s.Learn.MapWorkers, 1)
+	minutes := max((n+workers-1)/workers*mapCallSeconds/60, 1)
+	price, ok := config.Prices().Lookup(s.Learn.Runner, s.Learn.MapModel)
+	if !ok {
+		return fmt.Sprintf("%d map call(s), no price for model %s in prices.json; about %d minute(s) at %d at a time",
+			n, s.Learn.MapModel, minutes, workers)
+	}
+	asOf := ""
+	if d := config.Prices().Checked(s.Learn.Runner, s.Learn.MapModel); d != "" {
+		asOf = ", prices as of " + d
+	}
+	perCall := contextChars + config.CLIPromptTokens(s.Learn.Runner)*config.CharsPerToken
+	cost, unit := price.Cost(n, chars+n*perCall)
+	if unit != "" {
+		return fmt.Sprintf("%d map call(s), about %.1f %s (%.1f %s each on %s%s) and %d minute(s) at %d at a time",
+			n, cost, unit, price.CreditsPerCall, unit, s.Learn.MapModel, asOf, minutes, workers)
+	}
+	tokens := (chars + n*perCall) / config.CharsPerToken
+	return fmt.Sprintf("%d map call(s), about $%.2f (about %s input tokens on %s at $%g in and $%g out per million%s) and %d minute(s) at %d at a time",
+		n, cost, roundTokens(tokens), s.Learn.MapModel, price.InputUSDPerMTok, price.OutputUSDPerMTok, asOf, minutes, workers)
+}
+
+// loadedContextChars is the characters of the context file the runner's
+// CLI loads into every call (its DefaultTarget); 0 when there is none.
+func loadedContextChars(runner, home string) int {
+	path := config.DefaultTarget(runner, home)
+	if path == "" {
+		return 0
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	return utf8.RuneCount(b)
+}
+
+// roundTokens prints a token count to two significant figures, like 150k.
+func roundTokens(n int) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1e6)
+	case n >= 10_000:
+		return fmt.Sprintf("%dk", (n+500)/1000)
+	case n >= 1000:
+		return fmt.Sprintf("%.1fk", float64(n)/1e3)
+	}
+	return fmt.Sprint(n)
 }
 
 // archiveJobs reads archived sessions from the store, for weeks that overlap
@@ -886,7 +1190,7 @@ func warnUnobservedHosts(ctx context.Context, env *archiveEnv, st store.Store) {
 		sort.Strings(hosts)
 		for _, host := range hosts {
 			fmt.Fprintf(os.Stderr, "recall: warning: %s archived %s sessions in the last %d days but has no observations; "+
-				"run `recall learn map` there, or `recall learn map --archives` here\n", host, h.Name(), unobservedDays)
+				"run `recall observe` there, or `recall observe --archives` here\n", host, h.Name(), unobservedDays)
 		}
 	}
 }
@@ -929,11 +1233,11 @@ func learnRulesSync(ctx context.Context, env *archiveEnv) int {
 	if err != nil {
 		return fail(err)
 	}
-	if err := ledger.Save(env.settings.Learn.Ledger); err != nil {
+	if err := ledger.Save(config.LedgerPath(env.home)); err != nil {
 		return fail(err)
 	}
 	fmt.Printf("ledger %s: %d rule(s), %d added, %d removed, %d reworded, %d moved\n",
-		tilde(env.settings.Learn.Ledger, env.home), len(ledger.Rules), res.Added, res.Removed, res.Reworded, res.Moved)
+		tilde(config.LedgerPath(env.home), env.home), len(ledger.Rules), res.Added, res.Removed, res.Reworded, res.Moved)
 	return 0
 }
 
@@ -1050,9 +1354,8 @@ func latestRun(root string) (string, error) {
 // newReducer loads what a reduce reads: the ledger with its rule hits and
 // review verdicts, the candidate ledger, and every host's observations.
 // A nil runner is a listing that proposes nothing, so it skips the taken
-// names, which cost a harness start. allWindow reads every observation
-// (--window all) instead of the last learn.window_days.
-func newReducer(ctx context.Context, env *archiveEnv, st store.Store, runner model.Runner, allWindow bool) (*learn.Reducer, []learn.SessionObservations, error) {
+// names, which cost a harness start. w is --window.
+func newReducer(ctx context.Context, env *archiveEnv, st store.Store, runner model.Runner, w reduceWindow) (*learn.Reducer, []learn.SessionObservations, error) {
 	if l := env.settings.Learn; runner != nil {
 		if err := model.Check(runner, model.Call{Model: l.ReduceModel, Effort: l.ReduceEffort}); err != nil {
 			return nil, nil, fmt.Errorf("learn.reduce_effort: %w", err)
@@ -1070,7 +1373,7 @@ func newReducer(ctx context.Context, env *archiveEnv, st store.Store, runner mod
 		return nil, nil, err
 	}
 	refreshReviews(ctx, env, ledger)
-	candidates, err := learn.LoadCandidates(env.settings.Learn.Candidates)
+	candidates, err := learn.LoadCandidates(config.CandidatesPath(env.home))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1096,7 +1399,7 @@ func newReducer(ctx context.Context, env *archiveEnv, st store.Store, runner mod
 		Gates:  learnGates(env, repos, taken, ledger),
 		Runner: runner, Model: env.settings.Learn.ReduceModel, Effort: env.settings.Learn.ReduceEffort,
 		RetireDays: env.settings.Learn.RetireDays,
-		WindowDays: env.settings.Learn.WindowDays, AllWindow: allWindow,
+		WindowDays: w.days, AllWindow: w.all,
 		Clock: env.clk, Out: os.Stdout,
 		Candidates:        candidates,
 		OwnerInstructions: extension.Read(env.settings.Extensions["learn-reduce"], os.Stderr),
@@ -1143,12 +1446,65 @@ func learnCandidates(ctx context.Context, env *archiveEnv) int {
 	if err != nil {
 		return fail(err)
 	}
-	r, window, err := newReducer(ctx, env, st, nil, false)
+	r, window, err := newReducer(ctx, env, st, nil, reduceWindow{})
 	if err != nil {
 		return fail(err)
 	}
 	fmt.Print(r.CandidatesText(window))
 	return 0
+}
+
+// learnReport prints what recall noticed over since and the rule report
+// card, from the observations, rule hits, and ledgers it already stores; limit caps the findings shown (0 for all).
+func learnReport(ctx context.Context, env *archiveEnv, since string, limit int) int {
+	r, err := buildReport(ctx, env, since)
+	if err != nil {
+		return fail(err)
+	}
+	r.Write(os.Stdout, limit)
+	return 0
+}
+
+// buildReport reads what a report needs: every enabled harness's
+// observations and rule hits, the candidate ledger, and the rule ledger.
+func buildReport(ctx context.Context, env *archiveEnv, since string) (learn.Report, error) {
+	cutoffTime, err := parseSince(since, env.clk.Now())
+	if err != nil {
+		return learn.Report{}, err
+	}
+	cutoff := ""
+	if !cutoffTime.IsZero() {
+		cutoff = cutoffTime.UTC().Format("2006-01-02")
+	}
+	st, _, err := openStore(ctx, env)
+	if err != nil {
+		return learn.Report{}, err
+	}
+	ledger, err := syncedLedger(ctx, env, st, false)
+	if err != nil {
+		return learn.Report{}, err
+	}
+	var window []learn.SessionObservations
+	var judged []learn.SessionHits
+	for _, h := range env.harnesses {
+		w, err := learn.ListObservations(ctx, st, h.Name())
+		if err != nil {
+			return learn.Report{}, err
+		}
+		window = append(window, w...)
+		j, err := learn.ListHits(ctx, st, h.Name())
+		if err != nil {
+			return learn.Report{}, err
+		}
+		judged = append(judged, j...)
+	}
+	candidates, err := learn.LoadCandidates(config.CandidatesPath(env.home))
+	if err != nil {
+		return learn.Report{}, err
+	}
+	r := learn.BuildReport(window, judged, ledger, candidates, cutoff, env.clk.Now().Format("2006-01-02"))
+	r.Home = env.home
+	return r, nil
 }
 
 // learnReducer prints or moves the store's reduce claim. Without --take it
@@ -1199,19 +1555,19 @@ func learnReducer(ctx context.Context, env *archiveEnv, take bool) int {
 func reducerGate(ctx context.Context, env *archiveEnv, st store.Store, force bool) error {
 	claim, err := storeReducer(ctx, st)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "recall: warning: couldn't read the store's reducer claim (%v); running the reduce anyway\n", err)
+		fmt.Fprintf(os.Stderr, "recall: warning: couldn't read which machine proposes for this store (%v); proposing anyway\n", err)
 		return nil
 	}
 	if claim == "" || claim == env.settings.Host || force {
 		return nil
 	}
-	return fmt.Errorf("%s is this store's reducer and this machine is %s, so a reduce here would assign rule ids the store ledger never learns; "+
-		"run it there, run `recall learn reducer --take` here if %s is gone, or pass --force to run anyway (the store ledger stays unwritten)",
+	return fmt.Errorf("%s is this store's proposing machine and this machine is %s, so proposing here would assign rule ids the store ledger never learns; "+
+		"propose there, run `recall learn reducer --take` here if %s is gone, or pass --force to propose anyway (the store ledger stays unwritten)",
 		claim, env.settings.Host, claim)
 }
 
-func learnReduce(ctx context.Context, env *archiveEnv, runner model.Runner, outDir string, dryRun, allWindow, force bool) int {
-	if _, _, err := reduce(ctx, env, runner, outDir, dryRun, allWindow, force); err != nil {
+func learnReduce(ctx context.Context, env *archiveEnv, runner model.Runner, outDir string, dryRun bool, w reduceWindow, force bool) int {
+	if _, _, err := reduce(ctx, env, runner, outDir, dryRun, w, force); err != nil {
 		return fail(err)
 	}
 	return 0
@@ -1221,7 +1577,7 @@ func learnReduce(ctx context.Context, env *archiveEnv, runner model.Runner, outD
 // prints the input and returns "". read reports whether the reduce had any
 // candidates to read. The store is opened once here and threaded through
 // the gate, the reducer, and the ledger publish.
-func reduce(ctx context.Context, env *archiveEnv, runner model.Runner, outDir string, dryRun, allWindow, force bool) (dir string, read bool, err error) {
+func reduce(ctx context.Context, env *archiveEnv, runner model.Runner, outDir string, dryRun bool, w reduceWindow, force bool) (dir string, read bool, err error) {
 	st, _, err := openStore(ctx, env)
 	if err != nil {
 		return "", false, err
@@ -1229,7 +1585,7 @@ func reduce(ctx context.Context, env *archiveEnv, runner model.Runner, outDir st
 	if err := reducerGate(ctx, env, st, force); err != nil {
 		return "", false, err
 	}
-	r, window, err := newReducer(ctx, env, st, runner, allWindow)
+	r, window, err := newReducer(ctx, env, st, runner, w)
 	if err != nil {
 		return "", false, err
 	}
@@ -1249,13 +1605,13 @@ func reduce(ctx context.Context, env *archiveEnv, runner model.Runner, outDir st
 	}
 	// The ledger's relevance dates moved with the window's rule hits, and
 	// the candidates the proposals cited are now used.
-	if err := r.Ledger.Save(env.settings.Learn.Ledger); err != nil {
+	if err := r.Ledger.Save(config.LedgerPath(env.home)); err != nil {
 		return "", false, err
 	}
 	// The store gets the result as a new ledger version, so every other
 	// host's next map judges against these rules and ids.
 	perr := publishStoreLedger(ctx, env, st, r.Ledger)
-	if err := r.Candidates.Save(env.settings.Learn.Candidates); err != nil {
+	if err := r.Candidates.Save(config.CandidatesPath(env.home)); err != nil {
 		return "", false, err
 	}
 	fmt.Printf("proposals: %s (input beside it) (%s)\n", tilde(proposals, env.home), usage)
@@ -1299,7 +1655,7 @@ func learnGates(env *archiveEnv, repos []learn.Repo, taken []string, ledger *lea
 		Skills:        l.Skills, Bin: l.Bin, Settings: l.Settings,
 		Taken: taken, Budget: l.Budget,
 		Ledger:                 ledger,
-		RequireOwnerEvidence:   l.RequireOwnerEvidence,
+		RequireOwnerEvidence:   !env.noOwnerEvidence,
 		RepeatEvidenceSessions: l.RepeatEvidenceSessions,
 	}
 }
@@ -1420,7 +1776,7 @@ func applyRun(ctx context.Context, env *archiveEnv, dir string, dryRun bool) (co
 		// What went to review is pending until the owner decides; the next
 		// reduce and apply read it from the ledger.
 		ledger.RecordReviews(plan, res, env.settings.Learn.Review)
-		if serr := ledger.Save(env.settings.Learn.Ledger); serr != nil {
+		if serr := ledger.Save(config.LedgerPath(env.home)); serr != nil {
 			fmt.Fprintf(os.Stderr, "recall: saving the review ledger: %v\n", serr)
 		} else {
 			// The pending reviews ride the store ledger too, so they survive
@@ -1455,10 +1811,10 @@ func applyRun(ctx context.Context, env *archiveEnv, dir string, dryRun bool) (co
 func refreshReviews(ctx context.Context, env *archiveEnv, ledger *learn.Ledger) {
 	n, err := ledger.RefreshReviews(ctx, env.publisher, env.clk.Now())
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "recall: warning: checking reviews: %v\n", err)
+		fmt.Fprintf(os.Stderr, "recall: warning: checking proposals: %v\n", err)
 	}
 	if n > 0 {
-		fmt.Printf("reviews: %d decided since the last check\n", n)
+		fmt.Printf("proposals: %d decided since the last check\n", n)
 	}
 }
 
@@ -1472,11 +1828,11 @@ func learnReviews(ctx context.Context, env *archiveEnv) int {
 		return fail(err)
 	}
 	refreshReviews(ctx, env, ledger)
-	if err := ledger.Save(env.settings.Learn.Ledger); err != nil {
+	if err := ledger.Save(config.LedgerPath(env.home)); err != nil {
 		return fail(err)
 	}
 	if len(ledger.Reviews) == 0 {
-		fmt.Println("reviews: none yet; recall learn apply records what it sends for review")
+		fmt.Println("proposals: none yet; recall propose records what it sends for review")
 		return 0
 	}
 	for _, rv := range ledger.Reviews {
@@ -1496,11 +1852,11 @@ func learnReviews(ctx context.Context, env *archiveEnv) int {
 // and what it proposed applied or there was nothing to apply. A run that
 // reduced nothing, or whose proposals were dropped on an already-applied
 // directory, shouldn't count as a period's pass.
-func learnRun(ctx context.Context, env *archiveEnv, runner model.Runner, outDir string, force bool) (code int, done bool) {
+func learnRun(ctx context.Context, env *archiveEnv, runner model.Runner, outDir string, w reduceWindow, force bool) (code int, done bool) {
 	if code := learnRulesSync(ctx, env); code != 0 {
 		return code, false
 	}
-	dir, read, err := reduce(ctx, env, runner, outDir, false, false, force)
+	dir, read, err := reduce(ctx, env, runner, outDir, false, w, force)
 	if err != nil {
 		return fail(err), false
 	}

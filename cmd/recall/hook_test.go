@@ -95,7 +95,13 @@ type hookFixture struct {
 
 func newHookFixture(t *testing.T) *hookFixture {
 	t.Helper()
-	return newHookFixtureWith(t, "[learn]\nreview = \"branch\"\nrequire_owner_evidence = false\n\n[hooks]\nmap = true\nlearn_every = 7\n")
+	return newHookFixtureWith(t, "[learn]\nreview = \"branch\"\n\n[hooks]\nmap = true\nlearn_every = 7\n").noOwnerEvidence()
+}
+
+// noOwnerEvidence turns the owner-evidence check off.
+func (f *hookFixture) noOwnerEvidence() *hookFixture {
+	f.env.noOwnerEvidence = true
+	return f
 }
 
 func newHookFixtureWith(t *testing.T, toml string) *hookFixture {
@@ -188,7 +194,7 @@ func (f *hookFixture) transcript(t *testing.T, session string, when time.Time) {
 // apply records when it leaves a branch.
 func (f *hookFixture) pending(t *testing.T) int {
 	t.Helper()
-	l, err := learn.LoadLedger(f.env.settings.Learn.Ledger)
+	l, err := learn.LoadLedger(config.LedgerPath(f.env.home))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,6 +237,11 @@ func TestHookWorkerFirstRunMapsBackfill(t *testing.T) {
 	}
 	if got := f.pending(t); got != 1 {
 		t.Errorf("pending reviews after the first run = %d, want 1", got)
+	}
+	for _, p := range []string{"ledger.json", "learn/candidates.json"} {
+		if !exists(filepath.Join(f.home, ".local", "state", "recall", p)) {
+			t.Errorf("%s isn't under the home", p)
+		}
 	}
 	if !exists(f.stamp("learn")) {
 		t.Error("a reduce that read candidates didn't stamp the learn step")
@@ -282,11 +293,11 @@ func TestHookWorkerLearnWaitsForCandidates(t *testing.T) {
 
 // With learn.evidence set, the worker scans each source at most once a day,
 // like the archive step: a second session ending the same day doesn't re-run
-// the source's subprocess calls. `recall learn map` by hand always scans.
+// the source's subprocess calls. `recall observe` by hand always scans.
 func TestHookWorkerEvidenceScansOncePerDay(t *testing.T) {
 	src := &evidence.Fake{}
 	evidence.Register("fake", func(o evidence.Options) (evidence.Source, error) { return src, nil })
-	f := newHookFixtureWith(t, "[learn]\nreview = \"branch\"\nrequire_owner_evidence = false\nevidence = [\"fake\"]\n\n[hooks]\nmap = true\nlearn_every = 7\n")
+	f := newHookFixtureWith(t, "[learn]\nreview = \"branch\"\nevidence = [\"fake\"]\n\n[hooks]\nmap = true\nlearn_every = 7\n").noOwnerEvidence()
 
 	hookWork(f.env)
 	if got := len(src.Since); got != 1 {
@@ -311,10 +322,13 @@ func TestHookWorkerSkipsStepsRecurJobsRun(t *testing.T) {
 	job := func(command string) string {
 		return "[recur.jobs.weekly]\nschedule = \"0 12 * * 1\"\ncommand = \"" + command + "\"\n"
 	}
-	base := "[learn]\nreview = \"branch\"\nrequire_owner_evidence = false\n\n[hooks]\nmap = true\narchive = true\nlearn_every = 7\n\n"
+	base := "[learn]\nreview = \"branch\"\n\n[hooks]\nmap = true\narchive = true\nlearn_every = 7\n\n"
+	fixture := func(t *testing.T, toml string) *hookFixture {
+		return newHookFixtureWith(t, toml).noOwnerEvidence()
+	}
 
 	t.Run("map", func(t *testing.T) {
-		f := newHookFixtureWith(t, base+job("recall learn map --since 15d"))
+		f := fixture(t, base+job("recall learn map --since 15d"))
 		f.transcript(t, "sess", f.clk.T.AddDate(0, 0, -2))
 		hookWork(f.env)
 		for _, in := range f.runner.calls {
@@ -326,15 +340,35 @@ func TestHookWorkerSkipsStepsRecurJobsRun(t *testing.T) {
 			t.Error("the skipped map step still recorded a start")
 		}
 	})
+	t.Run("observe", func(t *testing.T) {
+		f := fixture(t, base+job("recall observe --idle 6h"))
+		f.transcript(t, "sess", f.clk.T.AddDate(0, 0, -2))
+		hookWork(f.env)
+		for _, in := range f.runner.calls {
+			if !strings.Contains(in, "# CANDIDATES") {
+				t.Error("the map ran from the hook beside the recur job that observes")
+			}
+		}
+		if exists(filepath.Join(hookStateDir(f.env), "hook-map.since")) {
+			t.Error("the skipped map step still recorded a start")
+		}
+	})
 	t.Run("archive", func(t *testing.T) {
-		f := newHookFixtureWith(t, base+job("recall archive-chats run"))
+		f := fixture(t, base+job("recall archive-chats run"))
 		hookWork(f.env)
 		if exists(f.stamp("archive")) {
 			t.Error("the archive ran from the hook beside the recur job that runs it")
 		}
 	})
+	t.Run("archive with a redirect", func(t *testing.T) {
+		f := fixture(t, base+job("recall archive >> /tmp/recall.log 2>&1"))
+		hookWork(f.env)
+		if exists(f.stamp("archive")) {
+			t.Error("the archive ran from the hook beside the recur job that runs it with a redirect")
+		}
+	})
 	t.Run("learn", func(t *testing.T) {
-		f := newHookFixtureWith(t, base+job("recall learn run"))
+		f := fixture(t, base+job("recall learn run"))
 		f.transcript(t, "sess", f.clk.T.AddDate(0, 0, -2))
 		hookWork(f.env)
 		for _, in := range f.runner.calls {
@@ -350,10 +384,17 @@ func TestHookWorkerSkipsStepsRecurJobsRun(t *testing.T) {
 		}
 	})
 	t.Run("unrelated job blocks nothing", func(t *testing.T) {
-		f := newHookFixtureWith(t, base+job("backup-home"))
+		f := fixture(t, base+job("backup-home"))
 		hookWork(f.env)
 		if !exists(f.stamp("archive")) {
 			t.Error("an unrelated recur job kept the archive hook step from running")
+		}
+	})
+	t.Run("archive plumbing blocks nothing", func(t *testing.T) {
+		f := fixture(t, base+job("recall archive-chats check; recall archive build 2026-W45 out.tar.zst"))
+		hookWork(f.env)
+		if !exists(f.stamp("archive")) {
+			t.Error("a job that only checks or builds kept the archive hook step from running")
 		}
 	})
 }

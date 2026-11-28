@@ -23,8 +23,6 @@ const recurUsage = `Usage:
 func cmdRecur(args []string) int {
 	fs := flag.NewFlagSet("recur", flag.ContinueOnError)
 	quiet := fs.Bool("quiet", false, "print only changes, never fail")
-	scheduler := fs.String("scheduler", recur.ForOS(), "cron or launchd (testing)")
-	self := fs.String("self", "", "binary path written into schedules (testing)")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, recurUsage) }
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -35,7 +33,7 @@ func cmdRecur(args []string) int {
 		cmd = rest[0]
 	}
 
-	rc, err := recurMain(cmd, rest, *quiet, *scheduler, *self)
+	rc, err := recurMain(cmd, rest, *quiet, recur.ForOS(), "")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "recall: %v\n", err)
 		if *quiet {
@@ -51,7 +49,7 @@ func recurMain(cmd string, rest []string, quiet bool, scheduler, self string) (i
 	if err != nil {
 		return 2, err
 	}
-	c, err := config.Load(config.DefaultBase(home))
+	c, err := loadConfig(config.DefaultBase(home))
 	if err != nil {
 		return 2, err
 	}

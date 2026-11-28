@@ -9,7 +9,7 @@ For a policy to paste, skip to the reducer example at the end.
 
 | Prefix | Written by | Read by | Holds |
 | --- | --- | --- | --- |
-| `<harness>/<host>/<year>/W<week>.tar.zst` | every archiving host, never overwritten | `learn map --archives`, and the unobserved-host warning | one week of one host's transcripts |
+| `<harness>/<host>/<year>/W<week>.tar.zst` | every archiving host, never overwritten | `recall observe --archives`, and the unobserved-host warning | one week of one host's transcripts |
 | `analysis/<harness>/…` | every learning host, never overwritten | every learning host | map observations, pull-request evidence, and native memory notes |
 | `analysis/hits/<harness>/…` | every learning host, never overwritten | every learning host | rule hits |
 | `analysis/reviews/<host>/…` | a host that isn't the reducer, after a forced reduce and apply | the reducer, which deletes each one once it's folded into the ledger | reviews the store ledger doesn't carry yet |
@@ -32,7 +32,7 @@ Uploads that never overwrite use `If-None-Match: *`; IAM can't require that head
 | Role | Needs |
 | --- | --- |
 | Archive | `s3:ListBucket` on `<harness>/*`; `s3:PutObject` on `<harness>/*` |
-| Learn | the archive grants, plus `s3:ListBucket` on `analysis/*` and `ledger/*`; `s3:GetObject` and `s3:PutObject` on `analysis/*`; `s3:GetObject` on `ledger/*` and `learn/reducer`; `s3:GetObject` on `<harness>/*` for `learn map --archives` |
+| Learn | the archive grants, plus `s3:ListBucket` on `analysis/*` and `ledger/*`; `s3:GetObject` and `s3:PutObject` on `analysis/*`; `s3:GetObject` on `ledger/*` and `learn/reducer`; `s3:GetObject` on `<harness>/*` for `recall observe --archives` |
 | Reduce | the learn grants, plus `s3:PutObject` on `learn/reducer` and `ledger/*`; `s3:DeleteObject` on `analysis/reviews/*` |
 
 A store has one reducer, so only one machine needs the reduce grants.
@@ -107,6 +107,6 @@ For one that only archives, use `recall archive-chats policy upload`.
 ## Redaction changes what an archive holds
 
 With `archive-chats.redact = true`, secret-shaped tokens in a week's transcripts are replaced with `[REDACTED:<kind>]` as the tarball is built; the files on disk are never changed.
-`recall archive-chats run` and `recall archive-chats build` print one line per week that says how many tokens were replaced.
+`recall archive` and `recall archive build` print one line per week that says how many tokens were replaced.
 Redaction is pattern-based and lossy: it catches token shapes (cloud and API keys, private key blocks, bearer headers, JWTs), not every secret, and the archive no longer holds what it replaced.
 That is why it is off by default.

@@ -48,6 +48,12 @@ func keyParts(it unstable.Iterator) []string {
 func recordLines(lines map[string]int, key []string, kv *unstable.Node, p *unstable.Parser) {
 	if value := kv.Value(); value.Kind == unstable.InlineTable {
 		it := value.Children()
+		if probe := value.Children(); !probe.Next() {
+			if keyIt := kv.Key(); keyIt.Next() {
+				lines["["+strings.Join(key, ".")+"]"] = p.Shape(keyIt.Node().Raw).Start.Line
+			}
+			return
+		}
 		for it.Next() {
 			sub := it.Node()
 			if sub.Kind != unstable.KeyValue {

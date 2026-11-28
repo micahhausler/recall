@@ -31,6 +31,9 @@ type Runner struct {
 	Err   io.Writer
 }
 
+// DefaultLookback is how many complete weeks an archive run checks.
+const DefaultLookback = 4
+
 // Run checks the last lookback complete weeks and uploads any that are
 // missing for this host. Returns the number of failed uploads.
 func (r *Runner) Run(ctx context.Context, lookback int, dryRun, offline bool) (int, error) {

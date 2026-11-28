@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -28,32 +29,27 @@ func init() {
 	})
 }
 
-// NamespacedBucket is the account regional namespace name used when
-// store.s3.bucket is empty: only this account can create names with the -an
-// suffix, and the account ID is derived at run time, never written to config.
-func NamespacedBucket(prefix, account, region string) string {
-	return fmt.Sprintf("%s-%s-%s-an", prefix, account, region)
+// BucketPrefix starts the bucket name in the account regional namespace.
+const BucketPrefix = "chat-archive"
+
+// NamespacedBucket is the account regional namespace name for an account and
+// region: only that account can create names with the -an suffix.
+func NamespacedBucket(account, region string) string {
+	return fmt.Sprintf("%s-%s-%s-an", BucketPrefix, account, region)
 }
 
-// STSAPI is the one STS call bucket resolution needs; sts.Client satisfies it.
+var namespacedName = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]*-[0-9]{12}-(.+)-an$`)
+
+// InNamespace reports a bucket name in the account regional namespace form
+// for region: <prefix>-<account id>-<region>-an.
+func InNamespace(bucket, region string) bool {
+	m := namespacedName.FindStringSubmatch(bucket)
+	return m != nil && region != "" && m[1] == region
+}
+
+// STSAPI is the one STS call the archive check makes; sts.Client satisfies it.
 type STSAPI interface {
 	GetCallerIdentity(ctx context.Context, in *sts.GetCallerIdentityInput, opts ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error)
-}
-
-// ResolveBucket returns the configured bucket, or the namespaced name derived
-// from the caller's account.
-func ResolveBucket(ctx context.Context, c config.S3Settings, api STSAPI) (string, error) {
-	if c.Bucket != "" {
-		return c.Bucket, nil
-	}
-	if c.Region == "" {
-		return "", errors.New("store.s3.region is unset and store.s3.bucket is empty; set one with recall config set")
-	}
-	out, err := api.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
-	if err != nil {
-		return "", fmt.Errorf("sts get-caller-identity: %w", err)
-	}
-	return NamespacedBucket(c.BucketPrefix, aws.ToString(out.Account), c.Region), nil
 }
 
 // AWSConfig loads the default credential chain with the configured profile
@@ -72,16 +68,16 @@ func AWSConfig(ctx context.Context, c config.S3Settings) (aws.Config, error) {
 	return awsconfig.LoadDefaultConfig(ctx, opts...)
 }
 
-// S3Client builds the S3 client and resolves the bucket name.
+// S3Client builds the S3 client for the configured bucket; it sends nothing.
 func S3Client(ctx context.Context, c config.S3Settings) (*s3.Client, string, error) {
+	if c.Bucket == "" {
+		return nil, "", errors.New("store.s3.bucket is unset; name the bucket with recall config set store.s3.bucket <name>")
+	}
 	cfg, err := AWSConfig(ctx, c)
 	if err != nil {
 		return nil, "", err
 	}
-	bucket, err := ResolveBucket(ctx, c, sts.NewFromConfig(cfg))
-	if err != nil {
-		return nil, "", err
-	}
+	bucket := c.Bucket
 	return s3.NewFromConfig(cfg, func(o *s3.Options) {
 		if c.Endpoint != "" {
 			o.BaseEndpoint = aws.String(c.Endpoint)
@@ -102,7 +98,7 @@ func NewS3(client *s3.Client, bucket string) *S3Store {
 	return &S3Store{client: client, bucket: bucket}
 }
 
-// Bucket returns the resolved bucket name.
+// Bucket returns the bucket name.
 func (s *S3Store) Bucket() string { return s.bucket }
 
 func (s *S3Store) PutIfAbsent(ctx context.Context, key string, r io.Reader) error {

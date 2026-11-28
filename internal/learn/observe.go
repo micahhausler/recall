@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/micahhausler/recall/internal/clock"
 	"github.com/micahhausler/recall/internal/events"
@@ -416,11 +417,21 @@ func (m *Mapper) MapSession(ctx context.Context, harnessName, session string, ev
 // WouldCall reports whether mapping the session would call the model, and
 // for what: to observe it, to judge it against rules, or both.
 func (m *Mapper) WouldCall(ctx context.Context, harnessName, session string, evs []events.Event) (observe, judge bool, err error) {
+	observe, judge, _, err = m.WouldSend(ctx, harnessName, session, evs)
+	return observe, judge, err
+}
+
+// WouldSend is WouldCall plus the characters of the input the call would send.
+func (m *Mapper) WouldSend(ctx context.Context, harnessName, session string, evs []events.Event) (observe, judge bool, chars int, err error) {
 	p, err := m.plan(ctx, harnessName, session, evs)
 	if err != nil || !p.owner {
-		return false, false, err
+		return false, false, 0, err
 	}
-	return p.cached == nil, len(p.judge) > 0, nil
+	observe, judge = p.cached == nil, len(p.judge) > 0
+	if observe || judge {
+		chars = utf8.RuneCountInString(m.input(p.rendered, observe, p.judge))
+	}
+	return observe, judge, chars, nil
 }
 
 // input builds one model input: the session, with the prompt for

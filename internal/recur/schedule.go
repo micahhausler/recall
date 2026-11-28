@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/micahhausler/recall/internal/config"
 )
 
 // field is one cron schedule position and its launchd key.
@@ -27,9 +29,8 @@ var fields = []field{
 	{"dow", "Weekday", 0, 7},
 }
 
-// NameRE limits job names and the prefix: launchd needs a label and logs
-// need a file name.
-var NameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+// NameRE limits job names.
+var NameRE = config.SchedulerName
 
 var partRE = regexp.MustCompile(`^(\*|\d+(?:-\d+)?)(?:/(\d+))?$`)
 

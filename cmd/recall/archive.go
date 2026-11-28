@@ -45,6 +45,8 @@ type archiveEnv struct {
 	// creds is the credential source, once credentials opened it; tests
 	// set it to stand in for the command.
 	creds credential.Source
+	// noOwnerEvidence turns the owner-evidence check off; tests only.
+	noOwnerEvidence bool
 }
 
 // newRunner is the model runner the map and reduce steps call through,
@@ -71,7 +73,7 @@ func loadArchiveEnv() (*archiveEnv, error) {
 	if err != nil {
 		return nil, err
 	}
-	c, err := config.Load(config.DefaultBase(home))
+	c, err := loadConfig(config.DefaultBase(home))
 	if err != nil {
 		return nil, err
 	}
@@ -107,13 +109,50 @@ func (e *archiveEnv) s3Only() (cfg config.S3Settings, err error) {
 	return e.settings.Store.S3, nil
 }
 
+const archiveCmdUsage = `Usage:
+  recall archive [--lookback N] [--dry-run [--offline]]
+        upload each finished week missing from the store; the same step as
+        recall archive-chats run
+  recall archive build WEEK OUT
+        write one week's tarball locally (WEEK like 2026-W45)
+`
+
+// archiveOpts are the archive verbs' flags.
+type archiveOpts struct {
+	lookback int
+	dryRun   bool
+	offline  bool
+	setup    bool
+}
+
+// archiveFlags registers the flags the named archive verbs use.
+func archiveFlags(name, usage string, verbs ...string) (*flag.FlagSet, *archiveOpts) {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
+	o := &archiveOpts{}
+	uses := func(want string) bool {
+		for _, v := range verbs {
+			if v == want {
+				return true
+			}
+		}
+		return false
+	}
+	if uses("run") {
+		fs.IntVar(&o.lookback, "lookback", 0, fmt.Sprintf("complete weeks to check (default %d)", archive.DefaultLookback))
+		fs.BoolVar(&o.offline, "offline", false, "with --dry-run: no store calls")
+	}
+	if uses("run") || uses("setup") {
+		fs.BoolVar(&o.dryRun, "dry-run", false, "build tarballs and report, upload nothing")
+	}
+	if uses("check") {
+		fs.BoolVar(&o.setup, "setup", false, "with check: check what setup needs")
+	}
+	return fs, o
+}
+
 func cmdArchiveChats(args []string) int {
-	fs := flag.NewFlagSet("archive-chats", flag.ContinueOnError)
-	lookback := fs.Int("lookback", 0, "complete weeks to check (default: config)")
-	dryRun := fs.Bool("dry-run", false, "build tarballs and report, upload nothing")
-	offline := fs.Bool("offline", false, "with --dry-run: no store calls")
-	setupFlag := fs.Bool("setup", false, "with check: check what setup needs")
-	fs.Usage = func() { fmt.Fprint(os.Stderr, archiveUsage) }
+	fs, o := archiveFlags("archive-chats", archiveUsage, "run", "build", "info", "estimate", "check", "policy", "setup")
 	// Flags may follow the subcommand word; parse around it.
 	cmd := "run"
 	rest := args
@@ -124,12 +163,60 @@ func cmdArchiveChats(args []string) int {
 	if err := fs.Parse(rest); err != nil {
 		return 2
 	}
-	if *offline && !*dryRun {
-		fmt.Fprintln(os.Stderr, "recall: --offline needs --dry-run")
+	if !lookbackOK(fs, o) {
 		return 2
 	}
-	if *lookback < 0 {
+	return archiveExec(cmd, *o, fs.Args())
+}
+
+// cmdArchive is recall archive: the upload, or build with a word.
+func cmdArchive(args []string) int {
+	verb, rest := "run", args
+	if len(args) > 0 && args[0] != "" && args[0][0] != '-' {
+		if args[0] != "build" {
+			fmt.Fprintf(os.Stderr, "recall: archive takes no %q\n", args[0])
+			fmt.Fprint(os.Stderr, archiveCmdUsage)
+			return 2
+		}
+		verb, rest = "build", args[1:]
+	}
+	fs, o := archiveFlags("archive", archiveCmdUsage, verb)
+	if err := fs.Parse(rest); err != nil {
+		return 2
+	}
+	if !lookbackOK(fs, o) {
+		return 2
+	}
+	if verb == "run" && fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "recall: archive takes no argument %q\n", fs.Arg(0))
+		fmt.Fprint(os.Stderr, archiveCmdUsage)
+		return 2
+	}
+	if verb == "build" && fs.NArg() != 2 {
+		fmt.Fprint(os.Stderr, archiveCmdUsage)
+		return 2
+	}
+	return archiveExec(verb, *o, fs.Args())
+}
+
+// lookbackOK rejects a --lookback below 1; unset, the run checks DefaultLookback.
+func lookbackOK(fs *flag.FlagSet, o *archiveOpts) bool {
+	set := false
+	fs.Visit(func(f *flag.Flag) { set = set || f.Name == "lookback" })
+	if set && o.lookback < 1 {
 		fmt.Fprintln(os.Stderr, "recall: --lookback must be at least 1")
+		return false
+	}
+	return true
+}
+
+// archiveExec runs one archive verb; tests swap it to see what a spelling
+// reaches.
+var archiveExec = execArchive
+
+func execArchive(cmd string, o archiveOpts, args []string) int {
+	if o.offline && !o.dryRun {
+		fmt.Fprintln(os.Stderr, "recall: --offline needs --dry-run")
 		return 2
 	}
 
@@ -140,23 +227,23 @@ func cmdArchiveChats(args []string) int {
 	ctx := context.Background()
 	switch cmd {
 	case "run":
-		return archiveRun(ctx, env, *lookback, *dryRun, *offline)
+		return archiveRun(ctx, env, o.lookback, o.dryRun, o.offline)
 	case "build":
-		return archiveBuild(env, fs.Args())
+		return archiveBuild(env, args)
 	case "info":
 		return archiveInfo(ctx, env)
 	case "estimate":
 		return archiveEstimate(env)
 	case "check":
-		return archiveCheck(ctx, env, *setupFlag)
+		return archiveCheck(ctx, env, o.setup)
 	case "policy":
-		if len(fs.Args()) != 1 {
+		if len(args) != 1 {
 			fmt.Fprint(os.Stderr, archiveUsage)
 			return 2
 		}
-		return archivePolicy(ctx, env, fs.Args()[0])
+		return archivePolicy(env, args[0])
 	case "setup":
-		return archiveSetup(ctx, env, *dryRun)
+		return archiveSetup(ctx, env, o.dryRun)
 	default:
 		fmt.Fprint(os.Stderr, archiveUsage)
 		return 2
@@ -178,7 +265,7 @@ func openStore(ctx context.Context, env *archiveEnv) (store.Store, func(string) 
 
 func archiveRun(ctx context.Context, env *archiveEnv, lookback int, dryRun, offline bool) int {
 	if lookback == 0 {
-		lookback = env.settings.Archive.Lookback
+		lookback = archive.DefaultLookback
 	}
 	r := &archive.Runner{
 		Harnesses: env.harnesses,
@@ -271,7 +358,7 @@ func archiveInfo(ctx context.Context, env *archiveEnv) int {
 	}
 	object := "<harness>/" + s.Host + "/<year>/W<week>.tar.zst"
 	fmt.Printf("objects:   %s\n", dest(object))
-	fmt.Printf("lookback:  %d weeks; retention %d days\n", s.Archive.Lookback, s.Store.S3.RetentionDays)
+	fmt.Printf("lookback:  %d weeks; retention %d days\n", archive.DefaultLookback, s.Store.S3.RetentionDays)
 	for _, h := range env.harnesses {
 		keys, err := st.List(ctx, h.Name()+"/"+s.Host+"/")
 		if err != nil {
@@ -301,8 +388,8 @@ func archiveEstimate(env *archiveEnv) int {
 		e := &archive.Estimate{
 			Harness:        h,
 			Retention:      env.settings.Store.S3.RetentionDays,
-			Lookback:       env.settings.Archive.Lookback,
-			PricePerGB:     env.settings.Archive.PricePerGB,
+			Lookback:       archive.DefaultLookback,
+			PricePerGB:     archive.S3PricePerGB,
 			ClaudeSettings: filepath.Join(env.home, ".claude", "settings.json"),
 			Now:            env.clk.Now(),
 			Out:            os.Stdout,
@@ -328,37 +415,31 @@ func archiveCheck(ctx context.Context, env *archiveEnv, setup bool) int {
 		return fail(err)
 	}
 	stsClient := sts.NewFromConfig(cfg)
-	bucket, err := store.ResolveBucket(ctx, s3cfg, stsClient)
-	if err != nil {
-		return fail(err)
-	}
 	c := &archive.Check{
-		Region: s3cfg.Region, Profile: s3cfg.Profile, Bucket: bucket,
+		Region: s3cfg.Region, Profile: s3cfg.Profile, Bucket: s3cfg.Bucket,
 		Host: env.settings.Host, Harnesses: env.harnessNames(), Setup: setup,
 		STS: stsClient, S3: s3.NewFromConfig(cfg), Out: os.Stdout,
 	}
 	return c.Run(ctx)
 }
 
-func archivePolicy(ctx context.Context, env *archiveEnv, kind string) int {
+func archivePolicy(env *archiveEnv, kind string) int {
 	s3cfg, err := env.s3Only()
 	if err != nil {
 		return fail(err)
 	}
-	bucket := s3cfg.Bucket
-	if bucket == "" {
-		// Best effort: a placeholder when credentials aren't available.
-		bucket = store.NamespacedBucket(s3cfg.BucketPrefix, "<account-id>", orBlank(s3cfg.Region, "<region>"))
-		if cfg, err := store.AWSConfig(ctx, s3cfg); err == nil {
-			if b, err := store.ResolveBucket(ctx, s3cfg, sts.NewFromConfig(cfg)); err == nil {
-				bucket = b
-			}
-		}
-	}
-	if err := archive.PrintPolicy(os.Stdout, kind, bucket, env.settings.Host, env.harnessNames()); err != nil {
+	if err := archive.PrintPolicy(os.Stdout, kind, s3cfg.Bucket, env.settings.Host, env.harnessNames()); err != nil {
 		return fail(err)
 	}
 	return 0
+}
+
+// newArchiveSetup is the bucket setup for s3cfg.
+func newArchiveSetup(s3cfg config.S3Settings, api archive.S3Admin, bucket string) *archive.Setup {
+	return &archive.Setup{
+		API: api, Bucket: bucket, Region: s3cfg.Region,
+		Namespaced: store.InNamespace(bucket, s3cfg.Region), Retention: s3cfg.RetentionDays, Out: os.Stdout,
+	}
 }
 
 func archiveSetup(ctx context.Context, env *archiveEnv, dryRun bool) int {
@@ -373,11 +454,7 @@ func archiveSetup(ctx context.Context, env *archiveEnv, dryRun bool) int {
 	if err != nil {
 		return fail(err)
 	}
-	s := &archive.Setup{
-		API: client, Bucket: bucket, Region: s3cfg.Region,
-		Namespaced: s3cfg.Bucket == "", Retention: s3cfg.RetentionDays, Out: os.Stdout,
-	}
-	rc, err := s.Run(ctx, dryRun)
+	rc, err := newArchiveSetup(s3cfg, client, bucket).Run(ctx, dryRun)
 	if err != nil {
 		return fail(err)
 	}

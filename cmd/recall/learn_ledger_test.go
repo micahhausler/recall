@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/micahhausler/recall/internal/config"
 	"github.com/micahhausler/recall/internal/learn"
 )
 
@@ -25,7 +26,7 @@ func TestReducePublishesLedgerAndARunRestoresIt(t *testing.T) {
 		t.Fatalf("rules sync = %d", code)
 	}
 	// A review is the part of the ledger nothing else can rebuild.
-	ledger, err := learn.LoadLedger(f.env.settings.Learn.Ledger)
+	ledger, err := learn.LoadLedger(config.LedgerPath(f.env.home))
 	if err != nil || len(ledger.Rules) != 1 {
 		t.Fatalf("ledger after sync: %+v, %v", ledger, err)
 	}
@@ -34,11 +35,11 @@ func TestReducePublishesLedgerAndARunRestoresIt(t *testing.T) {
 		Kind: "add", Title: "Run go vet before done", Rule: ledger.Rules[0].Text,
 		Proposed: "2026-11-12", Via: "branch", Verdict: "merged", Decided: "2026-11-13",
 	})
-	if err := ledger.Save(f.env.settings.Learn.Ledger); err != nil {
+	if err := ledger.Save(config.LedgerPath(f.env.home)); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, _, err := reduce(ctx, f.env, f.runner, "", false, false, false); err != nil {
+	if _, _, err := reduce(ctx, f.env, f.runner, "", false, reduceWindow{}, false); err != nil {
 		t.Fatal(err)
 	}
 	st, _, err := openStore(ctx, f.env)
@@ -53,13 +54,13 @@ func TestReducePublishesLedgerAndARunRestoresIt(t *testing.T) {
 		t.Fatalf("store ledger versions = %v, %v; the reduce should publish one", keys, err)
 	}
 
-	if err := os.Remove(f.env.settings.Learn.Ledger); err != nil {
+	if err := os.Remove(config.LedgerPath(f.env.home)); err != nil {
 		t.Fatal(err)
 	}
 	if code := learnRulesSync(ctx, f.env); code != 0 {
 		t.Fatalf("rules sync after losing the file = %d", code)
 	}
-	restored, err := learn.LoadLedger(f.env.settings.Learn.Ledger)
+	restored, err := learn.LoadLedger(config.LedgerPath(f.env.home))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,11 +98,11 @@ func TestReducerRestoredFromBackupAdoptsStoreLedger(t *testing.T) {
 	}
 	stale := &learn.Ledger{Rules: []learn.Rule{{ID: "r-0001", Target: target,
 		Text: "An old rule from the backup.", Created: "2026-09-01"}}, LastRule: 1}
-	if err := stale.Save(f.env.settings.Learn.Ledger); err != nil {
+	if err := stale.Save(config.LedgerPath(f.env.home)); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, _, err := reduce(ctx, f.env, f.runner, "", false, false, false); err != nil {
+	if _, _, err := reduce(ctx, f.env, f.runner, "", false, reduceWindow{}, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -109,7 +110,7 @@ func TestReducerRestoredFromBackupAdoptsStoreLedger(t *testing.T) {
 	if err != nil || newest != key || got.LastRule != 3 {
 		t.Fatalf("store newest = %q LastRule=%d err=%v; want the pre-backup version %q untouched", newest, got.LastRule, err, key)
 	}
-	local, err := learn.LoadLedger(f.env.settings.Learn.Ledger)
+	local, err := learn.LoadLedger(config.LedgerPath(f.env.home))
 	if err != nil || local.LastRule != 3 || len(local.Rules) != 1 || local.Rules[0].ID != "r-0003" {
 		t.Fatalf("local ledger = %+v, %v; want the store's version adopted", local, err)
 	}

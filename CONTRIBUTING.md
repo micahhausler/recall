@@ -40,7 +40,10 @@ claude plugin validate .
 - `docs/`: design docs, including the [events schema](docs/events.md), the [learning loop design](docs/learning.md), and the [store's keys and IAM permissions](docs/store.md).
 - `api/credentials/v1/`: the public credential contract and its Go helper, the only packages another project can import.
 - `hooks/hooks.json`: the plugin's session-end hook.
-- `config.example.toml`: every config key, with a comment.
+- `config.reference.toml`: the reference, every config key commented out with its default or a marked example, decisions first and "Advanced" last; `config.example.toml`: only what `recall init` writes, with the runner and its models commented out at their defaults.
+  `internal/config/examples_test.go` holds both to the schema and to `Fresh`, and lists the keys the reference leaves out, each named for the change that removes it.
+- `hack/gendocs`: renders `docs/commands.md` and `docs/config.md`; edit its templates, then run `go generate ./hack/gendocs`.
+- `hack/prices`: refreshes the model price table, `internal/config/prices.json`, which a person may also edit by hand.
 
 ## Conventions
 
@@ -48,13 +51,13 @@ claude plugin validate .
 - **Standard library first.** A new dependency needs a written reason in the pull request.
 - **Pluggable parts are interfaces with a fake.** A harness, store, evidence source, or publisher is a Go interface with a small registry keyed by its config name and an in-memory fake in the same package. Don't add an interface that has only one plausible implementation.
 - **Tests stay off the network and out of your home directory.** They never call a model or AWS, and never touch the real crontab, LaunchAgents, or `$HOME`. Use the fakes and temp dirs.
-- **A config key changes in three places.** Update the code, `config.example.toml`, and the README or skill that uses the key.
+- **A new config key needs a reason.** Say in the pull request why a constant or a derived value won't do. Every key is in the schema and in `config.reference.toml`: a decision most owners make gets a comment of at most three lines, and everything else goes under "Advanced" with one line. The README names a key only when a new owner must choose its value in the first week. Mechanics belong in `docs/`, never in a config comment.
 - **Skills go through the binary.** A skill reads and writes config with `recall config get` and `recall config set`, never by parsing TOML.
 - **The credential contract only grows.** `api/credentials/v1` is public: add optional fields, and never rename or remove a field or an exported name.
 
 ## Common changes
 
-- **A harness adapter.** Implement `harness.Harness` in a new `internal/harness/<name>` package and list its `New` in `internal/harness/adapters` under its config name. It must emit the schema in `docs/events.md`, and nothing downstream should need to change. Test it against fixture transcripts in a temp dir, then add it to the README's harness table and `config.example.toml`.
+- **A harness adapter.** Implement `harness.Harness` in a new `internal/harness/<name>` package and list its `New` in `internal/harness/adapters` under its config name. It must emit the schema in `docs/events.md`, and nothing downstream should need to change. Test it against fixture transcripts in a temp dir, then add it to the README's harness table and `config.reference.toml`.
 - **An evidence source.** Add it in `internal/evidence` beside `github`. It is turned on by name in `learn.evidence`.
 - **A store backend.** Implement the interface in `internal/store` beside `fs` and `s3`, and say in `docs/store.md` what permissions it needs.
 - **A skill.** Each skill is `skills/<name>/SKILL.md` and ends with an "Owner additions" block. Run `claude plugin validate .` after changing one.

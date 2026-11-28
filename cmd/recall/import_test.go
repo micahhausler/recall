@@ -138,3 +138,27 @@ func TestImportWarnsWhenAnotherHostImports(t *testing.T) {
 		t.Errorf("stderr = %q", errOut)
 	}
 }
+
+// The other-importer warning looks back the archive's 4 weeks.
+func TestImportWarnsWithinFourWeeks(t *testing.T) {
+	f := newHookFixtureWith(t, importConfig)
+	ctx := context.Background()
+	st, _, err := openStore(ctx, f.env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for host, weeksAgo := range map[string]int{"laptop-d": 4, "laptop-e": 6} {
+		y, w := f.clk.Now().AddDate(0, 0, -7*weeksAgo).ISOWeek()
+		if err := st.PutIfAbsent(ctx, archive.Key("chat", host, archive.Week{Year: y, Num: w}), bytes.NewReader(nil)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	src := &fakeSources{fakes: map[string]*imports.Fake{"chat": {}}}
+	var errOut string
+	captureStdout(t, func() {
+		errOut = captureStderr(t, func() { runImports(ctx, f.env, nil, importFlags{}, src.open) })
+	})
+	if !strings.Contains(errOut, "laptop-d archived") || strings.Contains(errOut, "laptop-e") {
+		t.Errorf("stderr = %q", errOut)
+	}
+}

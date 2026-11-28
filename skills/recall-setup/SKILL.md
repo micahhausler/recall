@@ -10,7 +10,8 @@ For a machine that needs none of the choices below, offer the short path first: 
 Init turns the weekly reduce (`hooks.learn_every`) on only for the first machine on a store; a later machine sees the first's claim under `learn/reducer` in the store and leaves the reduce to it.
 Pin the `host` key in a drop-in under `~/.config/recall/config.d/` on every machine before its first init: the reducer claim and every archive key use that name, and macOS hostnames drift after a name clash on the network.
 If the claim names a machine that is retired, reimaged, or renamed, `recall learn reducer --take` moves it to this one.
-If I take the short path, skip to step 5's first map, and review with `recall learn reviews` and a merge of each `learn-<date>` branch.
+Init ends by offering to map the last 30 days now, and on the store's reducer to reduce and apply right after; a shell with no input declines it, so run `recall observe --since 30d --dry-run` first, say the estimate it prints, and on my yes run `recall init --backfill yes`, or `recall init --backfill no` to skip it.
+If I take the short path, skip to step 5's first map unless the backfill ran, and review with `recall proposals` and a merge of each `learn-<date>` branch.
 
 1. **Binary.** Run `recall --version`.
    If it's missing, offer, in order: Homebrew when `brew` is installed (`brew tap micahhausler/recall https://github.com/micahhausler/recall`, then `brew install --cask recall`); `go install github.com/micahhausler/recall/cmd/recall@latest` when Go is installed; otherwise the release archive for this OS and architecture from the repo's releases page, checked against `checksums.txt`, with `recall` put on PATH.
@@ -24,22 +25,22 @@ If I take the short path, skip to step 5's first map, and review with `recall le
    - `fs` (recommended without AWS): `recall config set store.kind fs` and `store.path` to a folder; a cloud-synced folder gives offsite backup with no AWS, at the cost of transcripts living in that account.
    - `s3`: follow the archive-chats skill's setup, which handles the bucket, policies, and verification.
 4. **Archive.** Back up everything on disk now, since Claude Code deletes old transcripts (`cleanupPeriodDays`, 30 days by default).
-   Count the weeks back to the oldest transcript under `~/.claude/projects` (and `~/.kiro/sessions` with Kiro on), then `recall archive-chats run --lookback <weeks> --dry-run` to preview and, once I say yes, the same without `--dry-run`.
+   Count the weeks back to the oldest transcript under `~/.claude/projects` (and `~/.kiro/sessions` with Kiro on), then `recall archive --lookback <weeks> --dry-run` to preview and, once I say yes, the same without `--dry-run`.
    Then keep the weekly upload running: the session hook does it once `recall init` sets `hooks.archive`, or a fixed schedule through the recur skill (`recur.jobs.archive-chats`, Monday noon) is the alternative.
    Never both: the hook skips a step an enabled recur job's command already runs, so a job wins where one exists.
    `recall archive-chats info` should list this host's uploads.
 5. **Learning.** Confirm `learn.targets` points at my context files (`recall config get learn.targets`), then `recall learn rules sync` to put their bullets on the ledger.
-   Offer a first map over every session on disk, which needs no download: `recall learn map --since all --dry-run` counts the sessions that would call the model; at about $0.03 each with the default sonnet map model (through Kiro, about 0.1 credits each), say the estimate and ask.
-   After it runs, show the cost it printed, then offer `recall learn reduce` for a first set of proposals, and say where they landed.
+   Offer a first map over every session on disk, which needs no download: `recall observe --since all --dry-run` counts the sessions that would call the model and prints about what they cost; say the estimate and ask.
+   After it runs, show the cost it printed and what `recall report` says it noticed, including its report card of my existing rules, then offer `recall learn reduce` for a first set of proposals, and say where they landed.
    Each machine maps its own sessions; the reduce reads every machine's observations from the store, and warns about a machine whose archives have none.
-   `recall learn map --archives` also maps archived weeks from here, other machines' and this one's weeks whose transcripts are gone from disk, at the cost of downloading them; offer it when a machine can't run the map itself or history needs recomputing.
-   The session hook runs the map after each session once `recall init` sets `hooks.map`; a weekly `recall learn map` job through the recur skill is the alternative, and the reduce is better run by hand until its proposals have earned trust.
+   `recall observe --archives` also maps archived weeks from here, other machines' and this one's weeks whose transcripts are gone from disk, at the cost of downloading them; offer it when a machine can't run the map itself or history needs recomputing.
+   The session hook runs the map after each session once `recall init` sets `hooks.map`; a weekly `recall observe` job through the recur skill is the alternative, and the reduce is better run by hand until its proposals have earned trust.
    Ask which repos may get their own rules: `recall config set learn.repos '["~/src/project"]'` lets a lesson seen only in that checkout land in its own context file, by a pull request on its origin, and `recall learn targets` lists every file a proposal may touch.
    Leave out any repo whose pull requests other people read unless I say to include it.
    For those repos, offer repo notes, which are off until set: one file of rules per such repo, which the plugin's session-start hook loads only in Claude Code sessions that start there.
    Suggest `repo-notes/` at the root of the git checkout that holds the first global target, ask whether that repo is private, and only on a yes run `recall config set learn.repo_notes <that dir>`; a public repo would publish notes about other people's repos.
    To apply a reduce's proposals, confirm `learn.targets`, `learn.skills`, and `learn.bin` each sit in a git checkout, then offer `recall learn apply --dry-run`, and say it opens one pull request per changed repo (`learn.review = "branch"` keeps them local).
-   Once the proposals have earned trust, one machine can schedule `recall learn run` (rules sync, reduce, apply) after the others' weekly map.
+   Once the proposals have earned trust, one machine can schedule `recall propose` (rules sync, reduce, apply) after the others' weekly map.
    If I import sessions from a system recall can't read in place (`docs/import.md`), the `[harness.<name>]` table with `format = "events"` goes in shared config every machine reads, since the reducer reads only the harnesses its own config declares, and `[harness.<name>.import]` goes only in the drop-in of the one machine that runs the import; two machines importing one source count each session twice.
    An import that fetches from a service runs from a recur job through the recur skill, and one that reads a downloaded export runs by hand with `recall import <name>`; `recall import <name> --dry-run` shows what a first run would store.
 6. **Check.** Finish with `recall recur check`, `recall skills --since 90d`, and `recall lint`; show me anything they flag.

@@ -69,11 +69,8 @@ var envRE = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)=(.*)$`)
 
 // LoadSetup validates the recur settings and jobs.
 func LoadSetup(s *config.Settings, self, configEnv, home string) (Setup, error) {
-	set := Setup{Prefix: s.Recur.Prefix, CronTZ: s.Recur.CronTZ, Env: map[string]string{},
+	set := Setup{Prefix: config.RecurPrefix, CronTZ: s.Recur.CronTZ, Env: map[string]string{},
 		Self: self, ConfigEnv: configEnv, Home: home}
-	if !NameRE.MatchString(set.Prefix) {
-		return set, fmt.Errorf("bad recur.prefix %q", set.Prefix)
-	}
 	for _, e := range s.Recur.Env {
 		m := envRE.FindStringSubmatch(e)
 		if m == nil {

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/micahhausler/recall/internal/config"
 	"github.com/micahhausler/recall/internal/learn"
 )
 
@@ -38,8 +39,8 @@ func captureStdout(t *testing.T, fn func()) string {
 // reach stdout as a "not applied" line with its reason, not vanish between
 // the plan's skips and the outcome report.
 func TestApplyPrintsGraduateHeldByStagedSettings(t *testing.T) {
-	f := newHookFixtureWith(t, "[learn]\nreview = \"branch\"\nrequire_owner_evidence = false\n"+
-		"targets = [\"~/.claude/CLAUDE.md\"]\nsettings = \"~/.claude/settings.json\"\n")
+	f := newHookFixtureWith(t, "[learn]\nreview = \"branch\"\n"+
+		"targets = [\"~/.claude/CLAUDE.md\"]\nsettings = \"~/.claude/settings.json\"\n").noOwnerEvidence()
 	ctx := context.Background()
 	dot := filepath.Join(f.home, ".claude")
 
@@ -62,7 +63,7 @@ func TestApplyPrintsGraduateHeldByStagedSettings(t *testing.T) {
 	if code := learnRulesSync(ctx, f.env); code != 0 {
 		t.Fatalf("rules sync = %d", code)
 	}
-	ledger, err := learn.LoadLedger(f.env.settings.Learn.Ledger)
+	ledger, err := learn.LoadLedger(config.LedgerPath(f.env.home))
 	if err != nil || len(ledger.Rules) != 1 {
 		t.Fatalf("ledger after sync: %+v, %v", ledger, err)
 	}

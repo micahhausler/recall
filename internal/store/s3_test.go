@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -16,7 +18,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/sts"
 
 	"github.com/micahhausler/recall/internal/config"
 )
@@ -131,34 +132,84 @@ func TestS3PutsAreConditional(t *testing.T) {
 	}
 }
 
-type fakeSTS struct{ account string }
-
-func (f *fakeSTS) GetCallerIdentity(ctx context.Context, in *sts.GetCallerIdentityInput, opts ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error) {
-	if f.account == "" {
-		return nil, errors.New("no credentials")
+// isolateAWS clears AWS_* from the environment and points the shared
+// config files at an empty temp dir.
+func isolateAWS(t *testing.T) {
+	t.Helper()
+	for _, kv := range os.Environ() {
+		if k, _, _ := strings.Cut(kv, "="); strings.HasPrefix(k, "AWS_") {
+			t.Setenv(k, "")
+			os.Unsetenv(k)
+		}
 	}
-	return &sts.GetCallerIdentityOutput{Account: aws.String(f.account)}, nil
+	dir := t.TempDir()
+	t.Setenv("AWS_CONFIG_FILE", filepath.Join(dir, "config"))
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(dir, "credentials"))
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
 }
 
-func TestResolveBucket(t *testing.T) {
+func TestNamespacedBucket(t *testing.T) {
+	if got := NamespacedBucket("123456789012", "us-west-2"); got != "chat-archive-123456789012-us-west-2-an" {
+		t.Errorf("NamespacedBucket = %q", got)
+	}
+	for bucket, want := range map[string]bool{
+		"chat-archive-123456789012-us-west-2-an": true,
+		"mine-123456789012-us-west-2-an":         true,
+		"mine-123456789012-eu-central-1-an":      false,
+		"team-backup-123456789012-archive-an":    false,
+		"chat-archive":                           false,
+		"plan-an":                                false,
+		"mine-12345-us-west-2-an":                false,
+		"-123456789012-us-west-2-an":             false,
+	} {
+		if got := InNamespace(bucket, "us-west-2"); got != want {
+			t.Errorf("InNamespace(%q, us-west-2) = %v, want %v", bucket, got, want)
+		}
+	}
+	if InNamespace("chat-archive-123456789012-us-west-2-an", "") {
+		t.Error("no region matched a namespace name")
+	}
+}
+
+// Opening the S3 store sends no request: the bucket is the configured name.
+func TestS3ClientMakesNoCalls(t *testing.T) {
+	isolateAWS(t)
+	var mu sync.Mutex
+	var calls []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	t.Setenv("AWS_ENDPOINT_URL", server.URL)
+	t.Setenv("AWS_ACCESS_KEY_ID", "test")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
 	ctx := context.Background()
-	got, err := ResolveBucket(ctx, config.S3Settings{Bucket: "mine"}, &fakeSTS{})
-	if err != nil || got != "mine" {
-		t.Errorf("explicit bucket: %q, %v", got, err)
+	if _, _, err := S3Client(ctx, config.S3Settings{Region: "us-west-2"}); err == nil || !strings.Contains(err.Error(), "store.s3.bucket") {
+		t.Errorf("no bucket: %v, want an error naming store.s3.bucket", err)
 	}
-	got, err = ResolveBucket(ctx, config.S3Settings{BucketPrefix: "chat-archive", Region: "us-west-2"}, &fakeSTS{account: "111122223333"})
-	if err != nil || got != "chat-archive-111122223333-us-west-2-an" {
-		t.Errorf("namespaced bucket: %q, %v", got, err)
+	_, bucket, err := S3Client(ctx, config.S3Settings{Region: "us-west-2", Bucket: "bkt"})
+	if err != nil || bucket != "bkt" {
+		t.Fatalf("S3Client = %q, %v", bucket, err)
 	}
-	if _, err := ResolveBucket(ctx, config.S3Settings{BucketPrefix: "p"}, &fakeSTS{account: "1"}); err == nil {
-		t.Error("no region: want an error")
+	st, err := Open(ctx, config.StoreSettings{Kind: "s3", S3: config.S3Settings{Region: "us-west-2", Bucket: "bkt"}})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := ResolveBucket(ctx, config.S3Settings{BucketPrefix: "p", Region: "us-west-2"}, &fakeSTS{}); err == nil {
-		t.Error("no credentials: want an error")
+	if b := st.(*S3Store).Bucket(); b != "bkt" {
+		t.Errorf("bucket = %q", b)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(calls) != 0 {
+		t.Errorf("opening the store called %v", calls)
 	}
 }
 
 func TestS3RequestsCarryTheAppID(t *testing.T) {
+	isolateAWS(t)
 	var ua string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ua = r.Header.Get("User-Agent")

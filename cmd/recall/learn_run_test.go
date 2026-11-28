@@ -63,7 +63,7 @@ func promptTranscript(t *testing.T, f *hookFixture, session, prompt string, when
 }
 
 // A second reduce the same day must not overwrite a run an apply already
-// finished: the owner's morning `recall learn run` applies the day's dated
+// finished: the owner's morning `recall propose` applies the day's dated
 // directory, and the evening hook's run lands in a -2 sibling, applies it
 // on its own branch, and stamps the learn step. Before, the second reduce
 // reused the dated directory, the apply saw its apply.json and answered
@@ -80,7 +80,7 @@ func TestHookWorkerSecondSameDayRunAppliesFreshDir(t *testing.T) {
 	if code := learnMap(ctx, f.env, runner, "30d", 0, false, false, 0, nil); code != 0 {
 		t.Fatalf("learn map = %d", code)
 	}
-	code, done := learnRun(ctx, f.env, runner, "", false)
+	code, done := learnRun(ctx, f.env, runner, "", reduceWindow{}, false)
 	if code != 0 || !done {
 		t.Fatalf("learn run = %d, done %v", code, done)
 	}
@@ -206,7 +206,7 @@ func TestSecondSameDayReduceNeverOverwritesAnUnappliedRun(t *testing.T) {
 	if code := learnMap(ctx, f.env, runner, "30d", 0, false, false, 0, nil); code != 0 {
 		t.Fatalf("learn map = %d", code)
 	}
-	if code := learnReduce(ctx, f.env, runner, "", false, false, false); code != 0 {
+	if code := learnReduce(ctx, f.env, runner, "", false, reduceWindow{}, false); code != 0 {
 		t.Fatalf("learn reduce = %d", code)
 	}
 	day := filepath.Join(learnStateRoot(f.env), f.clk.T.Format("2006-01-02"))
@@ -218,7 +218,7 @@ func TestSecondSameDayReduceNeverOverwritesAnUnappliedRun(t *testing.T) {
 	if code := learnMap(ctx, f.env, runner, "30d", 0, false, false, 0, nil); code != 0 {
 		t.Fatalf("second learn map = %d", code)
 	}
-	if code := learnReduce(ctx, f.env, runner, "", false, false, false); code != 0 {
+	if code := learnReduce(ctx, f.env, runner, "", false, reduceWindow{}, false); code != 0 {
 		t.Fatalf("second learn reduce = %d", code)
 	}
 
@@ -307,7 +307,7 @@ func TestLearnRunWithoutAnEditorAppliesInTextMode(t *testing.T) {
 	if code := learnMap(ctx, f.env, runner, "30d", 0, false, false, 0, nil); code != 0 {
 		t.Fatalf("learn map = %d", code)
 	}
-	code, done := learnRun(ctx, f.env, runner, "", false)
+	code, done := learnRun(ctx, f.env, runner, "", reduceWindow{}, false)
 	if code != 0 || !done {
 		t.Fatalf("learn run = %d, done %v; want 0, done", code, done)
 	}
