@@ -40,7 +40,7 @@ func cmdLint(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	c, err := config.Load(config.DefaultBase(home))
+	c, err := loadConfig(config.DefaultBase(home))
 	if err != nil {
 		return fail(err)
 	}

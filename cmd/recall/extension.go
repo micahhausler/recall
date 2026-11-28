@@ -42,7 +42,7 @@ func loadSettings() (*config.Settings, error) {
 	if err != nil {
 		return nil, err
 	}
-	c, err := config.Load(config.DefaultBase(home))
+	c, err := loadConfig(config.DefaultBase(home))
 	if err != nil {
 		return nil, err
 	}

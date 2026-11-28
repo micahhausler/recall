@@ -3,6 +3,15 @@
 This doc is the design of `recall learn`, the command that reads sessions and stages rule changes for review.
 Throughout, the owner is the person whose sessions and context files recall works on.
 
+This doc uses the loop's design terms, and the commands and help use plainer ones:
+
+| Design term | Commands and help |
+| --- | --- |
+| map | observe (`recall observe`) |
+| reduce, then apply | propose (`recall propose`) |
+| reviews | proposals (`recall proposals`) |
+| the reducer | the proposing machine |
+
 The prompts a person types carry their corrections.
 The rest of the evidence is in what the agent did, such as tool failures it repeated, skills it never used, and rules it broke mid-session.
 The loop reads the full normalized event stream (`docs/events.md`), splits the work into a cheap incremental map and a weekly reduce, and keeps every rule on a ledger so it can age out.
@@ -65,6 +74,20 @@ A small model then reads the session and records corrections, repeated context, 
 - **Rule hits are stored apart from observations,** so a rule change never re-observes a session. A session is judged only against rules in force when it ran.
 - **Every machine maps its own sessions.** The reduce reads every host's observations from the shared store, so transcripts never move.
 - **A refused session is mapped as far as the model accepts,** and the same content is never retried on another model.
+
+## Report: what recall noticed
+
+`recall report` shows the owner what the map found and how the rules they already have fare, before any proposal and with no model call.
+It groups the window's observations the way the reduce does, on a copy of the candidate ledger, so a lesson keeps the candidate id a reduce gave it and the report saves nothing.
+
+- **A finding is a lesson two or more sessions showed.** Each gives its session count, the days it spans, and the newest quote the binary found in the owner's own prompts.
+- **The owner's words rank first.** Findings with more owner-typed sessions come first, then more sessions.
+- **Only the owner's sessions count.** Native memory notes, outside evidence, and counted repeats stay out.
+- **A cited lesson says what became of it:** proposed, waiting for review, merged, or closed.
+- **The report card scores the rules already on the ledger.** The map judges every session against the rules in force when it ran (`hits/`), so each rule shows as broken, followed, or never relevant, with how many sessions were judged against it, how many it mattered in, and how many followed or broke it.
+  A session judged more than once counts once, at its worst, and a hit on a wording the rule has since replaced doesn't count.
+  A rule never relevant for `learn.retire_days` is the one aging proposes to retire.
+- **The backfill prints it twice.** `recall init`'s backfill shows the findings so far halfway through the map, and the full report once the map, and on the reducer the reduce and apply, finish.
 
 ## Reduce: one weekly pass
 
@@ -131,13 +154,14 @@ The pull request is one gate.
 The binary enforces a second.
 
 - **The binary checks every quote.** The map quotes the owner's words behind each observation, and the binary looks for them in the prompts the owner typed. A quote it can't find is removed.
-- **New rules need owner-typed evidence.** With `learn.require_owner_evidence` on, the default, a new rule, a new skill, or a hook must cite at least one checked quote.
+- **New rules need owner-typed evidence.** A new rule, a new skill, or a hook must cite at least one checked quote.
 - **The check proves the words were typed.** Whether the lesson follows from them is the reviewer's call.
 
 ## Candidates
 
 The reduce never reads every observation ever mapped.
-The binary first groups the window's observations (`learn.window_days`) into counted candidates, with no model call.
+The binary first groups the window's observations into counted candidates, with no model call.
+The window is `learn.retire_days`, and `recall propose --window 365d` or `--window all` sets it for one run without moving retirement.
 
 - **Grouping favors precision.** Observations join by shared wording, so a count is a floor.
 - **Evidence is used once.** A candidate behind a pending proposal is held back, and one the owner merged or rejected returns only with evidence from later sessions.
@@ -162,7 +186,7 @@ Nothing it does writes a live file.
 ## Review feedback
 
 A proposal the owner closes is a judgment, and the loop keeps it.
-`recall learn reviews` lists every verdict.
+`recall proposals` lists every verdict.
 
 - **One commit per proposal,** so the owner can drop one before merging and each proposal gets its own verdict.
 - **A merge doesn't prove every proposal landed.** The binary checks each proposal against the merged base and records the ones that aren't there as rejected. A rule the owner reworded by hand still counts as landed.
@@ -180,7 +204,22 @@ Session end does nothing until `recall init` turns its steps on under `[hooks]`,
 - **A failing step waits a day,** so a reduce that keeps failing can't become a paid model call per session.
 - **No recursion.** Every harness run recall starts carries `RECALL_HOOK=1`, and recall's hooks do nothing when they see it.
 - **One reducer per store.** A reduce on every machine would send duplicate proposals, so the first `recall init` claims the store. `recall learn reducer --take` moves the claim.
+- **Init backfills on request.** `recall init` offers to map the last 30 days at once, under the worker's lock, with the map calls and their cost shown before it asks. On the store's reducer the reduce and apply follow, and the learn step counts as run, so the hook's next reduce is `hooks.learn_every` days out. Another machine maps only.
 - **Kiro's session-end hook can't run the loop.** It fires when an interactive session exits, but Kiro kills every process the hook started, detached or not, so the worker never finishes. With `harness.claude` off, `recall init` declares the same three steps as recur jobs, and copies its `PATH` into `recur.env` so the scheduler finds `recall` and `kiro-cli`.
+
+## Observe-call cost estimates come from a price table
+
+`recall observe --dry-run` and the backfill `recall init` offers print about what their observe calls cost.
+The estimate counts the characters of each call's model input, prompt included, at four characters per token.
+Every call also carries what the runner's CLI loads on its own: the size of its global context file, such as `~/.claude/CLAUDE.md`, measured on this machine, plus about 3,000 tokens for the CLI's system prompt, an approximate figure.
+The estimate adds a fixed output allowance per call and prices it all at the map model's rate in `internal/config/prices.json`; a Kiro call costs a fixed number of credits.
+The estimate names the date the map model's provider was checked, such as "prices as of 2026-11-27", and never compares it with the clock.
+A map model the table doesn't price prints "no price for model <name> in prices.json" in place of a cost.
+The estimate reads no recorded usage, because that would mean a store read per stored observation.
+No pricing API returns prices, so the table names each provider's public pricing page and the date it was checked.
+When prices change, `go run ./hack/prices` sends that page and the current table through the configured runner, writes the file only when the answer passes the table's checks, and prints the diff.
+The checks keep each provider's source and every model, leave a provider with no source untouched, date the table today, and refuse a new model without `-new-models` or a price that moves more than tenfold either way.
+Editing the numbers and the `checked` date by hand works too, and `go test ./internal/config` fails while any harness's default model lacks a price.
 
 ## Why apply is a separate stage
 
@@ -192,7 +231,7 @@ The reduce proposes and the apply edits, and they stay two stages behind one com
 
 ## Rule ledger
 
-The ledger is a separate file, `~/.local/state/recall/ledger.json` by default, never comments inside the context files, because comments cost context in every session.
+The ledger is a separate file, `~/.local/state/recall/ledger.json`, never comments inside the context files, because comments cost context in every session.
 It has one entry per rule.
 
 ```json

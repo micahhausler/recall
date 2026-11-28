@@ -38,7 +38,8 @@ type Config struct {
 	values map[string]any
 	origin map[string]Origin
 	// tables is where each table was first declared.
-	tables map[string]Origin
+	tables   map[string]Origin
+	warnings []Warning
 }
 
 // EnvVar names the base config file, overriding the default path; the
@@ -97,9 +98,23 @@ func Load(base string) (*Config, error) {
 		recordTables(tree, c.tables, f, lines, "")
 		mergeInto(c.values, tree, c.origin, f, lines, "")
 	}
-	if err := c.validate(); err != nil {
+	warnings, err := c.validate()
+	if err != nil {
 		return nil, err
 	}
+	order := map[string]int{}
+	for i, f := range files {
+		order[f] = i
+	}
+	sort.SliceStable(warnings, func(i, j int) bool {
+		a, b := warnings[i].Origin, warnings[j].Origin
+		if a.File != b.File {
+			return order[a.File] < order[b.File]
+		}
+		return a.Line < b.Line
+	})
+	c.drop(warnings)
+	c.warnings = warnings
 	return c, nil
 }
 

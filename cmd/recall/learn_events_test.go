@@ -17,7 +17,7 @@ import (
 // An events harness's sessions ran on another machine, so the map never
 // looks their paths up here, even when a checkout here has the same path.
 func TestMapEventsHarnessSkipsCheckoutLookup(t *testing.T) {
-	f := newHookFixtureWith(t, "[learn]\nreview = \"branch\"\nrequire_owner_evidence = false\n\n[harness.chat]\nformat = \"events\"\n")
+	f := newHookFixtureWith(t, "[learn]\nreview = \"branch\"\n\n[harness.chat]\nformat = \"events\"\n").noOwnerEvidence()
 	repo := filepath.Join(f.home, "src", "example")
 	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
 		t.Fatal(err)

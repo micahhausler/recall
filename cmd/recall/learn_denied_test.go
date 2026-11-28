@@ -72,13 +72,13 @@ func TestReduceFailsBeforeTheModelWhenReducerWritesAreDenied(t *testing.T) {
 			deniedPrefixes = nil
 			t.Cleanup(func() { deniedPrefixes = nil })
 			if tc.published {
-				if _, _, err := reduce(ctx, f.env, f.runner, "", false, false, false); err != nil {
+				if _, _, err := reduce(ctx, f.env, f.runner, "", false, reduceWindow{}, false); err != nil {
 					t.Fatalf("first reduce: %v", err)
 				}
 			}
 			deniedPrefixes = tc.denied
 			before := len(f.runner.calls)
-			_, _, err := reduce(ctx, f.env, f.runner, "", false, false, false)
+			_, _, err := reduce(ctx, f.env, f.runner, "", false, reduceWindow{}, false)
 			if tc.denied == nil {
 				// The control: the same reduce, unblocked, calls the model.
 				if err != nil || len(f.runner.calls) == before {

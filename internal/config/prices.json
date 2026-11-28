@@ -1,0 +1,38 @@
+{
+  "providers": [
+    {
+      "name": "anthropic",
+      "runner": "claude",
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "checked": "2026-11-27",
+      "models": {
+        "haiku": {
+          "input_usd_per_mtok": 0.1,
+          "output_usd_per_mtok": 0.5,
+          "note": "Haiku 5.5, prompts up to 100k tokens"
+        },
+        "opus": {
+          "input_usd_per_mtok": 4,
+          "output_usd_per_mtok": 20,
+          "note": "Opus 5.5"
+        },
+        "sonnet": {
+          "input_usd_per_mtok": 2,
+          "output_usd_per_mtok": 10,
+          "note": "Sonnet 5.5"
+        }
+      }
+    },
+    {
+      "name": "kiro",
+      "runner": "kiro",
+      "checked": "2026-11-27",
+      "models": {
+        "auto": {
+          "credits_per_call": 0.1,
+          "note": "Kiro credits per observe call, recall's own estimate"
+        }
+      }
+    }
+  ]
+}

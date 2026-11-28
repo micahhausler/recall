@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -22,7 +23,7 @@ import (
 )
 
 const initUsage = `Usage:
-  recall init [--dry-run]
+  recall init [--dry-run] [--backfill ask|yes|no]
 
 Sets a new machine up with defaults that need nothing else: the store is a
 local directory, proposals are reviewed on a local branch, and the plugin's
@@ -40,15 +41,29 @@ local branch. With harness.claude off, each step is a recur job instead,
 since Kiro's session-end hook kills the worker it would start; ` + "`recall recur sync`" + ` installs them. With
 harness.kiro on, it installs the keep and recall-setup skills into Kiro CLI
 as a power, from files built into this binary, so running it again after an
-upgrade updates them; a missing or failing kiro-cli is a warning. It calls no
-model. Safe to run again.
+upgrade updates them; a missing or failing kiro-cli is a warning. Safe to
+run again.
+
+Init then offers to map the last 30 days of sessions now, showing how many
+map calls that is and what they cost before it asks. On the store's reducer
+the reduce and apply run right after, rather than in hooks.learn_every days;
+any other machine maps only. --backfill yes maps without asking, and
+--backfill no skips the offer, for scripted installs; with no input to read,
+the offer is declined. Nothing else init does calls a model.
 `
 
 func cmdInit(args []string) int {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	dryRun := fs.Bool("dry-run", false, "print what would be set; change nothing")
+	backfill := fs.String("backfill", backfillAsk, "map the last 30 days now: ask, yes, or no")
 	fs.Usage = func() { fmt.Fprint(os.Stderr, initUsage) }
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	switch *backfill {
+	case backfillAsk, backfillYes, backfillNo:
+	default:
+		fmt.Fprintf(os.Stderr, "recall: init --backfill takes ask, yes, or no\n")
 		return 2
 	}
 	home, err := os.UserHomeDir()
@@ -60,11 +75,11 @@ func cmdInit(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	c, err := config.Load(base)
+	c, err := loadConfig(base)
 	if err != nil {
 		return fail(err)
 	}
-	env, err := loadArchiveEnv()
+	env, err := initEnv()
 	if err != nil {
 		return fail(err)
 	}
@@ -104,13 +119,20 @@ func cmdInit(args []string) int {
 	if len(plan) == 0 {
 		fmt.Println("config: nothing to set; every key init would choose is already set")
 	}
+	if r := env.settings.Learn.Runner; r != "" {
+		how := "learn.runner's default for the enabled harnesses"
+		if _, set := c.Get("learn.runner"); set {
+			how = "as configured"
+		}
+		fmt.Printf("runner: %s, %s; observe, propose, and apply call %s\n", r, how, cmp.Or(config.DefaultCLI(r), r))
+	}
 	if *dryRun {
 		initKiroPower(ctx, os.Stdout, env.settings, true)
 		return 0
 	}
 
 	// Reload: the plan above may have set keys.
-	env, err = loadArchiveEnv()
+	env, err = initEnv()
 	if err != nil {
 		return fail(err)
 	}
@@ -134,7 +156,7 @@ func cmdInit(args []string) int {
 	}
 	if bin := config.DefaultCLI(s.Learn.Runner); bin != "" {
 		if _, err := exec.LookPath(bin); err != nil {
-			fmt.Printf("warning: %s isn't on PATH; the map, reduce, and apply run through it\n", bin)
+			fmt.Printf("warning: %s isn't on PATH; observe, propose, and apply run through it\n", bin)
 		}
 	}
 	_, claude := s.Harnesses[config.HarnessClaude]
@@ -155,6 +177,7 @@ func cmdInit(args []string) int {
 	if code := learnRulesSync(ctx, env); code != 0 {
 		return code
 	}
+	backfilled := initBackfill(ctx, env, initStdin, *backfill)
 	hooks := s.Hooks.Map || s.Hooks.Archive || s.Hooks.LearnEvery > 0
 	fmt.Println("\nNext:")
 	switch {
@@ -172,15 +195,26 @@ func cmdInit(args []string) int {
 	default:
 		fmt.Println("  1. Your scheduled jobs run the loop, so the session hook has nothing to do (recall recur list).")
 	}
-	fmt.Println("  2. See what a first pass over your sessions would cost, then run it:")
-	fmt.Printf("       recall learn map --since %dd --dry-run\n", mapWindowDays)
-	fmt.Printf("       recall learn map --since %dd && recall learn run\n", mapWindowDays)
-	fmt.Printf("  3. Review what it proposes: learn.review is %q (recall learn reviews).\n", s.Learn.Review)
+	if backfilled {
+		fmt.Printf("  2. The last %d days are mapped; the session hook maps each session from here on.\n", mapWindowDays)
+	} else {
+		fmt.Println("  2. See what a first pass over your sessions would cost, then run it:")
+		fmt.Printf("       recall observe --since %dd --dry-run\n", mapWindowDays)
+		fmt.Printf("       recall observe --since %dd && recall propose\n", mapWindowDays)
+	}
+	fmt.Printf("  3. Review what it proposes: learn.review is %q (recall proposals).\n", s.Learn.Review)
 	if _, err := runners.OpenEditor(s.Learn.Runner); errors.Is(err, model.ErrNoEditor) {
 		fmt.Printf("     learn.runner %q %v, so it applies with no tools and recall writes the files it returns.\n", s.Learn.Runner, model.ErrNoEditor)
 	}
 	return 0
 }
+
+// initEnv loads the config init works on, and initStdin is where the
+// backfill offer reads its answer; tests swap both.
+var (
+	initEnv             = loadArchiveEnv
+	initStdin io.Reader = os.Stdin
+)
 
 // kiroPowerCLI is the Kiro CLI initKiroPower installs through.
 var kiroPowerCLI = config.DefaultCLI(config.HarnessKiro)

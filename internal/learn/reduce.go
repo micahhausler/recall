@@ -30,10 +30,9 @@ type Reducer struct {
 	Effort string
 	// RetireDays is the aging window, default 90.
 	RetireDays int
-	// WindowDays is how far back the reduce reads observations
-	// (learn.window_days); 0 reads RetireDays back. AllWindow reads every
-	// observation (`recall learn reduce --window all`). Neither moves
-	// retirement, which always uses RetireDays.
+	// WindowDays is how far back the reduce reads observations (--window
+	// 365d); 0 reads RetireDays back. AllWindow reads every observation
+	// (--window all). Neither moves retirement, which always uses RetireDays.
 	WindowDays int
 	AllWindow  bool
 	Clock      clock.Clock
@@ -452,7 +451,7 @@ func (r *Reducer) checks(out string, props []Proposal, evidence RunEvidence) []r
 				if r.unsupported(p, evidence) {
 					fs = append(fs, reduceFinding{title: p.Title,
 						line: fmt.Sprintf("- %q cites no observation the owner typed, only what a tool or model reported; "+
-							"the apply holds it back (learn.require_owner_evidence).", p.Title)})
+							"the apply holds it back.", p.Title)})
 				}
 			}
 			return fs

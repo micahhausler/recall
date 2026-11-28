@@ -55,6 +55,9 @@ type harnessDefaults struct {
 	mapModel, reduceModel, applyModel string
 	// efforts are the levels its CLI's --effort takes, lowest first.
 	efforts []string
+	// promptTokens is about how many tokens the CLI's own system prompt
+	// adds to every headless call, before any context file; approximate.
+	promptTokens int
 	// hookRunsLoop says its session-end hook can start the detached worker
 	// that runs the loop. Without one, recur jobs run the loop instead.
 	hookRunsLoop bool
@@ -82,6 +85,7 @@ var harnesses = []harnessDefaults{
 		reduceModel:    "opus",
 		applyModel:     "sonnet",
 		efforts:        []string{"low", "medium", "high", "xhigh", "max"},
+		promptTokens:   3000,
 		hookRunsLoop:   true,
 		loadsRepoNotes: true,
 	},
@@ -178,6 +182,21 @@ func RepoNoteHarnesses(enabled map[string]HarnessSettings) []string {
 }
 
 // Each Default below is "" for a harness recall doesn't know.
+
+// CLIPromptTokens is about how many tokens a known runner's CLI adds to
+// every headless call with its own system prompt; 0 when recall has no
+// figure, as for a CLI that bills by the call.
+func CLIPromptTokens(name string) int {
+	h, _ := defaultsFor(name)
+	return h.promptTokens
+}
+
+// DefaultModels are the models a known harness's runner asks its CLI for,
+// by step.
+func DefaultModels(name string) (mapModel, reduceModel, applyModel string) {
+	h, _ := defaultsFor(name)
+	return h.mapModel, h.reduceModel, h.applyModel
+}
 
 // DefaultCLI is the binary a known harness's runner and inventory exec.
 func DefaultCLI(name string) string {

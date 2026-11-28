@@ -1,0 +1,129 @@
+# recall config reference: every key, commented out.
+# A line ending in "# example" shows a sample value; every other line shows the key's default.
+# config.example.toml holds what `recall init` writes; docs/config.md covers the files and how keys work.
+# A key recall doesn't know warns and is ignored.
+# `recall config show --defaults` prints every key with the value recall uses on this machine and marks the keys your files set.
+
+# Decisions most owners make
+
+# Where archives and observations live: "fs", a local directory, or "s3", a bucket every machine shares.
+# One machine per store proposes changes; the rest archive and observe.
+# store.kind = "fs"
+# The fs store's root directory.
+# store.path = "~/recall-store"
+
+# Where a proposal goes for review: "pr" opens a pull request with gh, and "branch" leaves a local branch.
+# Either way each proposal is one commit you can drop before merging.
+# learn.review = "pr"
+
+# Checkouts whose own context files a proposal may change; recall never touches a repo not listed.
+# Default: none.
+# learn.repos = ["~/src/project"]  # example
+
+# Run the loop on a timer: archive weekly, observe quiet sessions every six hours, propose weekly.
+# These are the jobs `recall init` writes when no session-end hook runs the loop; recall recur installs them.
+# Default: no jobs.
+# recur.jobs.recall-archive.schedule = "0 12 * * 1"  # example
+# recur.jobs.recall-archive.command = "recall archive"  # example
+# recur.jobs.recall-map.schedule = "0 */6 * * *"  # example
+# recur.jobs.recall-map.command = "recall observe --idle 6h"  # example
+# recur.jobs.recall-learn.schedule = "0 13 * * 1"  # example
+# recur.jobs.recall-learn.command = "recall propose"  # example
+
+# Keys some owners set
+
+# This machine's name in store keys; pin it before the first init. Default: hostname -s.
+# host = "laptop-a"  # example
+# AWS profile for the s3 store; empty is the default credential chain.
+# store.s3.profile = ""
+# AWS region for the s3 store; empty is the profile's region.
+# store.s3.region = ""
+# The s3 store's bucket, required when store.kind is "s3". Default: unset.
+# store.s3.bucket = "chat-archive-123456789012-us-west-2-an"  # example
+# Replace secret-shaped tokens in each week's archive with [REDACTED:<kind>].
+# archive-chats.redact = false
+# Turn a harness off; claude is on unless off, and any other harness once its table exists.
+# harness.claude.enabled = false  # example
+# Where Claude Code keeps transcripts.
+# harness.claude.source = "~/.claude/projects"
+# Where Kiro CLI keeps sessions.
+# harness.kiro.source = "~/.kiro/sessions"
+# The global context files rules live in. Default: each enabled harness's own file.
+# learn.targets = ["~/.claude/CLAUDE.md", "~/.kiro/steering/AGENTS.md"]  # example
+# A directory in a private git checkout for notes on repos recall doesn't change. Default: unset.
+# learn.repo_notes = "~/src/notes/repo-notes"  # example
+# The harness CLI model calls go through: "claude" or "kiro". Default: the primary harness.
+# learn.runner = "claude"
+# The tracked harness settings file a graduated rule may become a hook or deny rule in. Default: unset.
+# learn.settings = "~/.claude/settings.json"  # example
+# Evidence from outside the chat; "github" reads reviews and failed checks on the agent's pull requests. Default: none.
+# learn.evidence = ["github"]  # example
+# A command run on each staged diff before commit; nonzero holds that repo back. Default: none.
+# learn.check = "gitleaks stdin --redact --no-banner"  # example
+# Logins assigned to each pull request recall opens. Default: none.
+# review.assignees = ["you"]  # example
+# A command that supplies a credential per repository, so a bot opens pull requests. Default: the machine's gh login.
+# review.credentials.command = ["recall-credential", "token"]  # example
+# Paths shared publicly; a repo under one gets no proposal text in its pull request. Default: none.
+# keep.public = ["~/go/src/github.com/you"]  # example
+
+# Advanced: these may change
+
+# The model that observes one session; kiro's default is "auto".
+# learn.map_model = "sonnet"
+# The model that folds observations into proposals; kiro's default is "auto".
+# learn.reduce_model = "opus"
+# The model that applies reviewed proposals; kiro's default is "auto".
+# learn.apply_model = "sonnet"
+# The observe step's effort; unset passes no --effort, and a change observes every session again.
+# learn.map_effort = "high"  # example
+# The propose step's effort; unset passes no --effort.
+# learn.reduce_effort = "high"  # example
+# The apply step's effort; unset passes no --effort.
+# learn.apply_effort = "high"  # example
+# Days without relevance before a rule is proposed for retirement.
+# learn.retire_days = 90
+# Token cap per context file; 0 is no cap.
+# learn.budget = 0
+# Sessions observed at once, 1 to 32.
+# learn.map_workers = 4
+# Replay the moment behind each new rule and hold back one that changes nothing.
+# learn.replay = false
+# Sessions of the same counted repeat that let a new rule rest on repeats alone; 0 is off.
+# learn.repeat_evidence_sessions = 0
+# The commit trailer that marks a pull request as the agent's; kiro's default is "Co-Authored-By: Kiro".
+# learn.evidence_trailer = "Co-Authored-By: Claude"
+# Where a proposed skill lands; kiro's default is "~/.kiro/skills".
+# learn.skills = "~/.claude/skills"
+# Where a graduated script lands.
+# learn.bin = "~/bin"
+# Endpoint for an S3-compatible store.
+# store.s3.endpoint = ""
+# Days after upload an archive object expires.
+# store.s3.retention_days = 3650
+# How long one run of review.credentials.command may take.
+# review.credentials.timeout = "30s"
+# Read a harness recall doesn't know by name in a known harness's format.
+# harness.claude-work.format = "claude"  # example
+# Where that harness keeps its transcripts.
+# harness.claude-work.source = "~/.claude-work/projects"  # example
+# Read recall's own normalized events, such as an import's.
+# harness.chat.format = "events"  # example
+# The import plugin and its arguments, run without a shell.
+# harness.chat.import.command = ["chat-history", "--workspace", "all"]  # example
+# How long one import run may take; the default is "10m".
+# harness.chat.import.timeout = "10m"  # example
+# NAME=value for every recur job. Default: none.
+# recur.env = ["PATH=$HOME/go/bin:/usr/local/bin:/usr/bin:/bin"]  # example
+# The timezone cron schedules use on Linux. Default: cron's own.
+# recur.cron_tz = "America/Los_Angeles"  # example
+# Turn off a job an earlier config file declared.
+# recur.jobs.recall-learn.enabled = false  # example
+# Paths recall lint never reports. Default: none.
+# lint.ignore = ["~/.claude/home.md"]  # example
+# For the keep skill: "<path>: <what belongs there>" per file. Default: learn.targets.
+# keep.targets = ["~/.claude/CLAUDE.md: preferences that hold everywhere"]  # example
+# Where the keep skill puts a lesson a script could enforce.
+# keep.bin = "~/bin"
+# Your own instruction files, appended to a recall skill or the learn-reduce and learn-apply prompts. Default: none.
+# extensions.keep = ["~/.config/recall/keep.md"]  # example

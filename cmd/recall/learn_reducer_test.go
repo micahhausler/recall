@@ -53,16 +53,19 @@ func TestReduceRefusesOffTheReducer(t *testing.T) {
 	if err := claimReducer(ctx, st, "old-laptop"); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = reduce(ctx, f.env, f.runner, "", false, false, false)
+	_, _, err = reduce(ctx, f.env, f.runner, "", false, reduceWindow{}, false)
 	if err == nil {
 		t.Fatal("a reduce off the reducer ran")
 	}
-	for _, want := range []string{"old-laptop", "laptop-a", "recall learn reducer --take"} {
+	for _, want := range []string{"old-laptop", "laptop-a", "recall learn reducer --take", "proposing machine"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("refusal %q doesn't name %q", err, want)
 		}
 	}
-	if _, _, err := reduce(ctx, f.env, f.runner, "", false, false, true); err != nil {
+	if rest := strings.ReplaceAll(err.Error(), "recall learn reducer --take", ""); strings.Contains(rest, "reduce") {
+		t.Errorf("refusal %q says reduce outside the take hint", err)
+	}
+	if _, _, err := reduce(ctx, f.env, f.runner, "", false, reduceWindow{}, true); err != nil {
 		t.Fatalf("forced reduce: %v", err)
 	}
 	if keys, err := st.List(ctx, "ledger/"); err != nil || len(keys) != 0 {

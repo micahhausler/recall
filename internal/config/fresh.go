@@ -19,16 +19,84 @@ type KV struct {
 // covered step, and recall init leaves its key off, so a step never runs
 // twice.
 const (
-	StepArchive = "recall archive-chats run"
-	StepMap     = "recall learn map"
-	StepLearn   = "recall learn run"
+	StepArchive = "recall archive"
+	StepMap     = "recall observe"
+	StepLearn   = "recall propose"
 )
 
 // Covers reports whether an enabled recur job's command already runs step.
 func (r RecurSettings) Covers(step string) bool {
 	for _, j := range r.Jobs {
-		if strings.Contains(j.Command, step) {
+		if RunsStep(j.Command, step) {
 			return true
+		}
+	}
+	return false
+}
+
+// RunsStep reports whether command runs step under its new or old spelling,
+// matched on whole words in each shell command it chains.
+func RunsStep(command, step string) bool {
+	for _, line := range strings.Split(command, "\n") {
+		for _, part := range strings.FieldsFunc(stripComment(line), func(r rune) bool { return strings.ContainsRune(";&|()", r) }) {
+			if wordsRunStep(commandWords(part), step) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// stripComment drops a shell comment: a # that starts a word.
+func stripComment(line string) string {
+	for i, r := range line {
+		if r == '#' && (i == 0 || strings.ContainsRune(" \t;&|()", rune(line[i-1]))) {
+			return line[:i]
+		}
+	}
+	return line
+}
+
+// commandWords are a command's words up to its first redirect.
+func commandWords(part string) []string {
+	var words []string
+	for _, w := range strings.FieldsFunc(part, func(r rune) bool { return strings.ContainsRune(" \t\"'", r) }) {
+		if i := strings.IndexAny(w, "<>"); i >= 0 {
+			if w = w[:i]; strings.Trim(w, "0123456789") != "" {
+				words = append(words, w)
+			}
+			break
+		}
+		words = append(words, w)
+	}
+	return words
+}
+
+func wordsRunStep(words []string, step string) bool {
+	word := func(i int) string {
+		if i >= len(words) || strings.HasPrefix(words[i], "-") {
+			return ""
+		}
+		return words[i]
+	}
+	for i, w := range words {
+		if w != "recall" && !strings.HasSuffix(w, "/recall") {
+			continue
+		}
+		w1, w2 := word(i+1), word(i+2)
+		switch step {
+		case StepArchive:
+			if (w1 == "archive-chats" && (w2 == "run" || w2 == "")) || (w1 == "archive" && w2 == "") {
+				return true
+			}
+		case StepMap:
+			if (w1 == "learn" && w2 == "map") || w1 == "observe" {
+				return true
+			}
+		case StepLearn:
+			if (w1 == "learn" && w2 == "run") || w1 == "propose" {
+				return true
+			}
 		}
 	}
 	return false
@@ -70,7 +138,7 @@ func Fresh(c *Config, existing bool, host string, reducer func() (string, error)
 	commands := jobCommands(c)
 	covered := func(step string) bool {
 		for _, cmd := range commands {
-			if strings.Contains(cmd, step) {
+			if RunsStep(cmd, step) {
 				return true
 			}
 		}
@@ -102,11 +170,11 @@ func Fresh(c *Config, existing bool, host string, reducer func() (string, error)
 		case covered(StepLearn):
 			notes = append(notes, "hooks.learn_every stays off: a recur job already runs `"+StepLearn+"`")
 		case err != nil:
-			notes = append(notes, fmt.Sprintf("hooks.learn_every stays off: couldn't check the store for another machine's reduce (%v); "+
+			notes = append(notes, fmt.Sprintf("hooks.learn_every stays off: couldn't check the store for its proposing machine (%v); "+
 				"turn it on on one machine with `recall config set hooks.learn_every 7`", err))
 		case claim != "":
-			notes = append(notes, fmt.Sprintf("hooks.learn_every stays off: %s already runs the reduce on this store (this machine is %s), "+
-				"and one reducer per store avoids duplicate proposals; if %s is gone, `recall learn reducer --take` moves the claim here", claim, host, claim))
+			notes = append(notes, fmt.Sprintf("hooks.learn_every stays off: %s is this store's proposing machine (this machine is %s), "+
+				"and one proposing machine per store avoids duplicate proposals; if %s is gone, `recall learn reducer --take` moves the claim here", claim, host, claim))
 		default:
 			plan = append(plan, KV{"hooks.learn_every", "7", "propose changes once a week, from the same hook: one reduce and one apply model call"})
 		}
@@ -158,12 +226,12 @@ func freshJobs(c *Config, unset func(string) bool, covered func(string) bool, ho
 		if step == StepLearn && reducer != nil {
 			claim, err := reducer()
 			if err != nil {
-				notes = append(notes, fmt.Sprintf("no %s job: couldn't check the store for another machine's reduce (%v)", j.name, err))
+				notes = append(notes, fmt.Sprintf("no %s job: couldn't check the store for its proposing machine (%v)", j.name, err))
 				continue
 			}
 			if claim != "" {
-				notes = append(notes, fmt.Sprintf("no %s job: %s already runs the reduce on this store (this machine is %s), "+
-					"and one reducer per store avoids duplicate proposals; if %s is gone, `recall learn reducer --take` moves the claim here", j.name, claim, host, claim))
+				notes = append(notes, fmt.Sprintf("no %s job: %s is this store's proposing machine (this machine is %s), "+
+					"and one proposing machine per store avoids duplicate proposals; if %s is gone, `recall learn reducer --take` moves the claim here", j.name, claim, host, claim))
 				continue
 			}
 		}

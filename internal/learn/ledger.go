@@ -589,7 +589,7 @@ func maxRuleID(rules []Rule) int {
 //
 // A rule with any hit here has its dates recomputed from these hits alone,
 // never folded forward from the ledger's old values: the store keeps every
-// judgment, so a session re-read with its own time (`recall learn map
+// judgment, so a session re-read with its own time (`recall observe
 // --since all`) moves a date stamped at map time back to the day the
 // session ran. Call it once with everything, not once per batch.
 func (l *Ledger) ApplyHits(observed []SessionObservations, judged []SessionHits) {

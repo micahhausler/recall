@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -11,7 +12,7 @@ import (
 )
 
 // schema lists every allowed leaf key; * matches one name segment.
-// A new key goes here, in config.example.toml, and in Settings.
+// A new key goes here, in config.reference.toml, and in Settings.
 var schema = []string{
 	"host",
 	"store.kind",
@@ -19,18 +20,14 @@ var schema = []string{
 	"store.s3.profile",
 	"store.s3.region",
 	"store.s3.bucket",
-	"store.s3.bucket_prefix",
 	"store.s3.endpoint",
 	"store.s3.retention_days",
-	"archive-chats.lookback",
-	"archive-chats.price_per_gb",
 	"archive-chats.redact",
 	"harness.*.source",
 	"harness.*.enabled",
 	"harness.*.format",
 	"harness.*.import.command",
 	"harness.*.import.timeout",
-	"recur.prefix",
 	"recur.env",
 	"recur.cron_tz",
 	"recur.jobs.*.schedule",
@@ -44,10 +41,7 @@ var schema = []string{
 	"learn.targets",
 	"learn.repos",
 	"learn.repo_notes",
-	"learn.ledger",
-	"learn.candidates",
 	"learn.retire_days",
-	"learn.window_days",
 	"learn.budget",
 	"learn.map_workers",
 	"learn.apply_model",
@@ -57,7 +51,6 @@ var schema = []string{
 	"learn.settings",
 	"learn.review",
 	"learn.check",
-	"learn.require_owner_evidence",
 	"learn.repeat_evidence_sessions",
 	"learn.replay",
 	"learn.evidence",
@@ -96,25 +89,212 @@ func removedEncryptKey(key string) bool {
 	return len(ks) >= 2 && ks[0] == "store" && ks[1] == "encrypt"
 }
 
-// validate rejects any merged leaf key the schema doesn't allow, naming the
-// file and line that set it.
-func (c *Config) validate() error {
-	for _, key := range c.Leaves() {
-		if removedEncryptKey(key) {
-			return fmt.Errorf("%s: %q sets client-side encryption of the archive, a feature recall removed; the bucket's own encryption and access policy protect the store, so delete the key", c.origin[key], key)
-		}
-		allowed := false
-		for _, pattern := range schema {
-			if matches(pattern, key) {
-				allowed = true
-				break
-			}
-		}
-		if !allowed {
-			return fmt.Errorf("%s: unknown key %q", c.origin[key], key)
+// removedKey is a key recall dropped and the text that replaces it.
+type removedKey struct {
+	pattern string // dotted, * matches one segment; matches the key or a table above it
+	text    string
+	// forValue, when set, builds the text from the key's value.
+	forValue func(v any) string
+}
+
+// removedKeys starts each row when a release removes a key.
+var removedKeys = []removedKey{
+	{pattern: "learn.ledger", text: "the rule ledger is always ~/.local/state/recall/ledger.json; move a ledger kept elsewhere there and delete the key"},
+	{pattern: "learn.candidates", text: "the candidate ledger is always ~/.local/state/recall/learn/candidates.json; move one kept elsewhere there and delete the key"},
+	{pattern: "recur.prefix", forValue: func(v any) string {
+		p, _ := v.(string)
+		return recurPrefixCleanup(p, runtime.GOOS)
+	}},
+	{pattern: "archive-chats.price_per_gb", text: "the estimate always uses S3 Standard's $0.023/GB-month; delete the key"},
+	{pattern: "learn.require_owner_evidence", text: "the owner-evidence check is always on; delete the key"},
+	{pattern: "learn.window_days", text: "pass recall propose --window, like --window 365d or --window all; delete the key"},
+	{pattern: "archive-chats.lookback", text: "each archive run checks 4 weeks; pass recall archive --lookback N for more, and delete the key"},
+	{pattern: "store.s3.bucket_prefix", text: "set the full name in store.s3.bucket, like recall config set store.s3.bucket chat-archive-<account id>-<region>-an, and delete the key"},
+}
+
+// recurPrefixCleanup says how to remove the jobs an old custom prefix installed.
+func recurPrefixCleanup(prefix, goos string) string {
+	s := "the scheduler marker is fixed at " + RecurPrefix + "; delete the key"
+	switch {
+	case prefix == "" || prefix == RecurPrefix:
+		return s
+	case !SchedulerName.MatchString(prefix):
+		return s + "; recall refused this prefix, so it never installed a job"
+	case strings.HasPrefix(RecurPrefix+".", prefix+".") || strings.HasPrefix(prefix+".", RecurPrefix+"."):
+		return s + "; this prefix overlaps " + RecurPrefix + ", so a pattern for its jobs would match recall's own, and its jobs need removing by hand"
+	}
+	s += ", then remove the jobs marked " + prefix + " before running recall recur sync"
+	if goos == "darwin" {
+		return s + `: for f in ~/Library/LaunchAgents/` + prefix + `.*.plist; do launchctl bootout gui/$(id -u) "$f"; rm "$f"; done`
+	}
+	re := strings.ReplaceAll(prefix, ".", `\.`)
+	return s + `: crontab -l | sed '/^# BEGIN recall-recur ` + re + ` /,/^# END recall-recur ` + re + `$/d' | crontab -`
+}
+
+// Warning is a key the schema doesn't know, which the load ignored.
+type Warning struct {
+	Key    string
+	Origin Origin
+	// Replacement says what replaces a removed key; empty when recall knows none.
+	Replacement string
+	segs        []string
+	table       bool // an empty table, not a leaf
+}
+
+func (w Warning) String() string {
+	what := "key"
+	if w.table {
+		what = "table"
+	}
+	s := fmt.Sprintf("%s: unknown %s %q, ignored", w.Origin, what, w.Key)
+	if w.Replacement != "" {
+		s += "; " + w.Replacement
+	}
+	return s
+}
+
+func allowed(key string) bool {
+	for _, pattern := range schema {
+		if matches(pattern, key) {
+			return true
 		}
 	}
-	return nil
+	return false
+}
+
+// replacement returns the removed-key text for key, set to v, if any.
+func replacement(key string, v any) string {
+	ks := strings.Split(key, ".")
+	for _, r := range removedKeys {
+		ps := strings.Split(r.pattern, ".")
+		if len(ps) <= len(ks) && matches(r.pattern, strings.Join(ks[:len(ps)], ".")) {
+			if r.forValue != nil {
+				return r.forValue(v)
+			}
+			return r.text
+		}
+	}
+	return ""
+}
+
+// wrongShape reports a known leaf set to a table, or a known table set to
+// a value.
+func wrongShape(key string) string {
+	ks := strings.Split(key, ".")
+	for i := 1; i < len(ks); i++ {
+		if allowed(strings.Join(ks[:i], ".")) {
+			return fmt.Sprintf("%q is a value, not a table", strings.Join(ks[:i], "."))
+		}
+	}
+	for _, pattern := range schema {
+		ps := strings.Split(pattern, ".")
+		if len(ps) > len(ks) && matches(strings.Join(ps[:len(ks)], "."), key) {
+			return fmt.Sprintf("%q is a table, not a value", key)
+		}
+	}
+	return ""
+}
+
+// knownTable reports a table path some schema key sits under.
+func knownTable(key string) bool {
+	ks := strings.Split(key, ".")
+	for _, pattern := range schema {
+		ps := strings.Split(pattern, ".")
+		if len(ps) > len(ks) && matches(strings.Join(ps[:len(ks)], "."), key) {
+			return true
+		}
+	}
+	return false
+}
+
+// node is one merged leaf, or one empty table, by its key segments.
+type node struct {
+	segs  []string
+	table bool
+}
+
+func walk(m map[string]any, prefix []string, out *[]node) {
+	for k, v := range m {
+		segs := append(append([]string{}, prefix...), k)
+		sub, ok := v.(map[string]any)
+		switch {
+		case !ok:
+			*out = append(*out, node{segs: segs})
+		case len(sub) == 0:
+			*out = append(*out, node{segs: segs, table: true})
+		default:
+			walk(sub, segs, out)
+		}
+	}
+}
+
+// validate returns a warning for each merged leaf key, or empty table,
+// the schema doesn't know; the removed encryption keys and a known key in
+// the wrong shape are errors, naming the file and line that set them.
+func (c *Config) validate() ([]Warning, error) {
+	var nodes []node
+	walk(c.values, nil, &nodes)
+	sort.Slice(nodes, func(i, j int) bool {
+		return strings.Join(nodes[i].segs, ".") < strings.Join(nodes[j].segs, ".")
+	})
+	var warnings []Warning
+	for _, n := range nodes {
+		key := strings.Join(n.segs, ".")
+		origin := c.origin[key]
+		if n.table {
+			origin = c.tables[key]
+		}
+		if removedEncryptKey(key) {
+			return nil, fmt.Errorf("%s: %q sets client-side encryption of the archive, a feature recall removed; the bucket's own encryption and access policy protect the store, so delete the key", origin, key)
+		}
+		if n.table && knownTable(key) {
+			continue
+		}
+		if !n.table && allowed(key) {
+			continue
+		}
+		msg := wrongShape(key)
+		if n.table && allowed(key) {
+			msg = fmt.Sprintf("%q is a value, not a table", key)
+		}
+		if msg != "" {
+			return nil, fmt.Errorf("%s: %s", origin, msg)
+		}
+		value, _ := c.Get(key)
+		warnings = append(warnings, Warning{Key: key, Origin: origin, Replacement: replacement(key, value), segs: n.segs, table: n.table})
+	}
+	return warnings, nil
+}
+
+// drop removes each warned key from the merged values, and any table it
+// leaves empty, so Get, Leaves, and Settings never see it.
+func (c *Config) drop(warnings []Warning) {
+	for _, w := range warnings {
+		delete(c.origin, w.Key)
+		parts := w.segs
+		maps := []map[string]any{c.values}
+		for _, p := range parts[:len(parts)-1] {
+			m, ok := maps[len(maps)-1][p].(map[string]any)
+			if !ok {
+				break
+			}
+			maps = append(maps, m)
+		}
+		if len(maps) != len(parts) {
+			continue
+		}
+		delete(maps[len(maps)-1], parts[len(parts)-1])
+		delete(c.tables, w.Key)
+		for i := len(maps) - 1; i > 0 && len(maps[i]) == 0; i-- {
+			delete(maps[i-1], parts[i-1])
+			delete(c.tables, strings.Join(parts[:i], "."))
+		}
+	}
+}
+
+// Warnings lists the keys the load ignored, in file order.
+func (c *Config) Warnings() []Warning {
+	return c.warnings
 }
 
 // Settings is the typed view of the merged config, defaults applied.
@@ -179,7 +359,14 @@ type KeepSettings struct {
 	// Public lists paths shared publicly, where nothing personal goes; the
 	// apply step marks a worktree under one as public.
 	Public []string
+	// Targets and Bin are the keep skill's, read through config get; the
+	// binary only reports their defaults.
+	Targets []string
+	Bin     string
 }
+
+// DefaultJobEnabled is a recur job's enabled when the job doesn't set it.
+const DefaultJobEnabled = true
 
 // LearnSettings configure the learning loop (docs/learning.md).
 type LearnSettings struct {
@@ -202,19 +389,9 @@ type LearnSettings struct {
 	// RepoNotes is a directory inside a private git checkout that holds a
 	// file of rules for each repo recall doesn't change; empty is off.
 	RepoNotes string
-	// Ledger is the separate file, kept beside the context files, that
-	// tracks each rule.
-	Ledger string
-	// Candidates is the candidate ledger: the lessons sessions have shown
-	// that aren't rules yet, and which of them a proposal already used.
-	Candidates string
 	// RetireDays: a rule with no relevance for this long is proposed for
 	// retirement.
 	RetireDays int
-	// WindowDays is how far back the reduce reads observations; 0, the
-	// default, reads RetireDays back, today's behavior. Retirement always
-	// uses RetireDays, so a wider window never retires rules faster.
-	WindowDays int
 	// Budget is how many tokens one target file may cost, estimated at
 	// four characters a token; 0 is no budget.
 	Budget int
@@ -235,9 +412,6 @@ type LearnSettings struct {
 	// Check is a shell command run in each changed worktree with the staged
 	// diff on stdin; a nonzero exit holds that repo's change back.
 	Check string
-	// RequireOwnerEvidence holds back a new rule or skill that cites no
-	// observation quoting words the owner typed.
-	RequireOwnerEvidence bool
 	// RepeatEvidenceSessions, when above 0, lets a new rule rest on repeat
 	// evidence alone when the binary counted the repeat in at least that
 	// many sessions; 0 turns that off.
@@ -270,14 +444,11 @@ type S3Settings struct {
 	Profile       string
 	Region        string
 	Bucket        string
-	BucketPrefix  string
 	Endpoint      string
 	RetentionDays int
 }
 
 type ArchiveSettings struct {
-	Lookback   int
-	PricePerGB float64
 	// Redact replaces secret-shaped tokens in a week's text files as its
 	// tarball is built.
 	Redact bool
@@ -306,7 +477,6 @@ type ImportSettings struct {
 const DefaultImportTimeout = 10 * time.Minute
 
 type RecurSettings struct {
-	Prefix string
 	Env    []string
 	CronTZ string
 	Jobs   map[string]Job
@@ -327,24 +497,20 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 		Store: StoreSettings{
 			Kind: "fs",
 			Path: filepath.Join(home, "recall-store"),
-			S3:   S3Settings{BucketPrefix: "chat-archive", RetentionDays: 3650},
+			S3:   S3Settings{RetentionDays: 3650},
 		},
-		Archive:   ArchiveSettings{Lookback: 4, PricePerGB: 0.023},
 		Harnesses: map[string]HarnessSettings{},
-		Recur:     RecurSettings{Prefix: "recall.recur", Jobs: map[string]Job{}},
+		Keep:      KeepSettings{Bin: filepath.Join(home, "bin")},
+		Recur:     RecurSettings{Jobs: map[string]Job{}},
 		// The credential package's DefaultTimeout.
 		Review: ReviewSettings{Credentials: CredentialSettings{Timeout: 30 * time.Second}},
 		// The runner, models, targets, skills, and evidence trailer follow
 		// the enabled harnesses, so they are filled in below.
 		Learn: LearnSettings{
-			Ledger:     filepath.Join(home, ".local", "state", "recall", "ledger.json"),
-			Candidates: filepath.Join(home, ".local", "state", "recall", "learn", "candidates.json"),
 			RetireDays: 90,
 			MapWorkers: 4,
 			Bin:        filepath.Join(home, "bin"),
 			Review:     "pr",
-
-			RequireOwnerEvidence: true,
 		},
 	}
 	var err error
@@ -368,18 +534,6 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 			*dst = int(iv)
 		}
 	}
-	flt := func(key string, dst *float64) {
-		if v, ok := c.Get(key); ok && err == nil {
-			switch fv := v.(type) {
-			case float64:
-				*dst = fv
-			case int64:
-				*dst = float64(fv)
-			default:
-				err = c.typeErr(key, "a number", v)
-			}
-		}
-	}
 	path := func(key string, dst *string) {
 		str(key, dst)
 		*dst = ExpandHome(*dst, home)
@@ -390,13 +544,13 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 	str("store.s3.profile", &s.Store.S3.Profile)
 	str("store.s3.region", &s.Store.S3.Region)
 	str("store.s3.bucket", &s.Store.S3.Bucket)
-	str("store.s3.bucket_prefix", &s.Store.S3.BucketPrefix)
 	str("store.s3.endpoint", &s.Store.S3.Endpoint)
+	if err == nil && s.Store.Kind == "s3" && s.Store.S3.Bucket == "" {
+		o, _ := c.Origin("store.kind")
+		err = fmt.Errorf("%s: store.kind is \"s3\" and store.s3.bucket is unset; name the bucket with recall config set store.s3.bucket <name>", o)
+	}
 	num("store.s3.retention_days", &s.Store.S3.RetentionDays)
-	num("archive-chats.lookback", &s.Archive.Lookback)
-	flt("archive-chats.price_per_gb", &s.Archive.PricePerGB)
 	c.boolKey("archive-chats.redact", &s.Archive.Redact, &err)
-	str("recur.prefix", &s.Recur.Prefix)
 	str("recur.cron_tz", &s.Recur.CronTZ)
 	if v, ok := c.Get("lint.ignore"); ok && err == nil {
 		list, lok := v.([]any)
@@ -423,10 +577,7 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 	str("learn.reduce_effort", &s.Learn.ReduceEffort)
 	str("learn.apply_effort", &s.Learn.ApplyEffort)
 	path("learn.repo_notes", &s.Learn.RepoNotes)
-	path("learn.ledger", &s.Learn.Ledger)
-	path("learn.candidates", &s.Learn.Candidates)
 	num("learn.retire_days", &s.Learn.RetireDays)
-	num("learn.window_days", &s.Learn.WindowDays)
 	num("learn.budget", &s.Learn.Budget)
 	num("learn.map_workers", &s.Learn.MapWorkers)
 	str("learn.apply_model", &s.Learn.ApplyModel)
@@ -442,7 +593,6 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 	}
 	str("learn.check", &s.Learn.Check)
 	str("learn.evidence_trailer", &s.Learn.EvidenceTrailer)
-	c.boolKey("learn.require_owner_evidence", &s.Learn.RequireOwnerEvidence, &err)
 	num("learn.repeat_evidence_sessions", &s.Learn.RepeatEvidenceSessions)
 	c.boolKey("learn.replay", &s.Learn.Replay, &err)
 	if v, ok := c.Get("learn.evidence"); ok && err == nil {
@@ -511,6 +661,22 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 			err = fmt.Errorf("%s: review.credentials.timeout %q isn't a positive duration like \"30s\"", o, tv)
 		} else {
 			s.Review.Credentials.Timeout = d
+		}
+	}
+	path("keep.bin", &s.Keep.Bin)
+	if v, ok := c.Get("keep.targets"); ok && err == nil {
+		list, lok := v.([]any)
+		if !lok {
+			err = c.typeErr("keep.targets", "an array of strings", v)
+		} else {
+			for _, e := range list {
+				ev, sok := e.(string)
+				if !sok {
+					err = c.typeErr("keep.targets", "an array of strings", e)
+					break
+				}
+				s.Keep.Targets = append(s.Keep.Targets, ev)
+			}
 		}
 	}
 	if v, ok := c.Get("keep.public"); ok && err == nil {
@@ -634,6 +800,9 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 			}
 		}
 	}
+	if _, set := c.Get("keep.targets"); !set {
+		s.Keep.Targets = slices.Clone(s.Learn.Targets)
+	}
 	// The loop runs through the primary harness, lands graduated skills
 	// where that harness loads them, and asks the runner's CLI for the
 	// models that CLI knows. A runner recall has no defaults for gets the
@@ -665,7 +834,7 @@ func (c *Config) Settings(home, hostname string) (*Settings, error) {
 	}
 	for _, name := range c.tableNames("recur.jobs") {
 		j := Job{Name: name}
-		enabled := true
+		enabled := DefaultJobEnabled
 		base := "recur.jobs." + name
 		str(base+".schedule", &j.Schedule)
 		str(base+".command", &j.Command)

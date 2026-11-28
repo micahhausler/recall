@@ -172,7 +172,7 @@ func warnOtherImporters(ctx context.Context, env *archiveEnv, name string) {
 	if err != nil {
 		return
 	}
-	cutoff := env.clk.Now().AddDate(0, 0, -7*(env.settings.Archive.Lookback+1))
+	cutoff := env.clk.Now().AddDate(0, 0, -7*(archive.DefaultLookback+1))
 	hosts := map[string]bool{}
 	for _, key := range keys {
 		h, host, w, ok := archive.ParseKey(key)

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/micahhausler/recall/internal/clock"
 	"github.com/micahhausler/recall/internal/events"
@@ -617,7 +618,7 @@ func TestUndatedSessionIsJudgedAgainstNoRule(t *testing.T) {
 
 // A ledger date stamped at map time moves back once the session is re-read
 // with its own time: ApplyHits recomputes the dates from all hits for the
-// rule instead of taking the max with the old value, so `recall learn map
+// rule instead of taking the max with the old value, so `recall observe
 // --since all` really is the remedy for a backfilled ledger.
 func TestApplyHitsRecomputesDates(t *testing.T) {
 	l := &Ledger{Rules: []Rule{
@@ -987,6 +988,27 @@ func TestWouldCall(t *testing.T) {
 	}
 	if observe, judge, _ := m.WouldCall(ctx, "claude", "s2", []events.Event{ev(events.AssistantText, "hi")}); observe || judge {
 		t.Error("a session with no owner prompts would call the model")
+	}
+}
+
+// WouldSend sizes the very input the call then sends.
+func TestWouldSendSizesTheInput(t *testing.T) {
+	ctx := context.Background()
+	f := &model.Fake{Response: "NONE\n"}
+	m := mapper(store.NewMem(), f, nil)
+	evs := []events.Event{ev(events.UserPrompt, "fais la tâche, s'il te plaît")}
+	_, _, chars, err := m.WouldSend(ctx, "claude", "s1", evs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.MapSession(ctx, "claude", "s1", evs); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Calls) != 1 || chars != utf8.RuneCountInString(f.Calls[0].Input) || chars == len(f.Calls[0].Input) {
+		t.Errorf("WouldSend = %d chars, but the call sent %d (%d bytes)", chars, utf8.RuneCountInString(f.Calls[0].Input), len(f.Calls[0].Input))
+	}
+	if _, _, chars, _ := m.WouldSend(ctx, "claude", "s1", evs); chars != 0 {
+		t.Errorf("a cached session would send %d chars", chars)
 	}
 }
 

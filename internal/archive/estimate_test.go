@@ -66,7 +66,7 @@ func TestEstimateReportAndCleanupWarning(t *testing.T) {
 	os.WriteFile(settings, []byte(`{"cleanupPeriodDays": 30}`), 0o644)
 	out := &strings.Builder{}
 	e := &Estimate{
-		Harness: tr.harness(t), Retention: 3650, Lookback: 4, PricePerGB: 0.023,
+		Harness: tr.harness(t), Retention: 3650, Lookback: 4, PricePerGB: S3PricePerGB,
 		ClaudeSettings: settings, Now: now, Out: out,
 	}
 	rc, err := e.Run()
@@ -96,7 +96,7 @@ func TestEstimateReportAndCleanupWarning(t *testing.T) {
 
 func TestEstimateNothingToEstimate(t *testing.T) {
 	tr := newTree(t)
-	e := &Estimate{Harness: tr.harness(t), Retention: 3650, Lookback: 4, PricePerGB: 0.023,
+	e := &Estimate{Harness: tr.harness(t), Retention: 3650, Lookback: 4, PricePerGB: S3PricePerGB,
 		Now: time.Now(), Out: &strings.Builder{}}
 	if rc, err := e.Run(); err == nil || rc != 1 {
 		t.Errorf("rc=%d err=%v, want 1 and an error", rc, err)

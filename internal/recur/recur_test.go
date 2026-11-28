@@ -526,16 +526,19 @@ func mustEval(t *testing.T, p string) string {
 }
 
 func TestLoadSetupValidation(t *testing.T) {
-	ok := &config.Settings{Recur: config.RecurSettings{Prefix: "recall.recur", Env: []string{"PATH=/a"},
+	ok := &config.Settings{Recur: config.RecurSettings{Env: []string{"PATH=/a"},
 		Jobs: map[string]config.Job{"a": {Name: "a", Schedule: "0 12 * * 1", Command: "x"}}}}
-	if _, err := LoadSetup(ok, "/x/recall", "", "/home/you"); err != nil {
+	set, err := LoadSetup(ok, "/x/recall", "", "/home/you")
+	if err != nil {
 		t.Fatalf("valid setup rejected: %v", err)
 	}
+	if set.Prefix != "recall.recur" {
+		t.Errorf("prefix = %q, want recall.recur", set.Prefix)
+	}
 	for name, s := range map[string]*config.Settings{
-		"bad prefix":   {Recur: config.RecurSettings{Prefix: "bad prefix"}},
-		"bad env":      {Recur: config.RecurSettings{Prefix: "p", Env: []string{"nope"}}},
-		"bad schedule": {Recur: config.RecurSettings{Prefix: "p", Jobs: map[string]config.Job{"a": {Name: "a", Schedule: "0 1 * *", Command: "x"}}}},
-		"bad name":     {Recur: config.RecurSettings{Prefix: "p", Jobs: map[string]config.Job{"-x": {Name: "-x", Schedule: "0 1 * * *", Command: "x"}}}},
+		"bad env":      {Recur: config.RecurSettings{Env: []string{"nope"}}},
+		"bad schedule": {Recur: config.RecurSettings{Jobs: map[string]config.Job{"a": {Name: "a", Schedule: "0 1 * *", Command: "x"}}}},
+		"bad name":     {Recur: config.RecurSettings{Jobs: map[string]config.Job{"-x": {Name: "-x", Schedule: "0 1 * * *", Command: "x"}}}},
 	} {
 		if _, err := LoadSetup(s, "/x/recall", "", "/home/you"); err == nil {
 			t.Errorf("%s accepted", name)

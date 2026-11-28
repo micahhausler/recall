@@ -190,7 +190,7 @@ func hookWork(env *archiveEnv) {
 		// applied or there was nothing to apply: a reduce over nothing must
 		// not push the first real one learn_every days out, and a run whose
 		// proposals were dropped must not count as the period's pass.
-		if code, done := learnRun(ctx, env, runner, "", false); code == 0 && done {
+		if code, done := learnRun(ctx, env, runner, "", reduceWindow{}, false); code == 0 && done {
 			_ = hook.Touch(stamp("learn"), now)
 		}
 	}
